@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+
+# Local runtime state
+/data/*
+!/data/.gitkeep
+
+# macOS
+.DS_Store

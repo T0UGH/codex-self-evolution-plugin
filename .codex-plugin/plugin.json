@@ -1,0 +1,44 @@
+{
+  "name": "codex-self-evolution-plugin",
+  "version": "0.2.0",
+  "description": "Scheduled self-evolution loop with stable background memory, provider-backed stop review, explicit suggestion states, launchd-style compiler preflight, focused recall, and managed skills.",
+  "commands": [
+    {
+      "name": "session-start",
+      "command": "python -m codex_self_evolution.cli session-start --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
+    },
+    {
+      "name": "stop-review",
+      "command": "python -m codex_self_evolution.cli stop-review --hook-payload \"$CODEX_HOOK_PAYLOAD\" --state-dir \"$CODEX_STATE_DIR\""
+    },
+    {
+      "name": "compile-preflight",
+      "command": "python -m codex_self_evolution.cli compile-preflight --state-dir \"$CODEX_STATE_DIR\""
+    },
+    {
+      "name": "compile",
+      "command": "python -m codex_self_evolution.cli compile --once --state-dir \"$CODEX_STATE_DIR\" --backend script"
+    },
+    {
+      "name": "recall",
+      "command": "python -m codex_self_evolution.cli recall --query \"$CODEX_RECALL_QUERY\" --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
+    },
+    {
+      "name": "recall-trigger",
+      "command": "python -m codex_self_evolution.cli recall-trigger --query \"$CODEX_RECALL_QUERY\" --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
+    }
+  ],
+  "hooks": {
+    "SessionStart": {
+      "command": "python -m codex_self_evolution.cli session-start --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
+    },
+    "Stop": {
+      "command": "python -m codex_self_evolution.cli stop-review --hook-payload \"$CODEX_HOOK_PAYLOAD\" --state-dir \"$CODEX_STATE_DIR\""
+    }
+  },
+  "scheduler": {
+    "recommended": "launchd",
+    "preflight_command": "python -m codex_self_evolution.cli compile-preflight --state-dir \"$CODEX_STATE_DIR\"",
+    "compile_command": "python -m codex_self_evolution.cli compile --once --state-dir \"$CODEX_STATE_DIR\" --backend agent:opencode"
+  }
+}

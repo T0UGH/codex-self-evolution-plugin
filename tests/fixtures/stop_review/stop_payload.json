@@ -1,0 +1,11 @@
+{
+  "thread_id": "fixture-thread",
+  "cwd": ".",
+  "transcript": "fixture transcript",
+  "thread_read_output": "fixture output",
+  "reviewer_output": {
+    "memory_updates": [],
+    "recall_candidate": [],
+    "skill_action": []
+  }
+}

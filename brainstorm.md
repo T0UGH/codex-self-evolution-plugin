@@ -71,11 +71,21 @@
 - **尽量复用 Codex 原生 thread / rollout 存储**
 - 不重复造完整 session archive
 - 插件自己只维护一层轻量 recall index
+- recall 可以全局存，但默认不能全局无差别召回
 
 Recall index 角色：
 
 - 不是原始历史仓库
 - 而是“哪些 thread 值得以后再想起”的二次组织层
+- 同时负责为局部优先召回提供 provenance 锚点
+
+第一版要求每条 recall entry 至少带：
+
+- `repo`
+- `cwd`
+- `thread_id`
+- `source_kind`
+- `captured_at`
 
 ---
 
@@ -113,21 +123,31 @@ Recall index 角色：
 
 已明确：
 
-- **第一版不要太复杂，直接做全局的**
+- **第一版不要太复杂，先做全局沉淀层**
 
 也就是：
 
 - 全局 `USER.md`
 - 全局 `MEMORY.md`
-- 全局 recall index
-- 全局 skills
+- 全局 managed skills
 - 全局 background review
+
+但 recall 这里要单独说明：
+
+- recall 可以先共用一套全局存储/index
+- 但每条 recall entry 必须带 repo / cwd / thread / source 等 provenance
+- 查询时默认 same-repo / same-cwd 优先召回
+
+一句话说：
+
+> **memory / skill 先全局，recall 全局存储但局部优先使用。**
 
 先不做：
 
 - 项目级切分
 - workspace 级切分
 - 多租户式 memory/review 隔离
+- 纯全局、无作用域的 recall 命中
 
 ---
 
@@ -214,8 +234,15 @@ Recall index 角色：
 
 - `SessionStart` hook 触发
 - 读取 `USER.md` / `MEMORY.md`
-- 组装成稳定背景
+- 读取轻量 recall skill / recall policy skill
+- 组装成稳定背景与 recall control layer
 - 注入当前会话前缀
+
+注意：
+
+- 会话启动时只预加载 recall policy / recall skill
+- 不直接执行 recall 查询
+- 不在启动时灌入大量 recall material
 
 ### 2. 当前回合执行时
 
@@ -234,7 +261,8 @@ Recall index 角色：
 ### 4. 下一轮开始时
 
 - memory 通过 SessionStart 重新进入背景层
-- recall 在需要时命中 index，再回读 thread 历史做重构
+- recall skill / recall policy 通过 SessionStart 预加载进入 session 基础能力层
+- recall 在命中条件时才查 index，再回读 thread 历史做重构
 - skill 在需要时重新加载，作为当前任务的 procedural memory
 
 ---
@@ -314,21 +342,115 @@ Hermes 的 background review 更接近：
 
 - “Codex 第一版 background review 采用 post-turn snapshot reconstruction，而不是 Hermes 式原地 fork。”
 
+### Review 模式决议（当前新增结论）
+
+关于 review runner，当前已经明确：
+
+> **第一版选择方案一：轻 review pass，而不是完整 agent review。**
+
+具体含义：
+
+- 单次调用
+- 无工具
+- 固定 review prompt
+- 固定 JSON 输出
+- review 自己不直接写 memory / recall / skill
+- review 只把结果写成 suggestion/event
+
+为什么这么定：
+
+- token 成本更可控
+- 更适合 recall 尽量多触发的策略
+- review 和 writer 的职责边界更清楚
+- 更适合第一版先把闭环做稳
+
+这也意味着：
+
+- 第一版不拉起一个带完整工具能力的 Codex agent 去做前台 review
+- 第一版不让前台 review 直接修改 memory 或 managed skill
+- review 只负责判断与结构化输出
+
+后续如果需要，可以演进为：
+
+- 默认走轻 review pass
+- 复杂场景再升级为更重的 review agent
+
+但这不是 v1 的默认路线。
+
+### suggestion/event + 定时批处理 agent 路线（当前新增结论）
+
+当前进一步形成的新方案是：
+
+> **不做常驻服务/协调者，而采用 suggestion/event 入库 + 定时批处理 agent 整理/落盘。**
+
+这条路线分三段：
+
+#### 1. 前台 Codex 实例
+
+- 正常完成当前任务
+- 回合结束后跑轻 review pass
+- 产出结构化 suggestion/event
+- suggestion/event 入库
+
+前台实例不直接改最终状态。
+
+#### 2. 中间存储层
+
+中间层负责：
+
+- 接收 suggestion/event
+- 标记状态
+- 保证可重试
+- 提供幂等键
+
+建议状态包括：
+
+- `pending`
+- `processing`
+- `done`
+- `failed`
+- `discarded`
+
+#### 3. 后台批处理 agent
+
+后台定时启动一个便宜的 coding agent，负责：
+
+- 从 DB 拉取未处理 suggestion
+- 批量整理、归并、去重
+- 生成正式 artifact
+- 串行更新最终状态
+
+这层的角色更接近：
+
+- memory compiler
+- recall compiler
+- skill compiler
+
+而不是新的主执行 agent。
+
+### 这条路线的主要优点
+
+- 不需要常驻 coordinator/service
+- 把高并发写问题转成低频串行消费问题
+- 前台实例负担更轻
+- 最终状态只有批处理链路更新，更容易控制并发
+
 ---
 
 ## 当前已经明确的设计判断
 
 1. 第一版不做 compression / caching。
-2. 第一版只做全局，不做项目级切分。
-3. 第一版走 Codex 原生插件方向。
-4. 原始 session/thread 历史尽量复用 Codex。
-5. `USER.md` / `MEMORY.md` 由插件自己维护。
-6. `USER.md` / `MEMORY.md` 在会话启动时通过 `SessionStart` hook 注入。
-7. 中途 memory 更新只写盘，不强制刷新当前会话。
-8. review 是第一版闭环的核心分流器。
-9. recall 不是原文回放，而是“index 命中 + thread 回读 + 经验重构”。
-10. skill 不是普通文档，而是 procedural memory 的落点。
-11. 第一版 background review 不采用 Hermes 式原地 fork，而采用 post-turn snapshot reconstruction。
+2. 第一版的最终沉淀层先做全局，不做项目级切分。
+3. recall 虽然可共用全局存储，但必须带 provenance，默认 same-repo / same-cwd 优先召回。
+4. 第一版走 Codex 原生插件方向。
+5. 原始 session/thread 历史尽量复用 Codex。
+6. `USER.md` / `MEMORY.md` 由插件自己维护。
+7. `USER.md` / `MEMORY.md` 在会话启动时通过 `SessionStart` hook 注入。
+8. 中途 memory 更新只写盘，不强制刷新当前会话。
+9. review 是第一版闭环的核心分流器。
+10. recall 不是原文回放，而是“index 命中 + thread 回读 + 经验重构”。
+11. skill 不是普通文档，而是 procedural memory 的落点。
+12. 第一版 background review 不采用 Hermes 式原地 fork，而采用 post-turn snapshot reconstruction。
 
 ---
 
@@ -578,7 +700,6 @@ Recall entry 不存整份 thread，只存帮助未来命中的轻量信息。
 - create 新的系统 skill
 - patch 已有系统 skill
 - edit 已有系统 skill
-- （未来如有需要）删除系统 skill
 
 #### 不允许自动做的
 
@@ -586,6 +707,7 @@ Recall entry 不存整份 thread，只存帮助未来命中的轻量信息。
 - edit 用户自有 skill
 - merge 到第三方 skill
 - 基于相似度猜测性修改用户已有 skill
+- 第一版自动 delete 任意 skill
 
 ### 所有权边界建议
 
@@ -600,18 +722,140 @@ Recall entry 不存整份 thread，只存帮助未来命中的轻量信息。
 - 用户资产不被污染
 - 后续版本管理与 patch 逻辑更稳定
 
+### Skill review 的默认职责
+
+对齐 Hermes 的做法，第一版 review 对 skill 的默认职责是：
+
+- create
+- patch
+- edit
+
+第一版不自动 delete skill。
+
+原因：
+
+- Hermes 的 review prompt 重点是 “saving or updating a skill”
+- create / patch / edit 更符合 procedural memory 的持续沉淀逻辑
+- delete 属于更重的不可逆操作，不适合作为第一版默认自动动作
+
+### Skill 生命周期建议
+
+第一版建议采用一个轻量生命周期：
+
+- `draft`
+- `active`
+- `retired`
+
+第一版不做自动 `delete`，而是优先通过 `retired` 退役。
+
 ---
 
-## 还没定的事（下一轮继续聊）
+## 本轮已定的关键设计决议
+
+1. **v1 资产分层**：`USER.md` / `MEMORY.md` / managed skills 先走全局沉淀；recall 允许全局存储，但必须局部优先使用。
+2. **compiler 运行模型**：第一版 compiler 只做纯定时批处理；不做 `Stop` 后 try-run，不做常驻 coordinator/service。
+3. **写入契约**：前台实例只负责提案；`compiler -> writer` 拥有最终写权。原始事实以 `thread/read` / transcript 为准，沉淀判断以 reviewer suggestion 为主，再由 compiler 做最终归并。
+4. **review 触发与执行模型**：第一版采用 `Stop` hook 触发 + 独立 post-turn snapshot reconstruction review pass，不做 Hermes 式原地 fork。
+5. **review schema**：第一版固定轻量 JSON schema；reviewer 无工具、不直接写盘、只做单次轻 review pass。
+6. **recall 存储与召回策略**：第一版存储可全局共享，但每条 entry 必须带 provenance，默认召回策略先 same-repo / same-workspace，再 global fallback。
+7. **recall 触发策略**：`SessionStart` 预加载轻量 recall skill / recall policy skill，使 recall 成为 session 基础能力；实际 recall 不自动执行，只在回合内命中条件时触发。
+8. **recall 主路**：主路走 skill / 内建 workflow，不走 MCP-first；MCP 未来只作为底层检索增强件。
+9. **升格策略**：第一版对 memory / managed skill 采用宽松准入，只排除明显噪音、明显错误、明显一次性碎片；其余内容优先先沉淀，再通过 patch / retire / rewrite 逐步收紧。
+10. **skill 自动化边界**：全自动 create/patch/edit 仅限系统自管的 managed skills，不能动用户或第三方 skill。
+11. **skill 生命周期**：第一版默认支持 create / patch / edit / retired，不自动 delete。
+12. **插件与 Codex 的职责边界**：Codex 提供 threads、hooks、skill 基础设施和 MCP 运行时；插件自己掌控 memory、review、compiler、recall policy/index、以及 managed skill 生命周期。
+
+---
+
+## Background Review 输入 / 输出 schema（当前结论）
+
+### 输入 schema（v1）
+
+第一版 background review 输入采用三层结构：
+
+#### A. 回合基础信息
+
+- `session_id`
+- `thread_id`
+- `turn_id`
+- `transcript_path`
+- `cwd`
+- `model`
+- `triggered_at`
+
+#### B. 当前回合快照
+
+- `user_input_summary`
+- `last_assistant_message`
+- `thread_snapshot`
+- `tool_events_summary`
+
+约束：
+
+- `thread_snapshot` 只保留当前回合最相关的有限 turns
+- `tool_events_summary` 只保留与沉淀判断有关的摘要
+- 不把全量 transcript 直接塞给 review
+
+#### C. 对照材料
+
+- `current_user_md`
+- `current_memory_md`
+- `managed_skills_summary`
+- `existing_recall_entries_for_thread`（可选）
+
+### 输出 schema（v1）
+
+第一版 review 输出固定为三类：
+
+#### 1. `memory_updates`
+
+- `user`
+- `global`
+
+#### 2. `recall_candidate`
+
+字段：
+
+- `should_save`
+- `summary`
+- `keywords`
+- `topics`
+- `source_kind`
+- `importance_score`
+- `why_relevant`
+- `confidence`
+
+#### 3. `skill_action`
+
+字段：
+
+- `type`：`none | create | patch | edit | retire`
+- `target_skill`
+- `reason`
+- `proposed_summary`
+
+第一版不允许输出 `delete`。
+
+### writer 分流原则
+
+review 只负责判断，不直接写最终文件。
+
+由对应 writer 执行落盘：
+
+- memory writer -> `USER.md` / `MEMORY.md`
+- recall writer -> SQLite recall index
+- skill writer -> create / patch / edit / retire managed skills
+
+---
+
+## 当前仍开放但不阻塞主线的问题
 
 1. 第一版插件目录具体长什么样
 2. recall index 的最小字段集合
-3. background review 的输入/输出格式
-4. skill create / patch 的触发阈值
-5. `SessionStart` hook 注入格式长什么样最稳
-6. recall 在什么时机触发：自动 prefetch 还是显式调用
-7. 插件与 Codex 原生 hooks / skills / app-server 的职责边界
-8. 第一版是否需要一个专门的系统 prompt 模板来约束 review 行为
+3. `SessionStart` hook 注入格式长什么样最稳
+4. 第一版是否需要一个专门的系统 prompt 模板来约束 review 行为
+5. compiler 的 batch size、schedule、锁实现细节
+6. recall skill / recall policy skill 的具体文本与触发文案
 
 ---
 
@@ -619,4 +863,4 @@ Recall entry 不存整份 thread，只存帮助未来命中的轻量信息。
 
 第一版要做的不是“给 Codex 加个 memory”，而是：
 
-> **先做一个全局的、四层闭环的 Hermes 式自我进化插件：用 SessionStart 带入稳定记忆，用 Codex thread 历史承接 recall 原材料，用 background review 把本轮结果分流成 memory / recall / skill，并让这些东西在后续回合重新回来。**
+> **先做一个全局沉淀层 + recall 局部优先的四层闭环 Hermes 式自我进化插件：用 SessionStart 带入稳定记忆与轻量 recall policy，用 Codex thread 历史承接 recall 原材料，用 background review 把本轮结果分流成 memory / recall / skill，并让这些东西在后续回合按需重新回来。**
