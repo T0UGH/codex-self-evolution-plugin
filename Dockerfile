@@ -14,6 +14,6 @@ COPY scripts ./scripts
 COPY data/.gitkeep ./data/.gitkeep
 
 RUN python -m pip install --upgrade pip && \
-    pip install -e .
+    pip install -e . pytest
 
 CMD ["bash", "scripts/docker-e2e.sh"]
