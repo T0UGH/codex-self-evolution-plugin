@@ -103,6 +103,33 @@ A template plist is available at:
 
 You can adapt the working directory and interpreter path for your machine.
 
+## Docker E2E
+
+A containerized smoke/e2e flow is included.
+
+Run with Docker directly:
+
+```bash
+docker build -t codex-self-evolution-e2e .
+docker run --rm codex-self-evolution-e2e
+```
+
+Or with Compose:
+
+```bash
+docker compose run --rm e2e
+```
+
+The container entrypoint runs `scripts/docker-e2e.sh`, which:
+- runs `pytest`
+- executes `session-start`
+- generates a stop payload
+- runs `stop-review`
+- runs `compile-preflight`
+- runs `compile --backend agent:opencode`
+- runs `recall-trigger`
+- verifies final memory / skill / receipt artifacts
+
 ## Development Notes
 
 - Hook wiring lives only in `.codex-plugin/plugin.json`
