@@ -120,6 +120,20 @@ Or with Compose:
 docker compose run --rm e2e
 ```
 
+Or with one command via `make`:
+
+```bash
+make docker-e2e
+```
+
+Useful local targets:
+
+```bash
+make test
+make e2e-local
+make preflight
+```
+
 The container entrypoint runs `scripts/docker-e2e.sh`, which:
 - runs `pytest`
 - executes `session-start`
