@@ -8,7 +8,7 @@ from .compiler.engine import preflight_compile, run_compile
 from .hooks.session_start import session_start
 from .hooks.stop_review import stop_review
 from .recall.search import search_recall
-from .recall.workflow import build_focused_recall, evaluate_recall_trigger
+from .recall.workflow import build_focused_recall, evaluate_recall_trigger, evaluate_session_recall
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,8 +62,14 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "recall":
         result = {"query": args.query, "results": search_recall(query=args.query, cwd=args.cwd, state_dir=args.state_dir)}
     elif args.command == "recall-trigger":
-        trigger = evaluate_recall_trigger(query=args.query, explicit=args.explicit)
-        result = {**trigger, **(build_focused_recall(query=args.query, cwd=args.cwd, state_dir=args.state_dir) if trigger["triggered"] else {"query": args.query, "count": 0, "results": [], "focused_recall": ""})}
+        session_payload = session_start(cwd=args.cwd, state_dir=args.state_dir)
+        result = evaluate_session_recall(
+            query=args.query,
+            cwd=args.cwd,
+            state_dir=args.state_dir,
+            session_payload=session_payload,
+            explicit=args.explicit,
+        )
     else:
         parser.error(f"unknown command: {args.command}")
         return 2

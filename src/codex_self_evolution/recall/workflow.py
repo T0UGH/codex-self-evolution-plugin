@@ -31,3 +31,36 @@ def build_focused_recall(query: str, cwd: str | Path, state_dir: str | Path | No
         "results": results,
         "focused_recall": "\n".join(bullets),
     }
+
+
+def evaluate_session_recall(
+    query: str,
+    cwd: str | Path,
+    state_dir: str | Path | None = None,
+    *,
+    session_payload: dict[str, Any] | None = None,
+    explicit: bool = False,
+    top_k: int = 3,
+) -> dict[str, Any]:
+    session_payload = session_payload or {}
+    recall_payload = session_payload.get("recall", {}) if isinstance(session_payload, dict) else {}
+    policy = recall_payload.get("policy") if isinstance(recall_payload, dict) else ""
+    skill = recall_payload.get("skill") if isinstance(recall_payload, dict) else {}
+    trigger = evaluate_recall_trigger(query=query, policy=policy, explicit=explicit)
+    if not trigger["triggered"]:
+        return {
+            **trigger,
+            "skill_id": skill.get("skill_id") if isinstance(skill, dict) else None,
+            "skill_content": skill.get("content") if isinstance(skill, dict) else "",
+            "query": query,
+            "count": 0,
+            "results": [],
+            "focused_recall": "",
+        }
+    focused = build_focused_recall(query=query, cwd=cwd, state_dir=state_dir, top_k=top_k)
+    return {
+        **trigger,
+        "skill_id": skill.get("skill_id") if isinstance(skill, dict) else None,
+        "skill_content": skill.get("content") if isinstance(skill, dict) else "",
+        **focused,
+    }

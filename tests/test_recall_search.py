@@ -1,7 +1,7 @@
 import json
 
 from codex_self_evolution.recall.search import search_recall
-from codex_self_evolution.recall.workflow import build_focused_recall, evaluate_recall_trigger
+from codex_self_evolution.recall.workflow import build_focused_recall, evaluate_recall_trigger, evaluate_session_recall
 from codex_self_evolution.storage import repo_fingerprint
 
 
@@ -69,3 +69,46 @@ def test_recall_trigger_and_focused_recall_helpers(tmp_path):
     assert trigger["triggered"] is True
     focused = build_focused_recall("pytest workflow", cwd=repo, state_dir=state)
     assert "pytest workflow" in focused["focused_recall"]
+
+
+def test_session_recall_bridge_uses_injected_skill_and_policy(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    recall_dir = state / "recall"
+    recall_dir.mkdir(parents=True)
+    recall_dir.joinpath("index.json").write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "id": "same-repo",
+                        "summary": "pytest workflow",
+                        "content": "Run focused pytest first",
+                        "source_paths": ["tests/test_x.py"],
+                        "repo_fingerprint": repo_fingerprint(repo),
+                        "cwd": str(repo),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    session_payload = {
+        "recall": {
+            "policy": "Recall is available when current turn references previous workflow context.",
+            "skill": {
+                "skill_id": "session_recall",
+                "content": "Trigger recall on remember/previous cues and prefer same-repo, then same-cwd, then global fallback.",
+            },
+        }
+    }
+    result = evaluate_session_recall(
+        query="remember previous pytest workflow",
+        cwd=repo,
+        state_dir=state,
+        session_payload=session_payload,
+    )
+    assert result["triggered"] is True
+    assert result["skill_id"] == "session_recall"
+    assert result["results"][0]["id"] == "same-repo"

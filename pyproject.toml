@@ -16,7 +16,7 @@ codex-self-evolution = "codex_self_evolution.cli:main"
 package-dir = {"" = "src"}
 
 [tool.setuptools.package-data]
-codex_self_evolution = ["review/prompt.md", "recall/policy.md"]
+codex_self_evolution = ["review/prompt.md", "recall/policy.md", "recall/session_recall.md"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
