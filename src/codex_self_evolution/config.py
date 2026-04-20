@@ -5,7 +5,11 @@ from pathlib import Path
 
 
 DEFAULT_BATCH_SIZE = 100
-DEFAULT_LOCK_STALE_SECONDS = 60 * 60
+# Hard upper bound for how long a compile lock may live before the next
+# preflight treats it as stale and reclaims it. Set to 30 minutes: a normal
+# compile should finish well under this (typical target 5-10 minutes); exceeding
+# it means the owning process is stuck and should be evicted.
+DEFAULT_LOCK_STALE_SECONDS = 30 * 60
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PLUGIN_OWNER = "codex-self-evolution-plugin"
 MANAGED_SKILLS_DIRNAME = "managed"

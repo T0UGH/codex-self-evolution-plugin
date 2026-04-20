@@ -124,7 +124,10 @@ class ScriptCompilerBackend:
 class AgentCompilerBackend:
     name = "agent:opencode"
 
-    DEFAULT_TIMEOUT_SECONDS = 120
+    # Upper bound for the opencode subprocess. Kept strictly below the 30-minute
+    # compile-lock hard limit so a hung agent times out, yields in finally, and
+    # releases the lock before the next preflight evicts it.
+    DEFAULT_TIMEOUT_SECONDS = 15 * 60
 
     def __init__(self, invoker: AgentInvoker | None = None) -> None:
         self._invoker = invoker

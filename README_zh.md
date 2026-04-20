@@ -143,7 +143,7 @@ reviewer 是 provider-backed 的。选择优先级：
 | --- | --- | --- | --- |
 | 环境变量 | `CODEX_SELF_EVOLUTION_OPENCODE_COMMAND` | — | 用空格分隔的 argv，替代 `opencode run --stdin-json --stdout-json`。 |
 | `options["opencode_command"]` | — | env 变量，其次 `["opencode", "run", "--stdin-json", "--stdout-json"]` | 显式 argv 列表，优先级高于 env 变量。 |
-| `options["opencode_timeout_seconds"]` | — | `120` | 子进程超时（秒）。 |
+| `options["opencode_timeout_seconds"]` | — | `900`（15 分钟） | 子进程超时。**严格小于 `DEFAULT_LOCK_STALE_SECONDS`**，确保 agent 卡住时子进程先 timeout → backend fallback → `finally` 清锁，避免被下一个 preflight 当 stale 抢锁导致并发写。 |
 | `options["allow_fallback"]` | — | `True` | 为 `False` 时，agent backend 失败不会 fallback，而是直接抛 `RuntimeError`。 |
 
 Agent 路径失败时追加到 `CompileArtifacts.discarded_items` 的原因：
@@ -171,10 +171,24 @@ Agent 响应 schema（`src/codex_self_evolution/compiler/agent_io.py::COMPILE_CO
 | 常量 | 默认值 | 用途 |
 | --- | --- | --- |
 | `DEFAULT_BATCH_SIZE` | `100` | 每次 compile pass 最多 claim 的 suggestion 数。从自有调度器调用 `run_compile(batch_size=...)` 可覆盖。 |
-| `DEFAULT_LOCK_STALE_SECONDS` | `3600` | `compile.lock` 超过这个秒数视为 stale，可被回收。 |
+| `DEFAULT_LOCK_STALE_SECONDS` | `1800`（30 分钟） | `compile.lock` 的硬上限。正常 compile 应远低于此值（预期 5-10 分钟）。stale 判定细节见 [Compile lock 保护](#6-compile-lock-保护)。 |
 | `PLUGIN_OWNER` | `codex-self-evolution-plugin` | 只有 owner 等于这个字符串的 managed skill 才允许 compiler 修改。用于拒绝写入非托管 skill。 |
 
-### 6. Scheduler（launchd）
+### 6. Compile lock 保护
+
+`<state-dir>/compiler/compile.lock` 文件锁串行化 compile 运行。锁内容是 JSON：`{created_at, pid}`。下一次 `preflight` / `file_lock` 调用时，**满足任一条件即判 stale 可回收**：
+
+| 条件 | 检测方式 | 原因 |
+| --- | --- | --- |
+| 持锁 `pid` 已不存在 | `os.kill(pid, 0)` 抛 `ProcessLookupError` | 进程被 SIGKILL / crash / 机器重启后锁成孤儿。立即清。 |
+| `created_at` 在未来（`age_seconds < 0`） | `utc_now() - created_at` | 时钟回拨 / NTP 调整，不信任来自"未来"的锁。 |
+| `created_at` 早于 `DEFAULT_LOCK_STALE_SECONDS`（30 分钟）前 | age 阈值 | 进程仍在但跑得过久，超过容忍时间。 |
+
+**设计契约（无 heartbeat）**：`opencode_timeout_seconds`（默认 15 分钟）**必须严格小于** lock stale 窗口（30 分钟）。agent 卡住时 → 子进程 timeout → `AgentCompilerBackend._fallback` 跑 → `finally` 释放锁。整条链在下一个 preflight 判 stale 前完成。改动任一常量都要保持这个不变量。
+
+`lock_status(paths)` 返回 `{locked, stale, stale_reason, pid_alive, age_seconds, owner_pid}` 便于诊断。
+
+### 7. Scheduler（launchd）
 
 模板 plist：`docs/launchd/com.codex-self-evolution.preflight.plist`。
 
@@ -192,7 +206,7 @@ codex-self-evolution compile-preflight --state-dir data
 codex-self-evolution compile --once --state-dir data --backend agent:opencode
 ```
 
-### 7. Docker / 冒烟测试
+### 8. Docker / 冒烟测试
 
 | 变量 | 使用位置 | 默认值 | 用途 |
 | --- | --- | --- | --- |

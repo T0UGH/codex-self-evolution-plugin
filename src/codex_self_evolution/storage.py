@@ -192,6 +192,21 @@ def compiler_lock_path(paths: Paths, name: str = "compile.lock") -> Path:
     return paths.compiler_dir / name
 
 
+def _pid_alive(pid: object) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but we lack signal permission — treat as alive.
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def lock_status(paths: Paths, stale_after_seconds: int = DEFAULT_LOCK_STALE_SECONDS, name: str = "compile.lock") -> dict[str, object]:
     path = compiler_lock_path(paths, name=name)
     if not path.exists():
@@ -199,7 +214,29 @@ def lock_status(paths: Paths, stale_after_seconds: int = DEFAULT_LOCK_STALE_SECO
     raw = load_json(path)
     created_at = datetime.fromisoformat(str(raw["created_at"]).replace("Z", "+00:00"))
     age = (utc_now() - created_at).total_seconds()
-    return {"locked": True, "stale": age > stale_after_seconds, "path": str(path), "age_seconds": age, "owner_pid": raw.get("pid")}
+    owner_pid = raw.get("pid")
+    pid_alive = _pid_alive(owner_pid)
+    # Three ways to become stale:
+    #   1. pid is gone (SIGKILL / reboot / crash) — immediate
+    #   2. age exceeds hard upper bound (process is hung past tolerance)
+    #   3. negative age (clock skew / NTP rollback) — never trust a lock from the future
+    stale = (not pid_alive) or age > stale_after_seconds or age < 0
+    stale_reason: str | None = None
+    if not pid_alive:
+        stale_reason = "pid_not_alive"
+    elif age < 0:
+        stale_reason = "negative_age"
+    elif age > stale_after_seconds:
+        stale_reason = "exceeded_max_age"
+    return {
+        "locked": True,
+        "stale": stale,
+        "stale_reason": stale_reason,
+        "path": str(path),
+        "age_seconds": age,
+        "owner_pid": owner_pid,
+        "pid_alive": pid_alive,
+    }
 
 
 @contextmanager

@@ -143,7 +143,7 @@ Selected via `--backend`:
 | --- | --- | --- | --- |
 | Env var | `CODEX_SELF_EVOLUTION_OPENCODE_COMMAND` | — | Space-separated argv used instead of `opencode run --stdin-json --stdout-json`. |
 | `options["opencode_command"]` | — | env var, else `["opencode", "run", "--stdin-json", "--stdout-json"]` | Explicit argv list. Takes precedence over env var. |
-| `options["opencode_timeout_seconds"]` | — | `120` | Subprocess timeout. |
+| `options["opencode_timeout_seconds"]` | — | `900` (15 min) | Subprocess timeout. Kept strictly below `DEFAULT_LOCK_STALE_SECONDS` so a hung agent times out, the backend falls back, and `finally` releases the lock before preflight evicts it. |
 | `options["allow_fallback"]` | — | `True` | If `False`, the agent backend raises `RuntimeError` instead of falling back to `script` on failure. |
 
 Discard reasons appended to `CompileArtifacts.discarded_items` when the agent path fails:
@@ -171,10 +171,24 @@ Defined in `src/codex_self_evolution/config.py`:
 | Constant | Default | Purpose |
 | --- | --- | --- |
 | `DEFAULT_BATCH_SIZE` | `100` | Max suggestions claimed per compile pass. Override by calling `run_compile(batch_size=...)` from your own scheduler. |
-| `DEFAULT_LOCK_STALE_SECONDS` | `3600` | A `compile.lock` older than this is treated as stale and reclaimed. |
+| `DEFAULT_LOCK_STALE_SECONDS` | `1800` (30 min) | Hard upper bound for a `compile.lock`. A normal compile is expected to finish well under this (target 5-10 min). See [Compile lock protection](#compile-lock-protection) for how stale locks are detected. |
 | `PLUGIN_OWNER` | `codex-self-evolution-plugin` | Only managed skills owned by this string can be modified by the compiler. Used to reject writes to unmanaged skills. |
 
-### 6. Scheduler (launchd)
+### 6. Compile lock protection
+
+A single `compile.lock` file under `<state-dir>/compiler/compile.lock` serializes compile runs. It is JSON: `{created_at, pid}`. A lock is considered **stale** and reclaimable by the next `preflight`/`file_lock` call if **any** of the following hold:
+
+| Condition | Detected by | Why |
+| --- | --- | --- |
+| Owning `pid` is no longer a running process | `os.kill(pid, 0)` → `ProcessLookupError` | SIGKILL, crash, or machine reboot orphaned the lock. Cleared immediately. |
+| Lock `created_at` is in the future (`age_seconds < 0`) | `utc_now() - created_at` | Clock skew / NTP rollback. Never trust a lock from the future. |
+| Lock `created_at` older than `DEFAULT_LOCK_STALE_SECONDS` (30 min) | age threshold | Process is still alive but has been running past the tolerance. |
+
+Design contract: since **there is no heartbeat**, `opencode_timeout_seconds` (default 15 min) must stay strictly below the lock stale window (30 min). If the agent hangs, the subprocess times out → `AgentCompilerBackend._fallback` runs → `finally` releases the lock — all well before the next preflight would steal it. Changing one of these constants must preserve that invariant.
+
+`lock_status(paths)` returns `{locked, stale, stale_reason, pid_alive, age_seconds, owner_pid}` for diagnostics.
+
+### 7. Scheduler (launchd)
 
 Template plist: `docs/launchd/com.codex-self-evolution.preflight.plist`.
 
@@ -192,7 +206,7 @@ codex-self-evolution compile-preflight --state-dir data
 codex-self-evolution compile --once --state-dir data --backend agent:opencode
 ```
 
-### 7. Docker / smoke tests
+### 8. Docker / smoke tests
 
 | Variable | Used by | Default | Purpose |
 | --- | --- | --- | --- |
