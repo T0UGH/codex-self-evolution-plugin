@@ -199,13 +199,28 @@ def _normalize_json_text(raw_text: str) -> str:
 
 
 def parse_reviewer_output(raw_text: str, max_chars: int = 100_000) -> ReviewerOutput:
+    """Strict parse: raises on any structural problem, including per-item errors."""
+    parsed = _load_reviewer_json(raw_text, max_chars=max_chars)
+    return ReviewerOutput.from_dict(parsed)
+
+
+def parse_reviewer_output_lenient(
+    raw_text: str, max_chars: int = 100_000
+) -> tuple[ReviewerOutput, list[dict[str, Any]]]:
+    """Lenient parse: top-level structural errors still raise, but malformed
+    individual suggestions are silently skipped and reported as ``skipped``.
+    """
+    parsed = _load_reviewer_json(raw_text, max_chars=max_chars)
+    return ReviewerOutput.from_dict_lenient(parsed)
+
+
+def _load_reviewer_json(raw_text: str, max_chars: int) -> dict[str, Any]:
     if not raw_text.strip():
         raise ReviewProviderError("reviewer returned empty output")
     if len(raw_text) > max_chars:
         raise ReviewProviderError("reviewer output exceeded max_chars")
     normalized = _normalize_json_text(raw_text)
     try:
-        parsed = json.loads(normalized)
+        return json.loads(normalized)
     except json.JSONDecodeError as exc:
         raise SchemaError(f"reviewer did not return valid JSON: {exc}") from exc
-    return ReviewerOutput.from_dict(parsed)

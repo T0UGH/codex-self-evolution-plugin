@@ -12,6 +12,17 @@ def _normalize_scope(raw_scope: object) -> str:
     return "global"
 
 
+def _extract_content(details: dict[str, Any], fallback_summary: str) -> str:
+    """Prefer explicit content; accept a few common alias keys reviewers drift
+    into (note/text/body) before falling back to the summary. Empty/whitespace
+    values are treated as missing."""
+    for key in ("content", "note", "text", "body"):
+        value = details.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return str(fallback_summary).strip()
+
+
 def _normalize_existing_entry(scope: str, item: dict[str, Any]) -> dict[str, Any] | None:
     content = str(item.get("content", "")).strip()
     if not content:
@@ -67,7 +78,7 @@ def compile_memory(
     for item in suggestions:
         if item.family != "memory_updates":
             continue
-        content = str(item.details.get("content", item.summary)).strip()
+        content = _extract_content(item.details, item.summary)
         if not content:
             continue
         scope = _normalize_scope(item.details.get("scope"))

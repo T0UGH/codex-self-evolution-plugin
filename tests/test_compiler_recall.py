@@ -69,6 +69,27 @@ def test_compile_recall_dedupes_new_against_existing_content():
     assert records[1].id != "old1"
 
 
+def test_compile_recall_uses_details_note_when_content_missing():
+    suggestion = Suggestion(
+        family="recall_candidate",
+        summary="summary text",
+        details={"note": "real recall text from reviewer"},
+    )
+    records = compile_recall([suggestion], repo_fingerprint="r", cwd="/tmp")
+    assert len(records) == 1
+    assert records[0].content == "real recall text from reviewer"
+
+
+def test_compile_recall_prefers_content_over_note():
+    suggestion = Suggestion(
+        family="recall_candidate",
+        summary="summary text",
+        details={"content": "explicit recall content", "note": "note body"},
+    )
+    records = compile_recall([suggestion], repo_fingerprint="r", cwd="/tmp")
+    assert records[0].content == "explicit recall content"
+
+
 def test_compile_recall_skips_malformed_existing_entries():
     existing = [
         "not a dict",

@@ -10,6 +10,17 @@ def _content_key(content: str) -> str:
     return hashlib.sha1(content.encode("utf-8")).hexdigest()
 
 
+def _extract_content(details: dict[str, Any], fallback_summary: str) -> str:
+    """Mirror of compiler.memory._extract_content: accept common alias keys
+    (note / text / body) before falling back to the summary, so a reviewer that
+    renamed ``details.content`` doesn't silently dedupe to summary text."""
+    for key in ("content", "note", "text", "body"):
+        value = details.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return str(fallback_summary).strip()
+
+
 def compile_recall(
     suggestions: list[Suggestion],
     repo_fingerprint: str,
@@ -49,7 +60,7 @@ def compile_recall(
     for item in suggestions:
         if item.family != "recall_candidate":
             continue
-        content = str(item.details.get("content", item.summary)).strip()
+        content = _extract_content(item.details, item.summary)
         if not content:
             continue
         key = _content_key(content)

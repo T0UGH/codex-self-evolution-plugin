@@ -11,5 +11,8 @@ venv/
 /data/*
 !/data/.gitkeep
 
+# Provider secrets (copy .env.provider.example, fill locally, never commit)
+.env.provider
+
 # macOS
 .DS_Store

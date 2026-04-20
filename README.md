@@ -1,6 +1,8 @@
 # Codex Self-Evolution Plugin
 
 > Language: **English** | [中文](README_zh.md)
+>
+> First time here? Jump to the step-by-step quickstart: [docs/getting-started.md](docs/getting-started.md) (中文 only, for now).
 
 A local Codex plugin that runs a staged self-evolution loop:
 

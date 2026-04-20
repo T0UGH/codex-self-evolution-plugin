@@ -85,6 +85,37 @@ class ReviewerOutput:
             converted[family] = [Suggestion.from_dict({**item, "family": family}) for item in items]
         return cls(**converted)
 
+    @classmethod
+    def from_dict_lenient(cls, payload: dict[str, Any]) -> tuple["ReviewerOutput", list[dict[str, Any]]]:
+        """Parse a reviewer output object but drop individual malformed suggestions
+        instead of raising, so one bad item can't poison a whole batch.
+
+        Returns ``(output, skipped)`` where ``skipped`` is a list of
+        ``{"family": ..., "index": ..., "reason": ..., "item": raw_item}`` entries
+        describing what was dropped. Structural problems on the top-level object
+        (non-mapping payload, unexpected top-level keys, non-list family) still
+        raise :class:`SchemaError` — only per-item validation is relaxed.
+        """
+        data = _require_mapping(payload, "reviewer_output")
+        unexpected = set(data) - ALLOWED_FAMILIES
+        if unexpected:
+            raise SchemaError(f"unexpected reviewer keys: {sorted(unexpected)}")
+        converted: dict[str, list[Suggestion]] = {}
+        skipped: list[dict[str, Any]] = []
+        for family in ALLOWED_FAMILIES:
+            items = _require_list(data.get(family, []), family)
+            kept: list[Suggestion] = []
+            for index, item in enumerate(items):
+                if not isinstance(item, dict):
+                    skipped.append({"family": family, "index": index, "reason": "item is not an object", "item": item})
+                    continue
+                try:
+                    kept.append(Suggestion.from_dict({**item, "family": family}))
+                except SchemaError as exc:
+                    skipped.append({"family": family, "index": index, "reason": str(exc), "item": item})
+            converted[family] = kept
+        return cls(**converted), skipped
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "memory_updates": [item.to_dict() for item in self.memory_updates],

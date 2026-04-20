@@ -20,7 +20,7 @@ def stop_review(hook_payload: str | Path, state_dir: str | Path | None = None) -
     cwd = payload.get("cwd") or "."
     paths = build_paths(repo_root=cwd, state_dir=state_dir)
     snapshot, snapshot_path = build_review_snapshot(payload, paths)
-    reviewer_output, provider_result = run_reviewer(snapshot)
+    reviewer_output, provider_result, skipped_suggestions = run_reviewer(snapshot)
     timestamp = utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z")
     idempotency_key = compute_stable_id(
         json.dumps(
@@ -52,4 +52,6 @@ def stop_review(hook_payload: str | Path, state_dir: str | Path | None = None) -
         "review_snapshot_path": str(snapshot_path),
         "reviewer_provider": provider_result.provider,
         "suggestion_count": len(envelope.suggestions),
+        "skipped_suggestion_count": len(skipped_suggestions),
+        "skipped_suggestions": skipped_suggestions,
     }

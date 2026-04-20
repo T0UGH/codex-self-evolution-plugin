@@ -7,11 +7,12 @@ from codex_self_evolution.schemas import SchemaError
 
 
 def test_dummy_reviewer_provider_returns_structured_output():
-    output, provider_result = run_reviewer(
+    output, provider_result, skipped = run_reviewer(
         {"reviewer_provider": "dummy", "provider_stub_response": {"memory_updates": [{"summary": "a", "details": {"content": "b"}}], "recall_candidate": [], "skill_action": []}}
     )
     assert provider_result.provider == "dummy"
     assert len(output.memory_updates) == 1
+    assert skipped == []
 
 
 
@@ -60,6 +61,83 @@ def test_minimax_default_endpoint_uses_messages_api(monkeypatch):
 def test_reviewer_rejects_malformed_json():
     with pytest.raises(SchemaError):
         run_reviewer({}, reviewer_output_override="not-json")
+
+
+
+def test_reviewer_lenient_drops_bad_suggestion_but_keeps_good_ones():
+    stub = {
+        "memory_updates": [
+            {"summary": "good", "details": {"content": "valid text"}},
+            {"summary": "bad-details", "details": "should be an object, not a string"},
+        ],
+        "recall_candidate": [
+            # completely invalid top-level item (not an object) — skipped
+            "raw string suggestion",
+            {"summary": "good recall", "details": {"content": "valid recall"}},
+        ],
+        "skill_action": [],
+    }
+    output, provider_result, skipped = run_reviewer(
+        {"reviewer_provider": "dummy", "provider_stub_response": stub}
+    )
+    # Good ones survive.
+    assert len(output.memory_updates) == 1
+    assert output.memory_updates[0].summary == "good"
+    assert len(output.recall_candidate) == 1
+    assert output.recall_candidate[0].summary == "good recall"
+    # Skipped list reports both casualties with enough context to log them.
+    families = sorted(entry["family"] for entry in skipped)
+    assert families == ["memory_updates", "recall_candidate"]
+    for entry in skipped:
+        assert "reason" in entry and entry["reason"]
+        assert "index" in entry
+
+
+
+def test_reviewer_retries_on_top_level_parse_failure_then_succeeds(monkeypatch):
+    from codex_self_evolution.review import runner as runner_module
+    from codex_self_evolution.review.providers import ProviderResult
+
+    call_count = {"value": 0}
+    good_payload = '{"memory_updates": [{"summary": "s", "details": {"content": "c"}}], "recall_candidate": [], "skill_action": []}'
+
+    class FlakyProvider:
+        name = "flaky"
+
+        def run(self, snapshot, prompt, options):
+            call_count["value"] += 1
+            if call_count["value"] == 1:
+                return ProviderResult(provider=self.name, raw_text="not-json-the-first-time")
+            return ProviderResult(provider=self.name, raw_text=good_payload)
+
+    monkeypatch.setattr(runner_module, "get_review_provider", lambda name: FlakyProvider())
+    output, result, skipped = run_reviewer({"reviewer_provider": "flaky"}, parse_retries=2)
+
+    assert call_count["value"] == 2, "should have retried once"
+    assert len(output.memory_updates) == 1
+    assert skipped == []
+
+
+
+def test_reviewer_gives_up_after_exhausting_parse_retries(monkeypatch):
+    from codex_self_evolution.review import runner as runner_module
+    from codex_self_evolution.review.providers import ProviderResult
+
+    call_count = {"value": 0}
+
+    class AlwaysBad:
+        name = "always-bad"
+
+        def run(self, snapshot, prompt, options):
+            call_count["value"] += 1
+            return ProviderResult(provider=self.name, raw_text="nope nope nope")
+
+    monkeypatch.setattr(runner_module, "get_review_provider", lambda name: AlwaysBad())
+    with pytest.raises(SchemaError):
+        run_reviewer({"reviewer_provider": "always-bad"}, parse_retries=2)
+
+    # parse_retries=2 → 1 initial + 2 retries = 3 total calls
+    assert call_count["value"] == 3
 
 
 

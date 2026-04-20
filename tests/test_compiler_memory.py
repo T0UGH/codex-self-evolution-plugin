@@ -72,6 +72,27 @@ def test_compile_memory_dedupes_new_suggestion_against_existing_entry():
     assert records["global"][0]["summary"] == "stable fact"
 
 
+def test_compile_memory_uses_details_note_when_content_missing():
+    suggestion = Suggestion(
+        family="memory_updates",
+        summary="summary text",
+        details={"note": "actual note text, no content key"},
+    )
+    records = compile_memory([suggestion])
+    assert len(records["global"]) == 1
+    assert records["global"][0]["content"] == "actual note text, no content key"
+
+
+def test_compile_memory_prefers_content_over_note():
+    suggestion = Suggestion(
+        family="memory_updates",
+        summary="summary text",
+        details={"content": "explicit content", "note": "note body"},
+    )
+    records = compile_memory([suggestion])
+    assert records["global"][0]["content"] == "explicit content"
+
+
 def test_compile_memory_tolerates_malformed_existing_entries():
     existing = {
         "user": [
