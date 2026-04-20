@@ -1,24 +1,30 @@
 # Codex Self-Evolution Plugin
 
-Local Codex plugin that implements a staged self-evolution loop:
+> Language: **English** | [中文](README_zh.md)
 
-- `SessionStart` creates runtime state and injects stable background from `USER.md` + `MEMORY.md`, plus recall policy
-- `Stop` reconstructs a normalized review snapshot, runs a provider-backed reviewer, and stores structured suggestions
-- `compile-preflight` is the cheap scheduler wake/check step
-- `compile` is the final writer-owned batch promotion step, with pluggable backends
-- `recall` and `recall-trigger` support focused recall during a live turn
+A local Codex plugin that runs a staged self-evolution loop:
+
+- **`SessionStart`** — creates runtime state and injects stable background from `USER.md` + `MEMORY.md`, plus the recall policy and session-recall skill.
+- **`Stop`** — builds a normalized review snapshot, runs a provider-backed reviewer, and persists a structured `SuggestionEnvelope` (memory updates, recall candidates, skill actions).
+- **`compile-preflight`** — cheap scheduler wake/check step. Returns `skip_empty`, `skip_locked`, or `run`.
+- **`compile`** — writer-owned batch promotion step. Reads existing memory / recall as context, then runs a pluggable backend (`script` or `agent:opencode`) and writes final artifacts atomically.
+- **`recall` / `recall-trigger`** — focused recall during a live turn.
+
+The compiler is the only component that writes final assets (memory, recall, managed skills, receipt); backends only produce structured artifacts.
+
+---
 
 ## Install
 
-Use either of these:
-
 ```bash
 pip install -e .
-```
-
-```bash
+# or, without install:
 PYTHONPATH=src python -m codex_self_evolution.cli --help
 ```
+
+Python 3.11+.
+
+---
 
 ## Commands
 
@@ -38,55 +44,201 @@ The module form is equivalent:
 python -m codex_self_evolution.cli session-start --cwd /path/to/repo
 ```
 
-## Reviewer Runtime
+---
 
-The reviewer is provider-backed and pluggable.
+## Configuration
 
-Current provider choices:
-- `dummy` — deterministic test/dry-run provider
-- `openai-compatible` — OpenAI-compatible chat-completions style request formatting
-- `anthropic-style` — Anthropic-style messages request formatting
+This section lists everything you can configure. All variables are **optional by default**; if you only run the deterministic `dummy` / `script` path you need zero configuration. The "Required" column tells you what becomes mandatory in which scenario.
 
-The main hook/runtime path no longer depends on a pre-baked `reviewer_output` payload.
-Instead, `Stop` builds a normalized review snapshot and passes it to the selected provider runtime.
+### 1. Runtime paths
 
-## Scheduler Guidance
+| Flag / arg | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `--cwd` | Required for `session-start`, `recall`, `recall-trigger` | — | Repo the session is operating on. |
+| `--state-dir` | Optional | `<cwd>/data` | Root of persistent runtime state (suggestions, memory, recall, skills, compiler receipts, review snapshots, scheduler). |
+| `--repo-root` | Optional for `compile`, `compile-preflight` | CWD of process | Repo root used to resolve `state-dir` when `--state-dir` is omitted. |
+| `--once` | Optional for `compile` | off | Run a single compile pass instead of looping. |
+| `--backend` | Optional for `compile` | `script` | `script` or `agent:opencode`. The default scheduler plist uses `agent:opencode`. |
+| `--explicit` | Optional for `recall-trigger` | off | Mark the recall trigger as user-explicit. |
 
-The recommended scheduler path is **launchd**, split into two stages:
+State layout under `--state-dir`:
 
-1. `compile-preflight`
-   - fast wake/check
-   - returns `skip_empty`, `skip_locked`, or `run`
-2. `compile`
-   - only invoked when preflight says work exists
-   - can use either the deterministic `script` backend or the `agent:opencode` backend scaffold
+```
+data/
+├── suggestions/{pending,processing,done,failed,discarded}/
+├── memory/            # USER.md, MEMORY.md, memory.json
+├── recall/            # index.json, compiled.md
+├── skills/managed/    # managed skill markdown + manifest.json
+├── compiler/          # compile.lock, last_receipt.json
+├── review/snapshots/  # normalized Stop-time snapshots
+└── scheduler/
+```
 
-Typical flow:
+### 2. Hook environment variables (Codex-provided)
+
+These are injected by the Codex host when it invokes the hook commands defined in `.codex-plugin/plugin.json`. You do not set them manually.
+
+| Variable | Used by | Purpose |
+| --- | --- | --- |
+| `CODEX_CWD` | `session-start`, `recall`, `recall-trigger` | Current repo working directory. |
+| `CODEX_STATE_DIR` | all hooks | Points at runtime state dir. |
+| `CODEX_HOOK_PAYLOAD` | `stop-review` | Path to the Stop payload JSON. |
+| `CODEX_RECALL_QUERY` | `recall`, `recall-trigger` | Query string for focused recall. |
+
+### 3. Reviewer providers (`Stop` step)
+
+The reviewer is provider-backed. Selection priority:
+
+1. The `reviewer_provider` field in the Stop payload.
+2. Otherwise: `dummy`.
+
+| Provider | Purpose | Required when used |
+| --- | --- | --- |
+| `dummy` | Deterministic stub for tests / dry runs | **nothing** (optionally honors `provider_stub_response` in the Stop payload) |
+| `openai-compatible` | OpenAI chat-completions dialect | `OPENAI_API_KEY` (or explicit `api_key` option) |
+| `anthropic-style` | Anthropic messages dialect | `ANTHROPIC_API_KEY` |
+| `minimax` | MiniMax (Anthropic-dialect endpoint) | `MINIMAX_API_KEY` |
+
+#### Reviewer env vars
+
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `OPENAI_API_KEY` | Required for `openai-compatible` | — | Bearer token. |
+| `OPENAI_BASE_URL` | Optional | `https://api.openai.com/v1/chat/completions` | Override endpoint. |
+| `OPENAI_REVIEW_MODEL` | Optional | `gpt-4.1-mini` | Model id sent in request body. |
+| `ANTHROPIC_API_KEY` | Required for `anthropic-style` | — | `x-api-key` header. |
+| `ANTHROPIC_BASE_URL` | Optional | `https://api.anthropic.com/v1/messages` | Override endpoint. |
+| `ANTHROPIC_REVIEW_MODEL` | Optional | `claude-3-5-haiku-latest` | Model id. |
+| `MINIMAX_API_KEY` | Required for `minimax` | — | Bearer token. |
+| `MINIMAX_REGION` | Optional | `global` | `global` → `https://api.minimax.io/anthropic/v1/messages`. `cn` → `https://api.minimaxi.com/anthropic/v1/messages`. |
+| `MINIMAX_BASE_URL` | Optional | derived from region | Full URL override. Takes precedence over `MINIMAX_REGION`. |
+| `MINIMAX_REVIEW_MODEL` | Optional | `MiniMax-M2.7` | Model id. |
+
+#### Reviewer provider options (programmatic)
+
+Passed in the `provider_options` dict when calling `run_reviewer(...)` directly. Each option overrides the corresponding env var.
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `api_key` | from env | Overrides the provider's env-sourced key. |
+| `api_base` | provider default | Full URL. |
+| `model` | provider default | Model id. |
+| `max_tokens` | `800` | Applied to OpenAI / Anthropic / MiniMax dialects. |
+| `timeout_seconds` | `30` | HTTP timeout. |
+| `anthropic_version` | `2023-06-01` | `anthropic-version` header (Anthropic dialect only). |
+| `stub_response` | — | Dummy provider only: canned reviewer JSON. |
+
+### 4. Compile backends
+
+Selected via `--backend`:
+
+| Backend | Required | Notes |
+| --- | --- | --- |
+| `script` | nothing | Deterministic Python merge. Safe default. Reads existing memory / recall and does conservative incremental merge (does not wipe stable entries). |
+| `agent:opencode` | `opencode` binary on `PATH` **or** an explicit `opencode_command` | Sends `{batch, existing_assets, repo, contract}` JSON over stdin, parses strict JSON from stdout. Any failure (binary missing / non-zero exit / timeout / invalid JSON / schema mismatch) falls back to `script`, unless `allow_fallback=False`. |
+
+#### Agent compiler configuration
+
+| Channel | Variable / option | Default | Purpose |
+| --- | --- | --- | --- |
+| Env var | `CODEX_SELF_EVOLUTION_OPENCODE_COMMAND` | — | Space-separated argv used instead of `opencode run --stdin-json --stdout-json`. |
+| `options["opencode_command"]` | — | env var, else `["opencode", "run", "--stdin-json", "--stdout-json"]` | Explicit argv list. Takes precedence over env var. |
+| `options["opencode_timeout_seconds"]` | — | `120` | Subprocess timeout. |
+| `options["allow_fallback"]` | — | `True` | If `False`, the agent backend raises `RuntimeError` instead of falling back to `script` on failure. |
+
+Discard reasons appended to `CompileArtifacts.discarded_items` when the agent path fails:
+
+- `opencode_unavailable` — binary not on `PATH` and no custom invoker.
+- `agent_invoke_failed` — subprocess raised (non-zero exit, timeout, etc.); `detail` has the truncated error.
+- `agent_output_invalid` — stdout was not valid JSON, or did not match the response schema; `detail` has the parse error.
+
+The agent response schema (`src/codex_self_evolution/compiler/agent_io.py::COMPILE_CONTRACT`) is:
+
+```json
+{
+  "memory_records": {"user": [...], "global": [...]},
+  "recall_records": [...],
+  "compiled_skills": [...],
+  "manifest_entries": [...],
+  "discarded_items": [...]
+}
+```
+
+### 5. Compile runtime
+
+Defined in `src/codex_self_evolution/config.py`:
+
+| Constant | Default | Purpose |
+| --- | --- | --- |
+| `DEFAULT_BATCH_SIZE` | `100` | Max suggestions claimed per compile pass. Override by calling `run_compile(batch_size=...)` from your own scheduler. |
+| `DEFAULT_LOCK_STALE_SECONDS` | `3600` | A `compile.lock` older than this is treated as stale and reclaimed. |
+| `PLUGIN_OWNER` | `codex-self-evolution-plugin` | Only managed skills owned by this string can be modified by the compiler. Used to reject writes to unmanaged skills. |
+
+### 6. Scheduler (launchd)
+
+Template plist: `docs/launchd/com.codex-self-evolution.preflight.plist`.
+
+You must edit:
+
+- **Interpreter path** (e.g. `/Users/haha/hermes-agent/venv/bin/python3.11`) to match your Python venv.
+- **Working directory** to your repo root.
+- **`--state-dir`** to the absolute path of your runtime state.
+
+The job should wake cheaply, run `compile-preflight`, and only invoke `compile` when preflight returns `run`:
 
 ```bash
 codex-self-evolution compile-preflight --state-dir data
+# if status == run:
 codex-self-evolution compile --once --state-dir data --backend agent:opencode
 ```
 
-If `opencode` is unavailable, the agent backend falls back safely to the script backend while preserving the writer boundary.
+### 7. Docker / smoke tests
 
-## State Layout
+| Variable | Used by | Default | Purpose |
+| --- | --- | --- | --- |
+| `PYTHON` | Makefile targets | `/Users/haha/hermes-agent/venv/bin/python3.11` | Interpreter for `make test`, `make preflight`, `make provider-smoke-*`. Override if your venv lives elsewhere. |
+| `IMAGE` | `make docker-*` | `codex-self-evolution-e2e` | Docker image tag. |
+| `ENV_FILE` | `make provider-smoke-*` | `.env.provider` | Sourced before running real-provider smoke tests. |
 
-Runtime state defaults to `data/` under the repo root:
+`.env.provider` is auto-sourced by the Makefile if present. Copy from the template:
 
-- `data/suggestions/pending/`
-- `data/suggestions/processing/`
-- `data/suggestions/done/`
-- `data/suggestions/failed/`
-- `data/suggestions/discarded/`
-- `data/memory/`
-- `data/recall/`
-- `data/skills/managed/`
-- `data/compiler/`
-- `data/review/snapshots/`
-- `data/scheduler/`
+```bash
+cp .env.provider.example .env.provider
+# fill the keys you need
+```
 
-Each suggestion now carries:
+---
+
+## Reviewer runtime
+
+Reviewer invocation lives in `src/codex_self_evolution/review/runner.py`. It:
+
+1. Loads the baked prompt at `src/codex_self_evolution/review/prompt.md`.
+2. Resolves a provider (`dummy`, `openai-compatible`, `anthropic-style`, `minimax`).
+3. Sends the normalized review snapshot.
+4. Parses the JSON response via `parse_reviewer_output(...)` and validates it against `ReviewerOutput` schema. Malformed output raises `SchemaError` and is rejected.
+
+The main Stop path no longer trusts pre-baked `reviewer_output` in the payload: fixtures are test-only.
+
+---
+
+## Compile pipeline
+
+```
+pending suggestion batch
+  + existing memory / recall / manifest (loaded by build_compile_context)
+  -> backend.compile(batch, context, options)
+  -> apply_compiler_outputs(...)  # atomic writes to memory / recall / skills
+  -> write_receipt(...)
+```
+
+- `build_compile_context` reads `memory/USER.md`, `memory/MEMORY.md`, `memory/memory.json`, `recall/index.json`, `recall/compiled.md`, and the skill manifest. Missing or corrupt files fall back to empty values without raising.
+- `ScriptCompilerBackend` uses `compile_memory(existing_index=...)` and `compile_recall(existing_records=...)` — existing entries are preserved by default; new suggestions only append on new `(scope, content)` pairs (memory) or new `sha1(content)` (recall).
+- `AgentCompilerBackend` sends the full payload (batch + existing_assets + repo + contract) to `opencode`, parses strict JSON back, and falls back to `script` on any failure.
+- Final writes (`apply_compiler_outputs`) are owned by the compiler engine, not by a separate writer module.
+
+Each suggestion in `suggestions/` carries:
+
 - stable `suggestion_id`
 - `idempotency_key`
 - explicit `state`
@@ -94,52 +246,32 @@ Each suggestion now carries:
 - optional `failure_reason`
 - `transition_log`
 
-## Launchd Example
-
-A launchd job should wake cheaply, run preflight, and only then invoke compile.
-A template plist is available at:
-
-- `docs/launchd/com.codex-self-evolution.preflight.plist`
-
-You can adapt the working directory and interpreter path for your machine.
+---
 
 ## Docker E2E
 
 A containerized smoke/e2e flow is included.
 
-Run with Docker directly:
-
 ```bash
 docker build -t codex-self-evolution-e2e .
 docker run --rm codex-self-evolution-e2e
-```
-
-Or with Compose:
-
-```bash
+# or via compose:
 docker compose run --rm e2e
-```
-
-Or with one command via `make`:
-
-```bash
+# or one command:
 make docker-e2e
 ```
 
-Useful local targets:
+The container runs `scripts/docker-e2e.sh`, which:
 
-```bash
-make test
-make e2e-local
-make preflight
-make provider-smoke-minimax
-make provider-smoke-openai
-make provider-smoke-anthropic
-```
+1. Runs `pytest`.
+2. Runs `session-start`.
+3. Generates a Stop payload and runs `stop-review`.
+4. Runs `compile-preflight`.
+5. Runs `compile --backend agent:opencode` (falls back to `script` in the container because `opencode` is not installed).
+6. Runs `recall-trigger`.
+7. Verifies final memory / skill / receipt artifacts.
 
-### Real Provider Smoke Tests
-
-Three env-driven smoke targets are available for the reviewer runtime:
+### Real provider smoke tests
 
 ```bash
 make provider-smoke-minimax
@@ -147,52 +279,27 @@ make provider-smoke-openai
 make provider-smoke-anthropic
 ```
 
-Recommended first path:
-- `make provider-smoke-minimax`
+Recommended first path: `make provider-smoke-minimax`.
 
-Expected environment:
-- `MINIMAX_API_KEY` for `provider-smoke-minimax`
-- `OPENAI_API_KEY` for `provider-smoke-openai`
-- `ANTHROPIC_API_KEY` for `provider-smoke-anthropic`
-
-MiniMax defaults:
-- global region -> `https://api.minimax.io/anthropic/v1/messages`
-- cn region -> `https://api.minimaxi.com/anthropic/v1/messages`
-- default review model -> `MiniMax-M2.7`
-
-Optional overrides:
-- `MINIMAX_REGION`
-- `MINIMAX_BASE_URL`
-- `MINIMAX_REVIEW_MODEL`
-- `OPENAI_BASE_URL`
-- `ANTHROPIC_BASE_URL`
-- `OPENAI_REVIEW_MODEL`
-- `ANTHROPIC_REVIEW_MODEL`
-
-You can either export those vars in your shell, or copy:
-
-```bash
-cp .env.provider.example .env.provider
-```
-
-Then fill the keys. The Makefile will auto-source `.env.provider` if it exists.
+Required env (per provider): `MINIMAX_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`. See [Reviewer providers](#3-reviewer-providers-stop-step) for optional overrides.
 
 These run `scripts/provider-smoke-test.py` against the real provider APIs and print the structured reviewer output plus request payload metadata.
 
-The container entrypoint runs `scripts/docker-e2e.sh`, which:
-- runs `pytest`
-- executes `session-start`
-- generates a stop payload
-- runs `stop-review`
-- runs `compile-preflight`
-- runs `compile --backend agent:opencode`
-- runs `recall-trigger`
-- verifies final memory / skill / receipt artifacts
+### Local testing
+
+```bash
+make test           # pytest
+make e2e-local      # scripts/docker-e2e.sh without Docker
+make preflight      # one compile-preflight call against data/
+```
+
+---
 
 ## Development Notes
 
-- Hook wiring lives only in `.codex-plugin/plugin.json`
-- Final writes are owned by `src/codex_self_evolution/writer.py`
-- Managed skills are isolated under `skills/managed/` and require plugin-owned manifest entries
-- Review snapshots are normalized and persisted for debugging / auditability
-- Recall keeps repo/cwd-first ranking and exposes a trigger helper instead of preloading large recall material at session start
+- Hook wiring lives only in `.codex-plugin/plugin.json`.
+- Final writes are owned by `src/codex_self_evolution/compiler/engine.py` (not a separate `writer.py`).
+- Managed skills are isolated under `skills/managed/` and require plugin-owned manifest entries (owner = `codex-self-evolution-plugin`). The compiler refuses to modify skills owned by anything else.
+- Review snapshots are normalized and persisted under `review/snapshots/` for debugging / auditability.
+- Recall uses repo/cwd-first ranking and exposes a trigger helper instead of preloading large recall material at session start.
+- When touching compile behaviour, read `docs/2026-04-20-compiler-existing-assets-handoff.md` for the rationale behind the current existing-assets pipeline.

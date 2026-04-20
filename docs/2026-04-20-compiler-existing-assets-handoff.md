@@ -1,5 +1,25 @@
 # Codex Self-Evolution Plugin Handoff：compiler 仍缺少 existing assets 输入（2026-04-20）
 
+## ✅ 当前状态（2026-04-20 晚更新）
+
+本 handoff 里列出的三条主干缺口 P1 / P2 / P3 **全部已完成**。
+
+| 项  | 状态 | 代码落点 | 测试落点 |
+| --- | --- | --- | --- |
+| P1 扩 compile context | ✅ | `src/codex_self_evolution/compiler/backends.py::build_compile_context` 现在注入 `existing_user_memory`、`existing_global_memory`、`existing_memory_index`、`existing_recall_records`、`existing_recall_markdown`、`memory_paths`、`recall_paths`、`memory_dir`、`recall_dir` | `tests/test_compile_context.py` |
+| P2 agent backend 真的喂 existing assets + batch + contract | ✅ | 新文件 `src/codex_self_evolution/compiler/agent_io.py`（`build_agent_compile_payload` + `parse_agent_compile_response` + `COMPILE_CONTRACT`），`backends.py::AgentCompilerBackend` 支持可注入 invoker、真调 opencode、结构化失败 → fallback | `tests/test_agent_compile_io.py`、`tests/test_agent_compiler_backend.py` |
+| P3 script fallback 做保守增量 merge | ✅ | `compiler/memory.py::compile_memory(*, existing_index)`、`compiler/recall.py::compile_recall(*, existing_records)` 先保留 existing 条目再 dedupe append；`ScriptCompilerBackend` wire up existing | `tests/test_compiler_memory.py` 增量用例、`tests/test_compiler_recall.py` 增量用例、`tests/test_script_fallback_merge.py` 两轮端到端 |
+
+Pytest 53 全部通过（`.venv/bin/pytest tests/`）。
+
+现在 compiler 在运行时真正看到 existing memory / existing recall：
+- `agent:opencode` 有条件真正做"旧资产 + 新 batch"的增量编译（opencode 可用且返回合法 JSON 时）
+- 即使 opencode 不可用 / 返回非法 / invoker 抛错，script fallback 也不会洗掉旧资产
+
+下面的历史分析章节保留不动，便于后来者理解这次决策是为什么而做。
+
+---
+
 ## 这份 handoff 是干什么的
 
 记录当前 `codex-self-evolution-plugin` 在 compiler 路径上还没补齐的关键缺口，避免后续继续把问题理解成：
@@ -252,13 +272,32 @@ pending suggestion batch
 
 当前代码已经完成了：
 
-> **“compiler 负责最终写入”**
+> **"compiler 负责最终写入"**
 
 但还没有完成：
 
-> **“compiler 在旧资产基础上做真正的增量编译”**
+> **"compiler 在旧资产基础上做真正的增量编译"**
 
 下一步真正该补的核心不是 writer，不是 UI，不是 trigger，
 而是：
 
 > **把 existing memory / existing recall 正式纳入 compiler 的运行时输入。**
+
+---
+
+## 后记（2026-04-20 晚）
+
+上面这句话现在已经落地：
+
+> **compiler 已经在旧资产基础上做真正的增量编译。**
+
+具体对应：
+- `build_compile_context` 把 existing memory / existing recall 作为 context 字段注入
+- `AgentCompilerBackend` 通过 `build_agent_compile_payload` 把 existing assets + batch + contract 打包给 opencode
+- `ScriptCompilerBackend`（fallback）通过 `compile_memory(existing_index=...)` / `compile_recall(existing_records=...)` 做保守增量 merge，旧条目默认保留，新条目 dedupe append
+
+还没做的、但已经不阻塞本轮目标的事项（后续迭代再看）：
+
+1. **真实 opencode prompt 模板**：当前 contract 的 `goals` 和 `response_schema` 是声明式的，但还没有一套具体的 system prompt 把 contract 翻成 opencode 能直接吃的自然语言说明。`opencode_command` 的默认值 `opencode run --stdin-json --stdout-json` 是占位，用户需要根据自己本地 opencode 的实际调用方式覆盖（通过 `options["opencode_command"]` 或 `CODEX_SELF_EVOLUTION_OPENCODE_COMMAND` 环境变量）。
+2. **compiler receipt 暴露 fallback reason**：目前 discarded_items 里会记录 `opencode_unavailable` / `agent_invoke_failed` / `agent_output_invalid`，但顶层 receipt 只有 `fallback_backend` 字段，没有把 reason 上提，离线审计 fallback 为什么触发需要点开 suggestion / receipt 细节。
+3. **agent 端的 tombstone / 显式删除语义**：现在 script fallback 只会保留旧条目、append 新条目，没有"某条旧 memory 应该被淘汰"的机制。如果 compiler agent 要真正替用户删除过时记忆，需要在 response schema 里加 `retired_memory` / `retired_recall` 字段并打通 writer。
