@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ..schemas import ReviewerOutput, SchemaError
+
+OPENAI_DEFAULT_BASE = "https://api.openai.com/v1/chat/completions"
+ANTHROPIC_DEFAULT_BASE = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_VERSION = "2023-06-01"
+MINIMAX_GLOBAL_BASE = "https://api.minimax.io"
+MINIMAX_CN_BASE = "https://api.minimaxi.com"
+MINIMAX_MESSAGES_PATH = "/anthropic/v1/messages"
 
 
 class ReviewProviderError(RuntimeError):
@@ -46,7 +54,7 @@ class HTTPReviewProvider:
         self.dialect = dialect
 
     def build_request_payload(self, snapshot: dict[str, Any], prompt: str, options: dict[str, Any]) -> dict[str, Any]:
-        model = str(options.get("model") or "reviewer-model")
+        model = str(options.get("model") or self.default_model())
         max_tokens = int(options.get("max_tokens", 800))
         if self.dialect == "openai":
             return {
@@ -59,7 +67,7 @@ class HTTPReviewProvider:
                 "max_tokens": max_tokens,
                 "response_format": {"type": "json_object"},
             }
-        if self.dialect == "anthropic":
+        if self.dialect in {"anthropic", "minimax"}:
             return {
                 "model": model,
                 "system": prompt,
@@ -69,24 +77,81 @@ class HTTPReviewProvider:
             }
         raise ReviewProviderError(f"unsupported reviewer dialect: {self.dialect}")
 
+    def default_api_base(self) -> str:
+        if self.dialect == "openai":
+            return str(os.getenv("OPENAI_BASE_URL") or OPENAI_DEFAULT_BASE)
+        if self.dialect == "anthropic":
+            return str(os.getenv("ANTHROPIC_BASE_URL") or ANTHROPIC_DEFAULT_BASE)
+        if self.dialect == "minimax":
+            explicit = os.getenv("MINIMAX_BASE_URL")
+            if explicit:
+                return explicit.rstrip("/")
+            region = str(os.getenv("MINIMAX_REGION") or "global").lower()
+            host = MINIMAX_CN_BASE if region == "cn" else MINIMAX_GLOBAL_BASE
+            return f"{host}{MINIMAX_MESSAGES_PATH}"
+        raise ReviewProviderError(f"unsupported reviewer dialect: {self.dialect}")
+
+    def default_model(self) -> str:
+        if self.dialect == "openai":
+            return str(os.getenv("OPENAI_REVIEW_MODEL") or "gpt-4.1-mini")
+        if self.dialect == "anthropic":
+            return str(os.getenv("ANTHROPIC_REVIEW_MODEL") or "claude-3-5-haiku-latest")
+        if self.dialect == "minimax":
+            return str(os.getenv("MINIMAX_REVIEW_MODEL") or "MiniMax-M2.7")
+        raise ReviewProviderError(f"unsupported reviewer dialect: {self.dialect}")
+
+    def resolve_api_key(self, options: dict[str, Any]) -> str:
+        explicit = options.get("api_key")
+        if explicit:
+            return str(explicit)
+        if self.dialect == "openai":
+            env_var = "OPENAI_API_KEY"
+        elif self.dialect == "anthropic":
+            env_var = "ANTHROPIC_API_KEY"
+        elif self.dialect == "minimax":
+            env_var = "MINIMAX_API_KEY"
+        else:
+            raise ReviewProviderError(f"unsupported reviewer dialect: {self.dialect}")
+        value = os.getenv(env_var)
+        if value:
+            return str(value)
+        raise ReviewProviderError(f"{self.name} provider requires api_key or {env_var}")
+
+    def build_headers(self, options: dict[str, Any]) -> dict[str, str]:
+        if self.dialect == "openai":
+            return {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.resolve_api_key(options)}",
+            }
+        if self.dialect == "anthropic":
+            return {
+                "Content-Type": "application/json",
+                "x-api-key": self.resolve_api_key(options),
+                "anthropic-version": str(options.get("anthropic_version") or ANTHROPIC_VERSION),
+            }
+        if self.dialect == "minimax":
+            return {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.resolve_api_key(options)}",
+            }
+        raise ReviewProviderError(f"unsupported reviewer dialect: {self.dialect}")
+
     def run(self, snapshot: dict[str, Any], prompt: str, options: dict[str, Any]) -> ProviderResult:
-        api_base = options.get("api_base")
-        if not api_base:
-            raise ReviewProviderError(f"{self.name} provider requires api_base")
+        api_base = str(options.get("api_base") or self.default_api_base())
         payload = self.build_request_payload(snapshot, prompt, options)
         request = urllib.request.Request(
-            str(api_base),
+            api_base,
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                **({"Authorization": f"Bearer {options['api_key']}"} if options.get("api_key") else {}),
-            },
+            headers=self.build_headers(options),
             method="POST",
         )
         timeout = float(options.get("timeout_seconds", 30))
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise ReviewProviderError(f"{self.name} request failed: HTTP {exc.code}: {body[:500]}") from exc
         except urllib.error.URLError as exc:
             raise ReviewProviderError(f"{self.name} request failed: {exc}") from exc
         parsed = json.loads(body)
@@ -99,13 +164,13 @@ class HTTPReviewProvider:
                 return str(payload["choices"][0]["message"]["content"])
             except Exception as exc:  # pragma: no cover - defensive
                 raise ReviewProviderError("openai-compatible response missing choices[0].message.content") from exc
-        if self.dialect == "anthropic":
+        if self.dialect in {"anthropic", "minimax"}:
             try:
                 blocks = payload["content"]
                 if isinstance(blocks, list):
                     return "\n".join(str(block.get("text", "")) for block in blocks if isinstance(block, dict)).strip()
             except Exception as exc:  # pragma: no cover - defensive
-                raise ReviewProviderError("anthropic-style response missing content blocks") from exc
+                raise ReviewProviderError(f"{self.name} response missing content blocks") from exc
         raise ReviewProviderError(f"unsupported reviewer dialect: {self.dialect}")
 
 
@@ -116,7 +181,21 @@ def get_review_provider(name: str) -> ReviewProvider:
         return HTTPReviewProvider(name=name, dialect="openai")
     if name == "anthropic-style":
         return HTTPReviewProvider(name=name, dialect="anthropic")
+    if name == "minimax":
+        return HTTPReviewProvider(name=name, dialect="minimax")
     raise ReviewProviderError(f"unknown review provider: {name}")
+
+
+def _normalize_json_text(raw_text: str) -> str:
+    text = raw_text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
 
 
 def parse_reviewer_output(raw_text: str, max_chars: int = 100_000) -> ReviewerOutput:
@@ -124,8 +203,9 @@ def parse_reviewer_output(raw_text: str, max_chars: int = 100_000) -> ReviewerOu
         raise ReviewProviderError("reviewer returned empty output")
     if len(raw_text) > max_chars:
         raise ReviewProviderError("reviewer output exceeded max_chars")
+    normalized = _normalize_json_text(raw_text)
     try:
-        parsed = json.loads(raw_text)
+        parsed = json.loads(normalized)
     except json.JSONDecodeError as exc:
         raise SchemaError(f"reviewer did not return valid JSON: {exc}") from exc
     return ReviewerOutput.from_dict(parsed)

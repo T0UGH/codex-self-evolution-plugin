@@ -132,7 +132,52 @@ Useful local targets:
 make test
 make e2e-local
 make preflight
+make provider-smoke-minimax
+make provider-smoke-openai
+make provider-smoke-anthropic
 ```
+
+### Real Provider Smoke Tests
+
+Three env-driven smoke targets are available for the reviewer runtime:
+
+```bash
+make provider-smoke-minimax
+make provider-smoke-openai
+make provider-smoke-anthropic
+```
+
+Recommended first path:
+- `make provider-smoke-minimax`
+
+Expected environment:
+- `MINIMAX_API_KEY` for `provider-smoke-minimax`
+- `OPENAI_API_KEY` for `provider-smoke-openai`
+- `ANTHROPIC_API_KEY` for `provider-smoke-anthropic`
+
+MiniMax defaults:
+- global region -> `https://api.minimax.io/anthropic/v1/messages`
+- cn region -> `https://api.minimaxi.com/anthropic/v1/messages`
+- default review model -> `MiniMax-M2.7`
+
+Optional overrides:
+- `MINIMAX_REGION`
+- `MINIMAX_BASE_URL`
+- `MINIMAX_REVIEW_MODEL`
+- `OPENAI_BASE_URL`
+- `ANTHROPIC_BASE_URL`
+- `OPENAI_REVIEW_MODEL`
+- `ANTHROPIC_REVIEW_MODEL`
+
+You can either export those vars in your shell, or copy:
+
+```bash
+cp .env.provider.example .env.provider
+```
+
+Then fill the keys. The Makefile will auto-source `.env.provider` if it exists.
+
+These run `scripts/provider-smoke-test.py` against the real provider APIs and print the structured reviewer output plus request payload metadata.
 
 The container entrypoint runs `scripts/docker-e2e.sh`, which:
 - runs `pytest`
