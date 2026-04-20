@@ -1,0 +1,22 @@
+{
+  "name": "codex-self-evolution",
+  "interface": {
+    "displayName": "Codex Self-Evolution",
+    "shortDescription": "Staged self-evolution loop: SessionStart memory injection, Stop-time provider-backed review, compile preflight + incremental compile over existing memory/recall.",
+    "developerName": "T0UGH"
+  },
+  "plugins": [
+    {
+      "name": "codex-self-evolution",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex-self-evolution"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

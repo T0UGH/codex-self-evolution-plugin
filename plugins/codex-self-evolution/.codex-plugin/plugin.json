@@ -1,0 +1,43 @@
+{
+  "name": "codex-self-evolution",
+  "version": "0.2.0",
+  "description": "Scheduled self-evolution loop with stable background memory, provider-backed stop review, explicit suggestion states, launchd-style compiler preflight, focused recall, and managed skills.",
+  "author": {
+    "name": "T0UGH",
+    "url": "https://github.com/T0UGH"
+  },
+  "homepage": "https://github.com/T0UGH/codex-self-evolution-plugin",
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "session-start",
+      "command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution session-start --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
+    },
+    {
+      "name": "stop-review",
+      "command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution stop-review --hook-payload \"$CODEX_HOOK_PAYLOAD\" --state-dir \"$CODEX_STATE_DIR\""
+    },
+    {
+      "name": "compile-preflight",
+      "command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution compile-preflight --state-dir \"$CODEX_STATE_DIR\""
+    },
+    {
+      "name": "compile",
+      "command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend script"
+    },
+    {
+      "name": "recall",
+      "command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution recall --query \"$CODEX_RECALL_QUERY\" --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
+    },
+    {
+      "name": "recall-trigger",
+      "command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution recall-trigger --query \"$CODEX_RECALL_QUERY\" --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
+    }
+  ],
+  "hooks": "./hooks.json",
+  "scheduler": {
+    "recommended": "launchd",
+    "preflight_command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution compile-preflight --state-dir \"$CODEX_STATE_DIR\"",
+    "compile_command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend script"
+  }
+}

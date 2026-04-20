@@ -1,0 +1,44 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "date -u +%FT%TZ >> /tmp/csep-session-start.log 2>&1"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "date -u +%FT%TZ >> /tmp/csep-stop.log 2>&1"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "date -u +%FT%TZ >> /tmp/csep-posttooluse.log 2>&1"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "date -u +%FT%TZ >> /tmp/csep-user-prompt.log 2>&1"
+          }
+        ]
+      }
+    ]
+  }
+}

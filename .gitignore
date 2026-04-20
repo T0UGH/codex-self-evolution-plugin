@@ -6,6 +6,11 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+build/
+uv.lock
+
+# Claude Code local config
+.claude/
 
 # Local runtime state
 /data/*
