@@ -4,6 +4,64 @@
 
 ---
 
+## ✅ 2026-04-21 P0-4 `status` 诊断命令(已完成)
+
+**背景**:装完 hooks + scheduler 后,用户没有一个命令能回答"装对了吗?
+在工作吗?"。得自己 `ls ~/.codex-self-evolution/projects/*/...` + 翻
+receipt + `launchctl list | grep codex`,体验差。
+
+**落地**:
+
+- `src/codex_self_evolution/diagnostics.py`(新):`collect_status(home=None)`
+  聚合五个独立 probe 成 JSON。所有 probe 独立 try/except,一个挂不影响
+  其它。
+  - `_check_hooks()`:扫 `~/.codex/hooks.json` 里带 `codex-self-evolution-plugin
+    managed` marker 的 entry,分别报 `stop_installed` / `session_start_installed`
+  - `_check_scheduler()`:`launchctl list` 找 `com.codex-self-evolution.preflight`
+    label,平衡"loaded"(launchd 注册表里)和"plist_exists"(文件在)。
+    launchctl 不可用(非 macOS)时明说,不当失败
+  - `_check_env_provider()`:正则 parse `KEY=value` / `export KEY=value`
+    行,**永远不打印 value**,只报哪些 key 非空(keys_set)、哪些 well-known
+    key 没配(keys_unset)、用户自定义的 key 名(other_keys_set)。**单
+    测里有反向断言防回归泄露**
+  - `_check_tools()`:`codex --version` / `opencode --version` 跑 subprocess,
+    取 first line,超时/不存在都独立报 error
+  - `_list_buckets()`:遍历 `<home>/projects/*/`,每个 bucket 输出
+    pending/processing/done/failed/discarded 计数 + `last_receipt`
+    摘要(只 surface 汇总字段,不带 item_receipts 防大 payload/绝对路径污染)
+- `cli.py`:加 `status` 子命令,`--home` flag
+- `docs/getting-started.md`:加阶段 5,列 status 五大 section 的解读,
+  给 `jq` 诊断范例
+
+**单测**:新增 `test_diagnostics.py`(19 用例)
+
+- **敏感**:env_provider 永远不打印 value(反向断言:把 secret 塞进 fake
+  env file,grep 整个 JSON 输出确认 secret 不在)
+- **鲁棒**:hooks 缺失 / 坏 JSON / launchctl 不可用 / launchctl 超时
+  每个都不崩,独立报错
+- **精确**:bucket 只数 `*.json`,忽略 README.txt / .DS_Store
+- **防回归**:last_receipt 不输出 item_receipts(防意外暴露路径)
+- CLI 输出必须合法 JSON(status 未来可能被监控脚本消费)
+
+**真机冒烟**:
+
+```
+$ .venv/bin/python -m codex_self_evolution.cli status
+{
+  "hooks": {"stop_installed": true, "session_start_installed": true, ...},
+  "scheduler": {"loaded": true, "plist_exists": true, ...},
+  "env_provider": {"keys_set": ["MINIMAX_API_KEY"], ...},
+  "tools": {"codex": {..."version": "codex-cli 0.122.0"},
+            "opencode": {..."version": "1.4.0"}},
+  "buckets": [4 entries with counts + last_receipt],
+  ...
+}
+```
+
+关键组件一目了然。
+
+---
+
 ## ✅ 2026-04-21 P0-3 `install-scheduler.sh` 自动生成全局 plist(已完成)
 
 **背景**:之前 launchd 调度是"复制模板 → 手改 4 处占位 → launchctl load"。

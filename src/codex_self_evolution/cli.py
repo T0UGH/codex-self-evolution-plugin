@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 from .compiler.engine import preflight_compile, run_compile, scan_all_projects
+from .diagnostics import collect_status
 from .hooks.codex_bridge import map_codex_stop_payload
 from .hooks.session_start import format_session_start_for_codex, session_start
 from .hooks.stop_review import stop_review
@@ -59,6 +60,18 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_parser = subparsers.add_parser("compile-preflight")
     preflight_parser.add_argument("--state-dir")
     preflight_parser.add_argument("--repo-root")
+
+    status_parser = subparsers.add_parser(
+        "status",
+        help="Read-only diagnostic snapshot: which hooks are wired, whether "
+             "launchd scheduler is loaded, which API keys are set (reports "
+             "names only, never values), CLI tool versions, and per-bucket "
+             "pending/done/failed counts + last compile receipt. Outputs JSON.",
+    )
+    status_parser.add_argument(
+        "--home",
+        help="Override CODEX_SELF_EVOLUTION_HOME (default ~/.codex-self-evolution).",
+    )
 
     scan_parser = subparsers.add_parser(
         "scan",
@@ -253,6 +266,8 @@ def main(argv: list[str] | None = None) -> int:
         result = preflight_compile(repo_root=args.repo_root, state_dir=args.state_dir)
     elif args.command == "scan":
         result = scan_all_projects(home=args.home, backend=args.backend)
+    elif args.command == "status":
+        result = collect_status(home=args.home)
     elif args.command == "recall":
         result = {"query": args.query, "results": search_recall(query=args.query, cwd=args.cwd, state_dir=args.state_dir)}
     elif args.command == "recall-trigger":

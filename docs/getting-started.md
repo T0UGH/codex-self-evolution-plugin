@@ -11,8 +11,9 @@
 3. [阶段 2:手动跑一次完整循环](#阶段-2手动跑一次完整循环2-分钟)
 4. [阶段 3:挂 Codex 原生 Stop hook(一键脚本)](#阶段-3挂-codex-原生-stop-hook一键脚本1-分钟)
 5. [阶段 4:挂 launchd 自动调度](#阶段-4挂-launchd-自动调度5-分钟)
-6. [Codex CLI 插件集成](#codex-cli-插件集成)
-7. [常见坑](#常见坑)
+6. [阶段 5:诊断命令(确认装对了)](#阶段-5诊断命令确认装对了)
+7. [Codex CLI 插件集成](#codex-cli-插件集成)
+8. [常见坑](#常见坑)
 
 ---
 
@@ -313,6 +314,39 @@ cat $BUCKET/compiler/last_receipt.json
 ```
 
 只删我们这条 plist,不碰其他 launchd job。`~/.codex-self-evolution/logs/` 下的日志文件不自动清,留着 post-mortem。
+
+---
+
+## 阶段 5:诊断命令(确认装对了)
+
+装完阶段 3 + 4 后用 `status` 一键盘点所有组件:
+
+```bash
+.venv/bin/python -m codex_self_evolution.cli status | python3 -m json.tool
+```
+
+输出纯只读 JSON,包含:
+
+| 段 | 看什么 |
+| --- | --- |
+| `hooks.stop_installed` / `session_start_installed` | 两个都是 `true` 说明 install-codex-hook.sh 装成功 |
+| `scheduler.loaded` / `plist_exists` | 两个都是 `true` 说明 install-scheduler.sh 装成功 + launchd 已注册 |
+| `env_provider.keys_set` | 至少 `["MINIMAX_API_KEY"]`(或其它你用的 provider)。**永远不打印 key 值**,只报 set/unset |
+| `tools.codex.version` / `opencode.version` | 两个 CLI 版本。opencode 没装 → scheduler 会 fallback 到 script backend |
+| `buckets[].counts` | 每个 repo 的 pending/done/failed 统计。正常状态:pending 应该短时间内变 0(scheduler 5 分钟内消化),done 稳步增长 |
+| `buckets[].last_receipt` | 最后一次 compile 的 run_status / backend / processed_count。**pending > 0 但 last_receipt 很久没更新 = scheduler 没跑** |
+
+常用诊断流程:
+
+```bash
+# 快速看有没有 pending 堆积
+.venv/bin/python -m codex_self_evolution.cli status | \
+  jq '.buckets[] | {project, pending: .counts.pending, last: .last_receipt.timestamp}'
+
+# 手动触发一次 scheduler 验证闭环
+launchctl kickstart "gui/$(id -u)/com.codex-self-evolution.preflight"
+tail -5 ~/.codex-self-evolution/logs/launchd.stdout.log
+```
 
 ---
 
