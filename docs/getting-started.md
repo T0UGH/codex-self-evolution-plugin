@@ -148,10 +148,12 @@ EOF
 
 ```bash
 .venv/bin/python -m codex_self_evolution.cli compile \
-  --once --state-dir $STATE --backend script
+  --once --state-dir $STATE --backend agent:opencode
 ```
 
-> **为什么用 `script` 不用 `agent:opencode`**:opencode CLI 的真实 `run` 子命令接口(`message` 是位置参数、用 `--format json` 输出)跟当前占位默认命令 `opencode run --stdin-json --stdout-json` 不匹配,会触发 `agent_invoke_failed` → fallback 到 script。直接用 `script` 更干净。真实对接 opencode 需要一轮 prompt + 调用约定的工作,见 README 里的 "Compile backends" 章节。
+> **两种 backend 的取舍**:`agent:opencode` 会真正调 opencode CLI 做一次语义级合并(dedupe + 改写更流畅,约 20–40 秒),需要本地 `opencode` 可用且已登录。`script` 走纯规则拼装(< 100ms,确定性),不依赖 LLM。调试和 CI 用 `--backend script`;生产/定时任务默认用 `agent:opencode`。
+>
+> 如果 opencode 不在 PATH 或调用失败,agent backend 会在 receipt 的 `discarded_items` 里记 `agent_invoke_failed` / `opencode_unavailable`,然后**自动 fallback 到 script**,compile 不会整个失败。
 
 **期望**:
 - `"status": "success"` + `processed_count >= 1`
@@ -249,11 +251,13 @@ cp docs/launchd/com.codex-self-evolution.preflight.plist \
 | `--state-dir data` | 改成 `--state-dir $HOME/.codex-self-evolution/projects/<mangled-repo-path>` 或直接删掉整个 `--state-dir` 参数让插件自己推导 | 现在的默认目录是 `~/.codex-self-evolution/projects/<repo-path-with-/-replaced-by-->` |
 | `StartInterval` | 选一个:`60` / `300`(默认) / `900` | 唤醒间隔秒数 |
 
-同时把 `--backend agent:opencode` 改成 `--backend script`(原因同 2.5),并删掉 `--state-dir` 参数让插件自己路由到 `~/.codex-self-evolution/projects/...`:
+保持 `--backend agent:opencode`(已经真正跑通),删掉 `--state-dir` 参数让插件自己路由到 `~/.codex-self-evolution/projects/...`:
 
 ```xml
--m codex_self_evolution.cli compile --once --backend script
+-m codex_self_evolution.cli compile --once --backend agent:opencode
 ```
+
+> 需要把 `opencode` 的路径加到 plist 的 `EnvironmentVariables.PATH` 里(launchd 默认 PATH 很窄,通常不包含 Homebrew)。例如 `PATH=/opt/homebrew/bin:/usr/bin:/bin`。
 
 ### 4.2 装载 launchd job
 
@@ -375,7 +379,13 @@ reviewer 认为本轮没什么可沉淀的。换个更具体、更有"干了啥"
 
 ### 5. `agent_invoke_failed` / `opencode_unavailable` 在 receipt 的 discarded_items 里
 
-正常:当前 `agent:opencode` 默认命令跟 opencode 1.4.0 实际 CLI 不匹配。fallback 到 script 的流程是被测过的,不影响结果。用 `--backend script` 更干净。
+说明 `agent:opencode` 调用没跑成,自动 fallback 到 script 了 —— compile 不会整体失败,但语义合并这一层丢了。常见原因:
+
+- `opencode_unavailable`: `opencode` 不在 PATH。装一下(`npm i -g opencode-ai` 等)或把路径塞进环境
+- `agent_invoke_failed` + `exit=1 ... authentication required`: `opencode` 没登录。跑 `opencode auth login` 后再试
+- `agent_output_invalid` / `no assistant text`: 模型返回不是合法 JSON。设 `CODEX_SELF_EVOLUTION_OPENCODE_MODEL=<更强的模型>` 再试(默认 build 速模型偶尔会漏字段)
+
+手动重现看看 opencode 本身 OK 不:`opencode run --format json -- "reply with {\"ok\":true}"`。
 
 ### 6. 想重置所有状态从头来一次
 

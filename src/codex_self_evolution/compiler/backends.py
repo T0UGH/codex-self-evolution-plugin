@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -193,25 +194,46 @@ class AgentCompilerBackend:
         )
 
     def _subprocess_invoker(self, payload: dict[str, Any], options: dict[str, Any]) -> str:
-        command = (
-            options.get("opencode_command")
-            or _command_from_env()
-            or ["opencode", "run", "--stdin-json", "--stdout-json"]
-        )
-        timeout = float(options.get("opencode_timeout_seconds", self.DEFAULT_TIMEOUT_SECONDS))
-        proc = subprocess.run(
-            command,
-            input=json.dumps(payload),
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"opencode exit={proc.returncode}; stderr={proc.stderr.strip()[:400]}"
+        # opencode 1.4.0's `run` takes the message as a positional argument and
+        # attaches files via `--file`, so we cannot pipe payload on stdin.
+        # Writing the JSON payload to a temp file and attaching it keeps us
+        # clear of argv size limits (a full batch plus existing_assets can
+        # easily blow past typical MAX_ARG_STRLEN).
+        payload_path = _write_payload_tempfile(payload)
+        try:
+            command = (
+                options.get("opencode_command")
+                or _command_from_env()
+                or _build_default_opencode_command(payload_path, options)
             )
-        return proc.stdout
+            timeout = float(options.get("opencode_timeout_seconds", self.DEFAULT_TIMEOUT_SECONDS))
+            proc = subprocess.run(
+                command,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"opencode exit={proc.returncode}; stderr={proc.stderr.strip()[:400]}"
+                )
+            # `--format json` emits one JSON event per line plus a trailing
+            # "Shell cwd was reset to ..." noise line. We concatenate the
+            # assistant's `text` parts and strip any code fence / prose the
+            # model might still wrap around the JSON payload.
+            assistant_text = _extract_assistant_text(proc.stdout)
+            if not assistant_text:
+                raise RuntimeError(
+                    f"opencode produced no assistant text; "
+                    f"stderr={proc.stderr.strip()[:400]}"
+                )
+            return _cleanup_agent_text(assistant_text)
+        finally:
+            try:
+                os.unlink(payload_path)
+            except OSError:
+                pass
 
 
 def _command_from_env() -> list[str] | None:
@@ -220,6 +242,164 @@ def _command_from_env() -> list[str] | None:
         return None
     parts = [part for part in raw.split() if part]
     return parts or None
+
+
+def _write_payload_tempfile(payload: dict[str, Any]) -> str:
+    # `delete=False` because we unlink in a `finally` after opencode finishes;
+    # leaving open+unlink would give opencode a dangling filename.
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".json",
+        prefix="csep-compile-",
+        delete=False,
+        encoding="utf-8",
+    ) as fh:
+        json.dump(payload, fh, ensure_ascii=False)
+        return fh.name
+
+
+def _build_default_opencode_command(payload_path: str, options: dict[str, Any]) -> list[str]:
+    cmd: list[str] = ["opencode", "run", "--format", "json", "--file", payload_path]
+    # The compile agent needs file-read tools to inspect the payload. Without
+    # skip-permissions the TUI prompts on every tool use, which is fatal for
+    # a headless subprocess invocation.
+    if options.get("opencode_skip_permissions", True):
+        cmd.append("--dangerously-skip-permissions")
+    model = options.get("opencode_model") or os.environ.get("CODEX_SELF_EVOLUTION_OPENCODE_MODEL")
+    if model:
+        cmd.extend(["--model", model])
+    agent = options.get("opencode_agent") or os.environ.get("CODEX_SELF_EVOLUTION_OPENCODE_AGENT")
+    if agent:
+        cmd.extend(["--agent", agent])
+    # `--` ends opencode's flag parsing so the prompt (which may contain
+    # leading dashes, quotes, or braces) is passed through unchanged.
+    cmd.append("--")
+    cmd.append(_build_compile_prompt(payload_path))
+    return cmd
+
+
+def _build_compile_prompt(payload_path: str) -> str:
+    # Kept inline (not a separate file) so the contract travels with the code
+    # that depends on it. If you update this prompt, also update
+    # parse_agent_compile_response in agent_io.py — they are two halves of
+    # the same wire protocol.
+    return (
+        f"The attached JSON file at {payload_path} is a compile payload from "
+        "the codex-self-evolution-plugin reviewer pipeline. Your job is to "
+        "merge its `batch` into its `existing_assets` and emit the merged "
+        "artifacts.\n\n"
+        "Rules:\n"
+        "1. Dedupe memory entries by content+summary; preserve existing "
+        "provenance where possible.\n"
+        "2. Dedupe recall entries by id; keep stable ones untouched.\n"
+        "3. Only emit skill actions (create|patch|edit|retire) that are "
+        "consistent with existing manifest ownership (managed=true entries "
+        "only).\n"
+        "4. Do NOT write files yourself. The writer handles final I/O.\n\n"
+        "Respond with ONE JSON object and NOTHING else — no prose, no code "
+        "fence, no comments. The object MUST match this schema:\n"
+        "{\n"
+        '  "memory_records": {\n'
+        '    "user":   [ {"summary": str, "content": str, "source_paths": [str], "confidence": float, "provenance": [...]} ],\n'
+        '    "global": [ ... same shape ... ]\n'
+        "  },\n"
+        '  "recall_records": [\n'
+        '    {"id": str, "summary": str, "content": str, "source_paths": [str], "repo_fingerprint": str, "cwd": str, "thread_id": str, "turn_id": str, "source_updated_at": str}\n'
+        "  ],\n"
+        '  "compiled_skills": [\n'
+        '    {"skill_id": str, "title": str, "content": str, "action": "create"|"patch"|"edit"|"retire"}\n'
+        "  ],\n"
+        '  "manifest_entries": [\n'
+        '    {"skill_id": str, "action": str, "title": str, "path": str, "status": str, "owner": str, "managed": bool, "created_by": str, "updated_at": str, "retired_at": str|null}\n'
+        "  ],\n"
+        '  "discarded_items": [ {"reason": str, ...} ]\n'
+        "}\n\n"
+        "Required string fields (summary, content, id, etc.) must be "
+        "non-empty. If a list has nothing to emit, return [] — do not fabricate "
+        "entries just to fill it. Emit empty objects "
+        '({"user": [], "global": []}) for memory_records when nothing merges.'
+    )
+
+
+def _extract_assistant_text(stdout: str) -> str:
+    """Concatenate the `text` parts from opencode's `--format json` stream.
+
+    Event stream shape (one JSON object per line):
+      {"type":"step_start",...}
+      {"type":"text","part":{"type":"text","text":"..."}}
+      {"type":"step_finish",...}
+    Trailing non-JSON noise (e.g. "Shell cwd was reset to ...") is silently
+    skipped.
+    """
+    chunks: list[str] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if event.get("type") != "text":
+            continue
+        part = event.get("part") or {}
+        text = part.get("text")
+        if isinstance(text, str) and text:
+            chunks.append(text)
+    return "".join(chunks).strip()
+
+
+def _cleanup_agent_text(text: str) -> str:
+    """Strip code fences and extract the first balanced JSON object.
+
+    Even with an explicit "no code fence" prompt, some models still wrap
+    output in ```json ... ``` or add a short preamble. Rather than relying on
+    perfect compliance, we scan for the first `{...}` block.
+    """
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        lines = stripped.split("\n")
+        lines = lines[1:]  # drop opening fence
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+    extracted = _extract_first_json_object(stripped)
+    return extracted if extracted is not None else stripped
+
+
+def _extract_first_json_object(text: str) -> str | None:
+    """Return the first balanced `{...}` substring, honoring JSON strings.
+
+    Uses a small hand-rolled scanner rather than regex because nested braces
+    inside values (common in our schema) would break any greedy pattern.
+    """
+    depth = 0
+    start: int | None = None
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            if start is None:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth == 0:
+                continue
+            depth -= 1
+            if depth == 0 and start is not None:
+                return text[start : i + 1]
+    return None
 
 
 def _truncate(text: str, limit: int = 400) -> str:

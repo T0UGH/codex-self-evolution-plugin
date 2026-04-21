@@ -143,16 +143,20 @@ reviewer 是 provider-backed 的。选择优先级：
 | Backend | 必须 | 说明 |
 | --- | --- | --- |
 | `script` | 无 | 确定性 Python merge，安全默认。读取 existing memory / recall，做保守增量 merge（不会洗掉稳定条目）。 |
-| `agent:opencode` | `opencode` 二进制在 `PATH` 中 **或** 指定 `opencode_command` | 把 `{batch, existing_assets, repo, contract}` JSON 从 stdin 送入，从 stdout 解析严格 JSON。任何失败（二进制缺失 / 非零退出 / 超时 / 非法 JSON / schema 不符）都会 fallback 到 `script`，除非 `allow_fallback=False`。 |
+| `agent:opencode` | `opencode` 二进制在 `PATH` 中 **或** 指定 `opencode_command` | 把 `{batch, existing_assets, repo, contract}` payload 写到临时 JSON 文件,跑 `opencode run --format json --file <payload> --dangerously-skip-permissions -- <prompt>`,解析 event stream 抽取 assistant 文字,剥 code fence,从中抠出首个平衡 JSON object。任何失败(二进制缺失 / 非零退出 / 超时 / 空输出 / schema 不符)都会 fallback 到 `script`,除非 `allow_fallback=False`。**已对 opencode 1.4.0 验证通过**。 |
 
 #### Agent compiler 配置
 
 | 途径 | 变量 / 选项 | 默认值 | 用途 |
 | --- | --- | --- | --- |
-| 环境变量 | `CODEX_SELF_EVOLUTION_OPENCODE_COMMAND` | — | 用空格分隔的 argv，替代 `opencode run --stdin-json --stdout-json`。 |
-| `options["opencode_command"]` | — | env 变量，其次 `["opencode", "run", "--stdin-json", "--stdout-json"]` | 显式 argv 列表，优先级高于 env 变量。 |
-| `options["opencode_timeout_seconds"]` | — | `900`（15 分钟） | 子进程超时。**严格小于 `DEFAULT_LOCK_STALE_SECONDS`**，确保 agent 卡住时子进程先 timeout → backend fallback → `finally` 清锁，避免被下一个 preflight 当 stale 抢锁导致并发写。 |
-| `options["allow_fallback"]` | — | `True` | 为 `False` 时，agent backend 失败不会 fallback，而是直接抛 `RuntimeError`。 |
+| 环境变量 | `CODEX_SELF_EVOLUTION_OPENCODE_COMMAND` | — | 空格分隔 argv,完全替代默认命令。你 opencode CLI shape 不同或需要加额外 flag 时用。 |
+| 环境变量 | `CODEX_SELF_EVOLUTION_OPENCODE_MODEL` | — | 附加 `--model <provider/name>`。默认 build 速模型偶尔产出截断 JSON 时,换一个更强模型即可。 |
+| 环境变量 | `CODEX_SELF_EVOLUTION_OPENCODE_AGENT` | — | 附加 `--agent <name>`。想锁定 agent profile 可用。 |
+| `options["opencode_command"]` | — | env,其次 `_build_default_opencode_command` 构造 | 显式 argv 列表,优先级高于 env 变量。 |
+| `options["opencode_model"]` / `options["opencode_agent"]` | — | 对应 env 变量 | 按单次调用覆盖 model / agent。 |
+| `options["opencode_skip_permissions"]` | — | `True` | 附加 `--dangerously-skip-permissions`,让 agent 无 TUI 确认地调用文件读工具(headless 子进程必需)。只有你已审过 agent profile 才可以关。 |
+| `options["opencode_timeout_seconds"]` | — | `900`(15 分钟) | 子进程超时。**严格小于 `DEFAULT_LOCK_STALE_SECONDS`**,确保 agent 卡住时子进程先 timeout → backend fallback → `finally` 清锁,避免被下一个 preflight 当 stale 抢锁导致并发写。 |
+| `options["allow_fallback"]` | — | `True` | 为 `False` 时,agent backend 失败不会 fallback,而是直接抛 `RuntimeError`。 |
 
 Agent 路径失败时追加到 `CompileArtifacts.discarded_items` 的原因：
 

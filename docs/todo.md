@@ -4,6 +4,51 @@
 
 ---
 
+## ✅ 2026-04-21 agent:opencode backend 真正接通(已完成)
+
+**根因**:`backends.py` 默认命令 `opencode run --stdin-json --stdout-json` 跟
+opencode 1.4.0 实际 CLI(positional message + `--file` + `--format json`)不匹配,
+**过去所有 `agent:opencode` 调用都 fallback 到 script**,语义合并能力从没用上。
+
+**修复**:`_subprocess_invoker` 重写,适配 opencode 1.4.0:
+
+- `_write_payload_tempfile`:payload 写临时 JSON(argv 传大 JSON 不可靠)
+- `_build_default_opencode_command`:`opencode run --format json --file <tmp>
+  --dangerously-skip-permissions -- <prompt>`
+- `_build_compile_prompt`:内联完整响应 schema,强调 "output ONE JSON object,
+  nothing else"
+- `_extract_assistant_text`:解析 event stream,挑 `type==text` 行拼 text
+- `_cleanup_agent_text` + `_extract_first_json_object`:剥 code fence、从杂文
+  中抠首个平衡 JSON object(模型偶尔加前缀时的兜底)
+- 空 assistant text 视为失败(raise → fallback),不当成"空合并"
+- `finally` 必清 tmp 文件,避免 /tmp 泄漏
+
+**冒烟通过**:真 `opencode run` 跑 1 条 luna_inner_bot 的 pending,28 秒,
+`backend: "agent:opencode"`,`fallback_backend: null`,产出合法 recall record
+(id / summary / content / source_paths / cwd / fingerprint 齐全),
+`recall/compiled.md` 渲染正常。
+
+**新增测试**:`tests/test_agent_opencode_invoker.py`(14 用例)
+
+- event stream 解析 happy + garbled + 噪音行
+- cleanup 剥 code fence / 从 prose 中抠 JSON / 字符串中的花括号不误触
+- 默认命令 shape 检查(`opencode run`、`--format json`、`--file`、`--`、
+  `--dangerously-skip-permissions`)
+- 环境变量 override(model / agent)
+- prompt 包含 schema keys + "NOTHING else" 字样
+- temp file round-trip + cleanup
+- 集成:mock `subprocess.run` 跑完整 backend 路径,验证 tmp 路径、payload
+  写入、清理、fallback 路径(非零退出 / 空文本)、code fence 剥离
+
+**文档同步**:
+- README.md / README_zh.md:Compile backends 章节 + agent 配置表重写,去掉
+  `--stdin-json/--stdout-json` 遗毒,加 model / agent / skip_permissions 三个 override
+- `docs/getting-started.md`:阶段 2.5、阶段 4、常见坑第 5 条去掉"用 script 更干净"
+  workaround,改推荐 agent:opencode 默认用,fallback 机制解释清楚
+- plist 配置提醒 launchd PATH 要能找到 opencode(通常要加 `/opt/homebrew/bin`)
+
+---
+
 ## ✅ 2026-04-21 pending suggestions 跨 repo 统一入口(已完成)
 
 **最终方案**:借鉴 Claude Code 的 `~/.claude/projects/<mangled-abs-path>/` 设计,

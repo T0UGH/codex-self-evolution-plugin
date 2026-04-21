@@ -1,5 +1,6 @@
 import json
 
+from codex_self_evolution.compiler import backends
 from codex_self_evolution.compiler.engine import preflight_compile, run_compile
 from codex_self_evolution.hooks.session_start import session_start
 from codex_self_evolution.hooks.stop_review import stop_review
@@ -7,7 +8,14 @@ from codex_self_evolution.recall.workflow import build_focused_recall, evaluate_
 
 
 
-def test_end_to_end_loop(tmp_path):
+def test_end_to_end_loop(tmp_path, monkeypatch):
+    # This test exercises the agent:opencode → script fallback path end to end.
+    # Force `opencode_unavailable` (rather than spinning up a real opencode
+    # subprocess) so the assertions stay deterministic and we keep coverage
+    # of the discarded_items + fallback_backend wiring. To exercise the
+    # happy agent path with a real LLM, see test_agent_opencode_invoker.py.
+    monkeypatch.setattr(backends.shutil, "which", lambda _: None)
+
     repo = tmp_path / "repo"
     repo.mkdir()
     state = tmp_path / "state"

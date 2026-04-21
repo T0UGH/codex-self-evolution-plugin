@@ -144,14 +144,18 @@ Selected via `--backend`:
 | Backend | Required | Notes |
 | --- | --- | --- |
 | `script` | nothing | Deterministic Python merge. Safe default. Reads existing memory / recall and does conservative incremental merge (does not wipe stable entries). |
-| `agent:opencode` | `opencode` binary on `PATH` **or** an explicit `opencode_command` | Sends `{batch, existing_assets, repo, contract}` JSON over stdin, parses strict JSON from stdout. Any failure (binary missing / non-zero exit / timeout / invalid JSON / schema mismatch) falls back to `script`, unless `allow_fallback=False`. |
+| `agent:opencode` | `opencode` binary on `PATH` **or** an explicit `opencode_command` | Writes the `{batch, existing_assets, repo, contract}` payload to a temp JSON file, invokes `opencode run --format json --file <payload> --dangerously-skip-permissions -- <prompt>`, parses the event stream, strips code fences, and extracts the first balanced JSON object. Any failure (binary missing / non-zero exit / timeout / empty output / schema mismatch) falls back to `script`, unless `allow_fallback=False`. Validated against opencode 1.4.0. |
 
 #### Agent compiler configuration
 
 | Channel | Variable / option | Default | Purpose |
 | --- | --- | --- | --- |
-| Env var | `CODEX_SELF_EVOLUTION_OPENCODE_COMMAND` | — | Space-separated argv used instead of `opencode run --stdin-json --stdout-json`. |
-| `options["opencode_command"]` | — | env var, else `["opencode", "run", "--stdin-json", "--stdout-json"]` | Explicit argv list. Takes precedence over env var. |
+| Env var | `CODEX_SELF_EVOLUTION_OPENCODE_COMMAND` | — | Space-separated argv used instead of the default `opencode run --format json --file <payload> --dangerously-skip-permissions -- <prompt>`. Use this if your opencode install has a different CLI shape or needs extra flags. |
+| Env var | `CODEX_SELF_EVOLUTION_OPENCODE_MODEL` | — | `--model <provider/name>` appended to the default command. Useful when the default build model produces truncated or non-JSON output. |
+| Env var | `CODEX_SELF_EVOLUTION_OPENCODE_AGENT` | — | `--agent <name>` appended to the default command. Pick a narrow opencode agent profile if you want to lock down tool access. |
+| `options["opencode_command"]` | — | env var, else built via `_build_default_opencode_command` | Explicit argv list. Takes precedence over env var. |
+| `options["opencode_model"]` / `options["opencode_agent"]` | — | env var fallback | Override model / agent per invocation. |
+| `options["opencode_skip_permissions"]` | — | `True` | Pass `--dangerously-skip-permissions` so the agent can call file-read tools without a TUI prompt (required for headless subprocess use). Turn off only if you've vetted the agent profile. |
 | `options["opencode_timeout_seconds"]` | — | `900` (15 min) | Subprocess timeout. Kept strictly below `DEFAULT_LOCK_STALE_SECONDS` so a hung agent times out, the backend falls back, and `finally` releases the lock before preflight evicts it. |
 | `options["allow_fallback"]` | — | `True` | If `False`, the agent backend raises `RuntimeError` instead of falling back to `script` on failure. |
 
