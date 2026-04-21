@@ -1,5 +1,9 @@
 # Codex Self-Evolution Plugin
 
+[![tests](https://github.com/T0UGH/codex-self-evolution-plugin/actions/workflows/test.yml/badge.svg)](https://github.com/T0UGH/codex-self-evolution-plugin/actions/workflows/test.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![python: 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+
 > Language: **English** | [中文](README_zh.md)
 >
 > First time here? Jump to the step-by-step quickstart: [docs/getting-started.md](docs/getting-started.md) (中文 only, for now).
@@ -21,13 +25,44 @@ The compiler is the only component that writes final assets (memory, recall, man
 
 ## Install
 
+> **Reality check**: first-time setup is ~20 minutes, not a one-liner. Codex
+> CLI currently does **not** read plugin-manifest hooks
+> ([gap analysis](docs/2026-04-21-ready-for-others-gap-analysis.md)), so the
+> plugin is installed by writing directly to `~/.codex/hooks.json` via the
+> provided scripts. Full step-by-step walkthrough:
+> [docs/getting-started.md](docs/getting-started.md) (中文).
+
+End-to-end happy-path install on macOS (Python 3.11+):
+
 ```bash
-pip install -e .
-# or, without install:
-PYTHONPATH=src python -m codex_self_evolution.cli --help
+# 1. clone + venv + pip install
+git clone https://github.com/T0UGH/codex-self-evolution-plugin
+cd codex-self-evolution-plugin
+python3 -m venv .venv && .venv/bin/pip install -e .
+
+# 2. provider credentials (file lives under ~/.codex-self-evolution/)
+mkdir -p ~/.codex-self-evolution
+cp .env.provider.example ~/.codex-self-evolution/.env.provider
+# edit the file and set MINIMAX_API_KEY (or OPENAI_API_KEY / ANTHROPIC_API_KEY)
+
+# 3. Stop + SessionStart hooks in ~/.codex/hooks.json
+./scripts/install-codex-hook.sh
+
+# 4. launchd scheduler running `scan --backend agent:opencode` every 5 min
+./scripts/install-scheduler.sh
+
+# 5. sanity check
+.venv/bin/python -m codex_self_evolution.cli status | python3 -m json.tool
 ```
 
-Python 3.11+.
+Want to try the pipeline without touching Codex / launchd? Walk through
+[阶段 2 (stage 2)](docs/getting-started.md#阶段-2手动跑一次完整循环2-分钟)
+in the getting-started guide — it drives the reviewer → compile → memory
+loop entirely from the CLI.
+
+Removing everything: `./scripts/uninstall-scheduler.sh` and
+`./scripts/uninstall-codex-hook.sh` are both idempotent and won't touch
+other tools' hooks or launchd jobs.
 
 ---
 
@@ -37,8 +72,9 @@ Python 3.11+.
 codex-self-evolution session-start --cwd /path/to/repo
 codex-self-evolution stop-review --hook-payload /path/to/stop_payload.json
 codex-self-evolution compile-preflight --state-dir data
-codex-self-evolution compile --once --state-dir data --backend script
 codex-self-evolution compile --once --state-dir data --backend agent:opencode
+codex-self-evolution scan --backend agent:opencode        # preflight+compile across all per-project buckets
+codex-self-evolution status                               # read-only diagnostic snapshot
 codex-self-evolution recall --query "context" --cwd /path/to/repo
 codex-self-evolution recall-trigger --query "remember previous flow" --cwd /path/to/repo
 ```

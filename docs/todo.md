@@ -4,6 +4,47 @@
 
 ---
 
+## ✅ 2026-04-21 P1-9 README reality check + 完整 install 清单(已完成)
+
+原 README "Install" 段写 `pip install -e .` 一行就完事,过于乐观。用户
+跟随必踩坑(没装 hooks / scheduler / .env.provider)。
+
+README.md / README_zh.md 顶部 Install 段重写:
+
+- 明说"首次装 ~20 分钟",链 docs/getting-started.md 和
+  docs/2026-04-21-ready-for-others-gap-analysis.md
+- 列 5 步 end-to-end 清单:clone+venv → .env.provider → install-codex-hook →
+  install-scheduler → status 验证
+- 加 Commands 表更新(带 scan/status/新 backend),remove stale `--backend script`
+  example
+- 加 "Removing everything" 两个 uninstall 脚本提示
+
+---
+
+## ✅ 2026-04-21 P1-8 LICENSE 文件(已完成)
+
+仓库根加标准 MIT LICENSE(Copyright 2026 T0UGH)。plugin.json 早就声明
+MIT,但 LICENSE 文件缺失导致 GitHub 认不出许可证。
+
+---
+
+## ✅ 2026-04-21 P1-7 GitHub Actions CI(已完成)
+
+`.github/workflows/test.yml`:pytest on Python 3.11 + 3.12 matrix,
+ubuntu-latest。装 venv + `pip install -e .` + pytest,跑 `pytest -q`。
+fail-fast: false 两个版本都会跑完。
+
+**故意跳过**:
+
+- Provider smoke(需要 secret key,不适合公开 CI)
+- Docker e2e(scripts/docker-e2e.sh 本地跑)
+- lint / mypy(现在代码没 type hints,加 mypy 是大改;lint 不紧)
+
+README.md + README_zh.md 顶部加 3 个 shield badge:tests status + MIT
+license + python 3.11+。
+
+---
+
 ## ✅ 2026-04-21 P0-5 marketplace `plugin.json` 对齐新 backend + 新命令(已完成)
 
 **背景**:`plugins/codex-self-evolution/.codex-plugin/plugin.json` 里 compile

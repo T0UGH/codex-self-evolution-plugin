@@ -1,6 +1,10 @@
-# Codex Self-Evolution Plugin（中文）
+# Codex Self-Evolution Plugin(中文)
 
-> 语言：**中文** | [English](README.md)
+[![tests](https://github.com/T0UGH/codex-self-evolution-plugin/actions/workflows/test.yml/badge.svg)](https://github.com/T0UGH/codex-self-evolution-plugin/actions/workflows/test.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![python: 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+
+> 语言:**中文** | [English](README.md)
 >
 > 第一次在本机起步？直接看 [docs/getting-started.md](docs/getting-started.md) 按阶段跑一遍。
 >
@@ -20,13 +24,40 @@ compiler 是唯一负责最终资产写入（memory、recall、managed skills、
 
 ## 安装
 
+> **Reality check**：第一次装完整链路大约 **20 分钟**,不是一行命令。Codex
+> CLI 目前**还不读** plugin manifest 里的 hooks 字段
+> ([差距分析](docs/2026-04-21-ready-for-others-gap-analysis.md)),所以我们
+> 直接往 `~/.codex/hooks.json` 写 marker-protected entry。完整分阶段指南:
+> [docs/getting-started.md](docs/getting-started.md)。
+
+macOS + Python 3.11+ 的 happy path:
+
 ```bash
-pip install -e .
-# 或者不安装：
-PYTHONPATH=src python -m codex_self_evolution.cli --help
+# 1. clone + venv + pip install
+git clone https://github.com/T0UGH/codex-self-evolution-plugin
+cd codex-self-evolution-plugin
+python3 -m venv .venv && .venv/bin/pip install -e .
+
+# 2. provider 凭据(文件放 ~/.codex-self-evolution/ 下)
+mkdir -p ~/.codex-self-evolution
+cp .env.provider.example ~/.codex-self-evolution/.env.provider
+# 编辑并填 MINIMAX_API_KEY(或 OPENAI_API_KEY / ANTHROPIC_API_KEY)
+
+# 3. 往 ~/.codex/hooks.json 装 Stop + SessionStart entries
+./scripts/install-codex-hook.sh
+
+# 4. launchd scheduler(每 5 分钟跑 scan --backend agent:opencode)
+./scripts/install-scheduler.sh
+
+# 5. 盘点一下
+.venv/bin/python -m codex_self_evolution.cli status | python3 -m json.tool
 ```
 
-需要 Python 3.11+。
+只想先跑 CLI 闭环不碰 Codex / launchd?看
+[阶段 2 手动跑一次完整循环](docs/getting-started.md#阶段-2手动跑一次完整循环2-分钟)。
+
+完全清理:`./scripts/uninstall-scheduler.sh` + `./scripts/uninstall-codex-hook.sh`,
+都是幂等的,不碰其他工具的 hook / launchd job。
 
 ---
 
@@ -36,8 +67,9 @@ PYTHONPATH=src python -m codex_self_evolution.cli --help
 codex-self-evolution session-start --cwd /path/to/repo
 codex-self-evolution stop-review --hook-payload /path/to/stop_payload.json
 codex-self-evolution compile-preflight --state-dir data
-codex-self-evolution compile --once --state-dir data --backend script
 codex-self-evolution compile --once --state-dir data --backend agent:opencode
+codex-self-evolution scan --backend agent:opencode        # preflight+compile 跨所有 per-project bucket
+codex-self-evolution status                               # 只读诊断快照
 codex-self-evolution recall --query "context" --cwd /path/to/repo
 codex-self-evolution recall-trigger --query "remember previous flow" --cwd /path/to/repo
 ```
