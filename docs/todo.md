@@ -4,6 +4,66 @@
 
 ---
 
+## ✅ 2026-04-21 P1-6 结构化日志落盘(已完成)
+
+**背景**:reviewer 超时 / 401 / 模型返 bad JSON / compile 抛异常,任何
+silent 失败用户都看不到。Stop hook 子进程走的是 `~/.codex-self-evolution/logs/`
+下的老 launchd 日志(二进制 stdout/stderr tail),没有结构化摘要。
+P0-0 调研时 "hook fired" 但 "effect unclear" 的 debug 过程就是因为这个
+缺失特别绕。
+
+**落地**:
+
+- `src/codex_self_evolution/logging_setup.py`(新):
+  - `JsonFormatter`:每条 LogRecord → 一行 JSON(ts/level/msg + extras)
+  - `configure(home=None)`:在 `<home>/logs/plugin.log` 装
+    `TimedRotatingFileHandler`(when=midnight,backupCount=14)。idempotent
+    —— 重复调先 close 旧 handler 再装新的,避免 FD 泄漏 / 测试污染
+  - 磁盘满 / 权限不够时 fallback 到 stderr handler,CLI 仍能跑
+  - `propagate=False` 避免冒泡到 root logger 被宿主进程重复打印
+- `cli.py`:`main()` 入口 `configure_logging()`,尾部统一
+  `_log_command(kind, exit_code, duration_ms, ...)`。try/except 捕 exception
+  先记失败 summary(含 error_type + truncated error_message)再 re-raise
+  —— 保证 Stop hook / launchd 子进程的失败不会悄无声息
+- `tests/conftest.py`(新):autouse fixture `_isolate_plugin_logs`,每个
+  测试 setenv `CODEX_SELF_EVOLUTION_HOME=tmp_path`,teardown close 所有
+  plugin logger handlers。避免 pytest 把 100+ 条日志写进用户真实
+  `~/.codex-self-evolution/logs/plugin.log`(修之前就污染过 11 条)
+- `docs/getting-started.md` 阶段 5 加结构化日志段:字段说明 + 3 条 jq 过滤
+  示例(tail、只看失败、按命令分组平均耗时)
+
+**单测**:新增 `test_logging_setup.py`(10 用例)
+
+- JsonFormatter:合法 JSONL、non-serializable extras 转 str 不崩、exc_info
+  包含 traceback
+- configure 幂等性(重复调不 dupe handler)、log_dir 不可写时 fallback 到
+  stderr
+- `cli.main` 成功路径写一行 summary(kind + exit_code=0 + duration_ms)
+- **失败路径先记 summary 再 re-raise**(这是整件事的关键性质 ——
+  保证 silent 失败也有证据)
+- argparse SystemExit 不记(用户命令还没执行,argparse 已经打了 stderr)
+- `--from-stdin` 变体也走日志(容易漏)
+
+**真机冒烟**:
+
+```
+$ ./.venv/bin/python -m codex_self_evolution.cli status > /dev/null
+$ launchctl kickstart "gui/$(id -u)/com.codex-self-evolution.preflight"
+$ cat ~/.codex-self-evolution/logs/plugin.log
+{"ts": "...", "level": "INFO", "msg": "cli command completed", "kind": "status", "exit_code": 0, "duration_ms": 1320}
+{"ts": "...", "level": "INFO", "msg": "cli command completed", "kind": "scan", "exit_code": 0, "duration_ms": 5}
+{"ts": "...", "level": "INFO", "msg": "cli command completed", "kind": "scan", "exit_code": 0, "duration_ms": 8}
+```
+
+手动调 + launchd 调都记录,事实上完成了"对 Stop hook / scheduler 的可
+观测性" 的基线。
+
+**故意没做**:每步内部日志(reviewer call / compile backend 进出)。
+**从 boundary 开始**,需要时再往内推 —— 过早细粒度 logging 只会增加
+日志噪声,看不出关键信号。
+
+---
+
 ## ✅ 2026-04-21 P1-9 README reality check + 完整 install 清单(已完成)
 
 原 README "Install" 段写 `pip install -e .` 一行就完事,过于乐观。用户

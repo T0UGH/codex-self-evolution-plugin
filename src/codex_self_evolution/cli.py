@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from .compiler.engine import preflight_compile, run_compile, scan_all_projects
@@ -13,6 +14,7 @@ from .diagnostics import collect_status
 from .hooks.codex_bridge import map_codex_stop_payload
 from .hooks.session_start import format_session_start_for_codex, session_start
 from .hooks.stop_review import stop_review
+from .logging_setup import configure as configure_logging, get_logger
 from .recall.search import search_recall
 from .recall.workflow import build_focused_recall, evaluate_recall_trigger, evaluate_session_recall
 
@@ -248,43 +250,94 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if args.command == "session-start":
-        if args.from_stdin:
-            return _handle_session_start_from_stdin(args)
-        if not args.cwd:
-            parser.error("session-start requires --cwd or --from-stdin")
-        result = session_start(cwd=args.cwd, state_dir=args.state_dir)
-    elif args.command == "stop-review":
-        if args.from_stdin:
-            return _handle_stop_from_stdin(args)
-        if not args.hook_payload:
-            parser.error("stop-review requires --hook-payload or --from-stdin")
-        result = _run_stop_review(args)
-    elif args.command == "compile":
-        result = run_compile(repo_root=args.repo_root, state_dir=args.state_dir, backend=args.backend)
-    elif args.command == "compile-preflight":
-        result = preflight_compile(repo_root=args.repo_root, state_dir=args.state_dir)
-    elif args.command == "scan":
-        result = scan_all_projects(home=args.home, backend=args.backend)
-    elif args.command == "status":
-        result = collect_status(home=args.home)
-    elif args.command == "recall":
-        result = {"query": args.query, "results": search_recall(query=args.query, cwd=args.cwd, state_dir=args.state_dir)}
-    elif args.command == "recall-trigger":
-        session_payload = session_start(cwd=args.cwd, state_dir=args.state_dir)
-        result = evaluate_session_recall(
-            query=args.query,
-            cwd=args.cwd,
-            state_dir=args.state_dir,
-            session_payload=session_payload,
-            explicit=args.explicit,
-        )
-    else:
-        parser.error(f"unknown command: {args.command}")
-        return 2
+    # Install the JSON-lines file logger before anything that might fail.
+    # Every main() invocation is a fresh short-lived process (hook, scheduler,
+    # or a user-typed command), so reconfiguring on entry is cheap and keeps
+    # test isolation tight — configure() also acts as a reset.
+    configure_logging()
+    logger = get_logger()
+    started = time.monotonic()
 
-    print(json.dumps(result, indent=2, sort_keys=True))
-    return 0
+    try:
+        if args.command == "session-start":
+            if args.from_stdin:
+                exit_code = _handle_session_start_from_stdin(args)
+                _log_command(logger, args.command, started, exit_code=exit_code)
+                return exit_code
+            if not args.cwd:
+                parser.error("session-start requires --cwd or --from-stdin")
+            result = session_start(cwd=args.cwd, state_dir=args.state_dir)
+        elif args.command == "stop-review":
+            if args.from_stdin:
+                exit_code = _handle_stop_from_stdin(args)
+                _log_command(logger, args.command, started, exit_code=exit_code, mode="from_stdin")
+                return exit_code
+            if not args.hook_payload:
+                parser.error("stop-review requires --hook-payload or --from-stdin")
+            result = _run_stop_review(args)
+        elif args.command == "compile":
+            result = run_compile(repo_root=args.repo_root, state_dir=args.state_dir, backend=args.backend)
+        elif args.command == "compile-preflight":
+            result = preflight_compile(repo_root=args.repo_root, state_dir=args.state_dir)
+        elif args.command == "scan":
+            result = scan_all_projects(home=args.home, backend=args.backend)
+        elif args.command == "status":
+            result = collect_status(home=args.home)
+        elif args.command == "recall":
+            result = {"query": args.query, "results": search_recall(query=args.query, cwd=args.cwd, state_dir=args.state_dir)}
+        elif args.command == "recall-trigger":
+            session_payload = session_start(cwd=args.cwd, state_dir=args.state_dir)
+            result = evaluate_session_recall(
+                query=args.query,
+                cwd=args.cwd,
+                state_dir=args.state_dir,
+                session_payload=session_payload,
+                explicit=args.explicit,
+            )
+        else:
+            parser.error(f"unknown command: {args.command}")
+            return 2
+
+        print(json.dumps(result, indent=2, sort_keys=True))
+        _log_command(logger, args.command, started, exit_code=0)
+        return 0
+    except SystemExit:
+        # argparse calls sys.exit(2) for bad args; re-raise so the user still
+        # sees the usage message. Don't bother logging — argparse already
+        # printed to stderr and nothing interesting ran.
+        raise
+    except Exception as exc:  # noqa: BLE001 — log everything, let caller decide
+        # Record the failure before re-raising so the log captures what the
+        # user won't see in their terminal (if stderr was piped somewhere).
+        _log_command(
+            logger, args.command, started,
+            exit_code=1,
+            error_type=type(exc).__name__,
+            error_message=str(exc)[:400],
+        )
+        raise
+
+
+def _log_command(
+    logger, command: str, started: float, *, exit_code: int, **extras,
+) -> None:
+    """Emit one structured summary line per CLI invocation.
+
+    Called at the boundary of ``main()`` so each hook / scheduler / manual
+    CLI call leaves exactly one record behind. Per-step logs inside compile /
+    reviewer / scan are intentionally NOT added here — start with the
+    boundary and push inward only if an investigation actually needs it.
+    """
+    duration_ms = int((time.monotonic() - started) * 1000)
+    logger.info(
+        "cli command completed",
+        extra={
+            "kind": command or "unknown",
+            "exit_code": exit_code,
+            "duration_ms": duration_ms,
+            **extras,
+        },
+    )
 
 
 if __name__ == "__main__":

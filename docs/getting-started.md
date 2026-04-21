@@ -348,6 +348,25 @@ launchctl kickstart "gui/$(id -u)/com.codex-self-evolution.preflight"
 tail -5 ~/.codex-self-evolution/logs/launchd.stdout.log
 ```
 
+**结构化日志**:每次 CLI 调用(hook、scheduler、手动)都往
+`~/.codex-self-evolution/logs/plugin.log` 追加一行 JSON(按天滚动,保留 14 天)。
+字段含 `ts / kind / exit_code / duration_ms`,失败时还有
+`error_type / error_message`。过滤示例:
+
+```bash
+# 最近 20 次调用
+tail -20 ~/.codex-self-evolution/logs/plugin.log | jq .
+
+# 只看失败
+jq 'select(.exit_code != 0)' ~/.codex-self-evolution/logs/plugin.log
+
+# 按命令统计耗时
+jq -s 'group_by(.kind) | map({kind: .[0].kind, count: length, avg_ms: (map(.duration_ms) | add/length)})' \
+  ~/.codex-self-evolution/logs/plugin.log
+```
+
+silent reviewer/compile 失败不再需要翻 launchd 的 stdout/stderr log,直接看这个文件。
+
 ---
 
 ## Codex CLI 插件集成
