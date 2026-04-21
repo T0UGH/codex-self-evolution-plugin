@@ -127,7 +127,7 @@ reviewer 是 provider-backed 的。选择优先级：
 | `api_key` | 从环境变量读 | 覆盖 provider 的 env key。 |
 | `api_base` | provider 默认 | 完整 URL。 |
 | `model` | provider 默认 | Model id。 |
-| `max_tokens` | `800` | OpenAI / Anthropic / MiniMax 协议都适用。 |
+| `max_tokens` | `4096` | 这是**输出长度**预算,不是 200k 的上下文窗口。各家模型输出上限普遍是 8k(Haiku/Sonnet/MiniMax-M2.7),4096 留够 10+ 条 suggestion 的空间还不擦顶。 |
 | `timeout_seconds` | `30` | HTTP 超时。 |
 | `anthropic_version` | `2023-06-01` | Anthropic 协议的 `anthropic-version` 头。 |
 | `stub_response` | — | 仅 Dummy provider 用，预置的 reviewer JSON。 |

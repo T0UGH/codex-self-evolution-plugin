@@ -1,7 +1,10 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from codex_self_evolution.hooks.stop_review import stop_review
+from codex_self_evolution.review.runner import ReviewerParseFailure
 
 
 
@@ -45,3 +48,41 @@ def test_stop_review_reconstructs_snapshot_and_writes_pending_artifact(tmp_path)
     assert snapshot["turn_snapshot"]["transcript"] == "user asked for durable fix"
     assert snapshot["turn_snapshot"]["thread_read_output"] == "diff mentions stable config"
     assert len(stored["suggestions"]) == 1
+
+
+
+def test_stop_review_dumps_raw_text_when_reviewer_parse_fails(tmp_path):
+    """Truncated-JSON scenarios (e.g. max_tokens cutoff) should land the
+    reviewer's raw response on disk under review/failed/ so we can inspect
+    where it broke instead of losing it to the background subprocess log."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    payload = tmp_path / "payload.json"
+    truncated_raw = '{"memory_updates": [{"summary": "good", "details": {"content": "abc'  # unterminated
+    payload.write_text(
+        json.dumps(
+            {
+                "thread_id": "thread-trunc",
+                "turn_id": "turn-trunc",
+                "cwd": str(repo),
+                "reviewer_provider": "dummy",
+                "provider_stub_response": truncated_raw,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ReviewerParseFailure):
+        stop_review(hook_payload=payload, state_dir=state)
+
+    failed_dir = state / "review" / "failed"
+    dumps = list(failed_dir.glob("*.txt"))
+    assert len(dumps) == 1, "exactly one raw dump should be written"
+    content = dumps[0].read_text(encoding="utf-8")
+    # Header metadata must name the provider and attempt count.
+    assert "# provider: dummy" in content
+    assert "# attempts: 3" in content  # default parse_retries=2 → 1+2 attempts
+    # And each attempt's body must include the truncated raw text itself.
+    assert truncated_raw in content
+    assert "--- attempt 1" in content
+    assert "--- attempt 3" in content

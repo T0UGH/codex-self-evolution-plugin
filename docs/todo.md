@@ -4,6 +4,56 @@
 
 ---
 
+## 2026-04-21 pending suggestions 跨 repo 统一入口
+
+### 背景
+
+现在每个 Codex session 在自己的 `cwd` 下写 `data/suggestions/pending/`,今天一上午有效 pending 就散在 3 个仓库里:
+
+- `~/code/github/codex-self-evolution-plugin/data/suggestions/pending/`
+- `~/go/src/code.byted.org/ad/incentive/data/suggestions/pending/`
+- `~/go/src/code.byted.org/luna/server_cc_marketplace/data/suggestions/pending/`
+
+回看 / 审批 / 统计时必须一个个 repo 去 ls,实际不可持续。
+
+根因:`hooks/stop_review.py` 把 `cwd` 当 `repo_root`,`config.build_paths` 默认让 `state_dir = <cwd>/data`。
+
+### 候选方案
+
+- **A. 全局 state_dir**:所有 repo 共享 `~/.codex-self-evolution/data/`,最简单但 MEMORY.md 混合,失去 repo 隔离
+- **B. 索引汇总(倾向)**:每 repo 各自 `data/` 不动,额外往 `~/.codex-self-evolution/inbox/` 写一条指向原 pending 的 symlink 或索引 json,作为全局审阅队列
+- **C. 按 repo fingerprint 分目录**:全局根目录 + 子目录隔离,迁移成本最高
+
+倾向 B — 改动最小,不破坏现有语义,pending 队列有单一入口即可。
+
+### 待定细节
+
+- inbox 文件的命名:`<repo_fingerprint>-<suggestion_id>.json` 还是 `<timestamp>-<suggestion_id>.json`
+- 用 symlink 还是拷贝一份元数据(cwd / summary / family count)
+- 审批动作(将来的 `approve` / `discard` 命令)走 inbox 还是各 repo;应该能两边都触达
+- 迁移现有已散落的 pending:是否要一次性 import 过去
+
+---
+
+## ✅ 2026-04-21 reviewer 截断失败 + 原始响应不可见(已完成)
+
+**落地位置**:
+
+- `src/codex_self_evolution/review/providers.py:58`:`max_tokens` 默认 800 → **4096**
+  (输出预算不是 200k 上下文窗口;各家模型输出上限约 8k,4096 留够 10+ 条 suggestion)
+- `src/codex_self_evolution/review/runner.py`:新增 `ReviewerParseFailure(SchemaError)`,
+  runner 给每次尝试的 `raw_text` 都塞进异常里
+- `src/codex_self_evolution/hooks/stop_review.py`:捕获 `ReviewerParseFailure` → 落盘到
+  `<state_dir>/review/failed/<snapshot_id>.txt`,保留完整 raw 响应再重新抛
+- `src/codex_self_evolution/config.py`:`Paths` 新增 `review_failed_dir`
+- README.md / README_zh.md:`max_tokens` 默认值同步改
+- 新增测试 `test_stop_review_dumps_raw_text_when_reviewer_parse_fails`
+
+**触发根因回顾**:`stop-review-3131-*.log` 报 `Unterminated string at char 2151`,
+对应 800 output tokens 的上限;一次产 3–4 条 suggestion 的 prompt 很容易超。
+
+---
+
 ## ✅ 2026-04-21 提供 install / uninstall 脚本(已完成)
 
 **落地位置**:

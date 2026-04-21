@@ -33,6 +33,7 @@ class Paths:
     compiler_dir: Path
     review_dir: Path
     review_snapshots_dir: Path
+    review_failed_dir: Path
     scheduler_dir: Path
 
 
@@ -66,5 +67,6 @@ def build_paths(repo_root: str | Path | None = None, state_dir: str | Path | Non
         compiler_dir=resolved_state / "compiler",
         review_dir=review_dir,
         review_snapshots_dir=review_dir / "snapshots",
+        review_failed_dir=review_dir / "failed",
         scheduler_dir=resolved_state / "scheduler",
     )

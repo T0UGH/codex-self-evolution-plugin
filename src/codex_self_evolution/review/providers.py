@@ -55,7 +55,13 @@ class HTTPReviewProvider:
 
     def build_request_payload(self, snapshot: dict[str, Any], prompt: str, options: dict[str, Any]) -> dict[str, Any]:
         model = str(options.get("model") or self.default_model())
-        max_tokens = int(options.get("max_tokens", 800))
+        # This is the *output* budget, not the 200k context window. Originally
+        # 800, which got truncated mid-JSON in practice (unterminated strings
+        # around char 2100). Set to 4096 — well within every supported model's
+        # 8k output ceiling (Haiku/Sonnet/MiniMax-M2.7 all cap at 8192) and
+        # leaves room for 10+ suggestions without pressure. Reviewer runs in
+        # a background subprocess so extra latency doesn't block Codex.
+        max_tokens = int(options.get("max_tokens", 4096))
         if self.dialect == "openai":
             return {
                 "model": model,

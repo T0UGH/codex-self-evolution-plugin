@@ -20,6 +20,20 @@ PROMPT_PATH = PACKAGE_ROOT / "review" / "prompt.md"
 DEFAULT_PARSE_RETRIES = 2
 
 
+class ReviewerParseFailure(SchemaError):
+    """Raised when the reviewer response fails to parse even after retries.
+
+    Carries every attempt's ``raw_text`` so callers can dump them to disk for
+    postmortem. Inherits from ``SchemaError`` so existing ``except SchemaError``
+    callers still work transparently.
+    """
+
+    def __init__(self, message: str, *, raw_texts: list[str], provider_name: str) -> None:
+        super().__init__(message)
+        self.raw_texts = raw_texts
+        self.provider_name = provider_name
+
+
 def load_prompt() -> str:
     return PROMPT_PATH.read_text(encoding="utf-8")
 
@@ -38,6 +52,8 @@ def run_reviewer(
     - On a top-level parse failure we re-call the provider up to
       ``parse_retries`` additional times; this covers the minimax/openai-style
       quirk where the same prompt occasionally returns non-conformant JSON.
+    - If every attempt still fails, raises ``ReviewerParseFailure`` with the
+      raw text from every attempt attached, so the caller can persist them.
     - Auth / transport errors (``ReviewProviderError`` from the HTTP layer)
       are not retried — they are raised immediately.
     """
@@ -50,9 +66,11 @@ def run_reviewer(
     provider = get_review_provider(selected_provider)
 
     attempts = max(1, parse_retries + 1)
+    raw_texts: list[str] = []
     last_parse_error: SchemaError | ReviewProviderError | None = None
     for attempt in range(attempts):
         result = provider.run(review_input, prompt, options)
+        raw_texts.append(result.raw_text)
         try:
             reviewer_output, skipped = parse_reviewer_output_lenient(result.raw_text)
             return reviewer_output, result, skipped
@@ -62,4 +80,8 @@ def run_reviewer(
                 break
             continue
     assert last_parse_error is not None  # loop guarantees at least one attempt
-    raise last_parse_error
+    raise ReviewerParseFailure(
+        str(last_parse_error),
+        raw_texts=raw_texts,
+        provider_name=selected_provider,
+    ) from last_parse_error

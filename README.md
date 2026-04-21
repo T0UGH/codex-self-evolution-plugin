@@ -128,7 +128,7 @@ Passed in the `provider_options` dict when calling `run_reviewer(...)` directly.
 | `api_key` | from env | Overrides the provider's env-sourced key. |
 | `api_base` | provider default | Full URL. |
 | `model` | provider default | Model id. |
-| `max_tokens` | `800` | Applied to OpenAI / Anthropic / MiniMax dialects. |
+| `max_tokens` | `4096` | Output budget (not context — that's 200k). Safely within every supported model's 8k output ceiling; room for 10+ suggestions without truncation. |
 | `timeout_seconds` | `30` | HTTP timeout. |
 | `anthropic_version` | `2023-06-01` | `anthropic-version` header (Anthropic dialect only). |
 | `stub_response` | — | Dummy provider only: canned reviewer JSON. |
