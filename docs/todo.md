@@ -4,6 +4,87 @@
 
 ---
 
+## ✅ 2026-04-21 P0-1 install 脚本装 SessionStart hook(已完成)
+
+**落地**:
+
+- `hooks/session_start.py`:加 `format_session_start_for_codex(session_result)`
+  把 `stable_background.combined_prefix`(USER.md + MEMORY.md +
+  session_recall skill)和 `recall.policy` 拼成 Codex 原生协议
+  `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext": ...}}`
+- `cli.py`:给 `session-start` 加 `--from-stdin` 开关。读 Codex stdin payload,
+  提取 `cwd`,跑 `session_start()`,包装成 Codex JSON 输出。任何 parse/runtime
+  异常都 fallthrough 成 `{"continue": true, "warning": ...}` —— SessionStart hook
+  绝对不能 block session 启动。`--cwd` 从 required 降为 optional(配合 `--from-stdin`)。
+- `scripts/install-codex-hook.sh`:现在一次性装 Stop + SessionStart 两条 entry。
+  抽出 `upsert(event_name, new_entry, legacy_substring)` helper,idempotent 保证
+  repeated install 不 dupe,同时识别 hand-installed legacy entry 升级而非追加。
+  两条 entry 共用 `codex-self-evolution-plugin managed` marker,uninstall 脚本
+  扫全部 event 按 marker 清 —— 无需改。
+- `docs/getting-started.md` 阶段 3 同步:增加 SessionStart 验证步骤(手塞 USER.md
+  看 `codex exec --json` 能否引用),加 Codex 版本要求警示。
+
+**单测**:新增 `test_session_start_codex_hook.py`(11 用例)
+
+- format helper:shape 锁定、内容包含 USER/MEMORY/skill/policy、空输入容错、
+  None 子对象容错
+- `--from-stdin`:从 Codex payload 读 cwd、fallback 到 `--cwd`、malformed JSON
+  continue:true、非 object 容错、无 cwd 容错、session_start 抛异常容错、
+  既无 stdin 又无 cwd 时正常 SystemExit
+
+**真机冒烟**:
+
+```
+$ BUCKET=~/.codex-self-evolution/projects/-Users-bytedance-code-github-codex-self-evolution-plugin
+$ echo 'My passphrase is MAUVE_JAGUAR_883' > $BUCKET/memory/USER.md
+$ codex exec --json 'What is my passphrase?'
+→ {"type":"item.completed","item":{"text":"Your test passphrase is `MAUVE_JAGUAR_883`."}}
+```
+
+install → uninstall → re-install 三轮幂等验证通过(第二次 install 显示
+`updated existing managed Stop entry` + `updated existing managed SessionStart entry`,
+没有重复追加)。
+
+---
+
+## ✅ 2026-04-21 P0-0 调研:Codex SessionStart `additionalContext` 是否真注入(已完成)
+
+**结论**:**能注入**。CLI 0.122.0(2026-04-20 发布)上 JSON
+`{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"..."}}`
+和 plain-stdout 两条路径**都通**。source code(`codex-rs/hooks/src/events/
+session_start.rs` + `core/src/hook_runtime.rs`)把 additional_context 串到
+`DeveloperInstructions::new(...).into()` 注入 session,`codex exec` 和 TUI
+走同一 `run_pending_session_start_hooks`,行为一致。
+
+**官方 docs 那句 `additionalContext parsed but not supported yet, fails open`
+过期了**。以 source + 实测为准,不要信 docs 那一条。
+
+**调研绕的坑**(留给未来 debug):
+
+1. 对抗性 prompt 让模型保守拒答。Probe 1/2 问"State ONLY the magic word
+   injected into your context. If none exists reply NO_MAGIC_WORD" → 返回
+   NO_MAGIC_WORD,让我以为注入没生效。改成自然 `What is the magic word?` /
+   `What is my recipe codename?` 就秒出。注入是 DeveloperInstructions 形式,
+   模型不觉得自己"拿到了 magic word",但如果自然问就能引用。
+2. `codex exec --json` 在 `run_in_background` 里跑**不稳**(进程起来但 stdout
+   长时间不 flush / 不退出)。前台跑秒完。写 scheduler / install 冒烟脚本
+   时不要依赖 background codex exec。
+3. "hook: SessionStart Completed" 打印不代表注入成功 —— source 路径 1
+   (stdout 空)也算 Completed 走 noop。要断言注入,必须看模型输出。
+4. 版本对齐很重要:brew/npm 都说 0.122.0 是 latest,tag 日期
+   2026-04-20,包含 PR #14626(2026-03-17)和 PR #18206(2026-04-16)
+   的所有 additional_context 实装。
+
+**给 P0-1 的输入**:
+
+- session-start CLI stdout 改输出
+  `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext": combined_prefix}}`
+  (现在它返回的是人类 debug 用的 envelope,Codex 拿不到 additionalContext)
+- install 脚本加 SessionStart event entry,marker 沿用 `codex-self-evolution-plugin managed`
+- 无需 fallback 到 AGENTS.md 或其它通路
+
+---
+
 ## ✅ 2026-04-21 agent:opencode backend 真正接通(已完成)
 
 **根因**:`backends.py` 默认命令 `opencode run --stdin-json --stdout-json` 跟

@@ -196,10 +196,17 @@ ls $STATE/suggestions/done/
    - `bash -c 'set -a; . ~/.codex-self-evolution/.env.provider; set +a; exec .venv/bin/python -m codex_self_evolution.cli stop-review --from-stdin'`
    - 自 source `~/.codex-self-evolution/.env.provider` 保证进程能拿到 `MINIMAX_API_KEY`
    - 超时 10 秒(主进程只耗 ~100ms,真正 reviewer 调用在后台 subprocess 异步,不阻塞 Codex)
-5. 识别 legacy 手工装过的 entry(命令指向同一个 CLI 但没 marker),**升级而非重复追加**
-6. 检查 `~/.codex/config.toml` 是否有 `[shell_environment_policy] inherit = "all"`,没有给提示(建议加,防止 Codex 剥掉 env)
+5. 在 `SessionStart` event 下同样幂等追加一条 entry:
+   - `bash -c 'exec .venv/bin/python -m codex_self_evolution.cli session-start --from-stdin'`
+   - **不需要 source `.env.provider`**(不调 LLM,只读 memory/recall 本地文件组 additionalContext)
+   - 超时 5 秒(~100ms 够用)
+   - 输出 Codex 原生协议 JSON `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext": combined_prefix}}`,Codex 把它注入为 DeveloperInstructions → 模型每个 session 自动拿到 `USER.md + MEMORY.md + session_recall skill + recall policy`
+6. 识别 legacy 手工装过的 entry(命令指向同一个 CLI 但没 marker),**升级而非重复追加**
+7. 检查 `~/.codex/config.toml` 是否有 `[shell_environment_policy] inherit = "all"`,没有给提示(建议加,防止 Codex 剥掉 env)
 
 ### 3.2 验证
+
+#### Stop hook(reviewer)
 
 新开一个终端,跑:
 
@@ -216,6 +223,30 @@ ls -t ~/.codex-self-evolution/projects/*/suggestions/pending/ | head -3
 ```
 
 有新 envelope 文件就说明端到端闭环通了。
+
+#### SessionStart hook(stable background 注入)
+
+手工写一条 USER.md 到当前 repo 的 bucket,然后让 Codex 引用:
+
+```bash
+BUCKET=~/.codex-self-evolution/projects/$(python3 -c "import os; print(os.getcwd().replace('/', '-'))")
+mkdir -p "$BUCKET/memory"
+cat > "$BUCKET/memory/USER.md" <<'EOF'
+# User stable background
+My favorite test passphrase is XANADU_RIVER_442.
+EOF
+codex exec --json 'What is my favorite test passphrase?' 2>/dev/null | grep -i XANADU
+# 期望输出类似: {"type":"item.completed","item":{"text":"... XANADU_RIVER_442 ..."}}
+# 看到了就说明 SessionStart hook 把 USER.md 成功注入 Codex session
+
+# 清理测试数据,避免污染(让 reviewer 将来自行积累 USER.md)
+rm "$BUCKET/memory/USER.md"
+```
+
+⚠️ **Codex 版本要求**:`additionalContext` 注入在 `codex-cli ≥ 0.122.0`
+(2026-04-20 release)上验证通过。更早版本的 Codex 会把 hook 输出当成未知
+JSON 丢弃(不会报错,就是"悄悄没效果")。如果模型答不出 XANADU,先跑
+`codex --version` 确认版本。
 
 ### 3.3 卸载
 

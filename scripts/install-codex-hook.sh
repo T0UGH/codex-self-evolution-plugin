@@ -94,8 +94,8 @@ if [ -f "$HOOKS_JSON" ]; then
     info "backed up $HOOKS_JSON → $BACKUP"
 fi
 
-# ---------- upsert the hook ----------
-info "upserting Stop hook in $HOOKS_JSON"
+# ---------- upsert the hooks ----------
+info "upserting Stop + SessionStart hooks in $HOOKS_JSON"
 
 python3 - "$HOOKS_JSON" "$REPO" "$MARKER" "$ENV_FILE" <<'PY'
 import json
@@ -118,48 +118,71 @@ else:
     data = {}
 
 hooks = data.setdefault("hooks", {})
-stop_list = hooks.setdefault("Stop", [])
 
-command = (
+# Stop hook: runs the reviewer. Needs .env.provider for MINIMAX_API_KEY etc.
+# Timeout 10s is fine because --from-stdin detaches the real reviewer
+# subprocess — the hook itself just writes a tempfile and exits.
+stop_command = (
     f"bash -c ': {marker}; "
     f"set -a; . {env_file} 2>/dev/null; set +a; "
     f"exec {repo}/.venv/bin/python -m codex_self_evolution.cli stop-review --from-stdin'"
 )
-new_entry = {
-    "hooks": [
-        {
-            "type": "command",
-            "command": command,
-            "timeout": 10,
-        }
-    ]
+stop_entry = {
+    "hooks": [{"type": "command", "command": stop_command, "timeout": 10}]
 }
 
-existing_idx = None
-legacy_idx = None
-for i, entry in enumerate(stop_list):
-    for h in entry.get("hooks", []):
-        cmd = h.get("command", "")
-        if marker in cmd:
-            existing_idx = i
-            break
-        if "codex_self_evolution.cli stop-review" in cmd:
-            # Hand-edited entry from before this script existed: same effect,
-            # just missing our marker. Treat it as a legacy install and
-            # upgrade it in place instead of appending a duplicate.
-            legacy_idx = i
-    if existing_idx is not None:
-        break
+# SessionStart hook: synchronously assembles stable-background + recall
+# policy, emits Codex `hookSpecificOutput.additionalContext` JSON. Does NOT
+# need .env.provider (no LLM call). Timeout 5s is ample — this path just
+# reads a few MD files and concatenates them.
+# Verified against codex-cli 0.122.0 that additionalContext actually gets
+# injected as DeveloperInstructions in the model session. See
+# docs/todo.md 2026-04-21 P0-0 entry for the research trail.
+session_start_command = (
+    f"bash -c ': {marker}; "
+    f"exec {repo}/.venv/bin/python -m codex_self_evolution.cli session-start --from-stdin'"
+)
+session_start_entry = {
+    "hooks": [{"type": "command", "command": session_start_command, "timeout": 5}]
+}
 
-if existing_idx is not None:
-    stop_list[existing_idx] = new_entry
-    print(f"  updated existing managed Stop entry at index {existing_idx}")
-elif legacy_idx is not None:
-    stop_list[legacy_idx] = new_entry
-    print(f"  upgraded legacy unmarked Stop entry at index {legacy_idx} (was hand-installed)")
-else:
-    stop_list.append(new_entry)
-    print(f"  appended new Stop entry (total now {len(stop_list)})")
+
+def upsert(event_name, new_entry, legacy_substring=None):
+    """Idempotently install `new_entry` into hooks[event_name].
+
+    - If a managed entry (with our marker) already exists: replace in-place.
+    - If a legacy hand-installed entry exists (same functional command, no
+      marker): upgrade it in-place so repeated installs don't dupe.
+    - Otherwise: append. Preserves any third-party entries (vibe-island,
+      luna, etc.) in the same event list.
+    """
+    event_list = hooks.setdefault(event_name, [])
+    existing_idx = None
+    legacy_idx = None
+    for i, entry in enumerate(event_list):
+        for h in entry.get("hooks", []):
+            cmd = h.get("command", "")
+            if marker in cmd:
+                existing_idx = i
+                break
+            if legacy_substring and legacy_substring in cmd:
+                legacy_idx = i
+        if existing_idx is not None:
+            break
+
+    if existing_idx is not None:
+        event_list[existing_idx] = new_entry
+        print(f"  updated existing managed {event_name} entry at index {existing_idx}")
+    elif legacy_idx is not None:
+        event_list[legacy_idx] = new_entry
+        print(f"  upgraded legacy unmarked {event_name} entry at index {legacy_idx} (was hand-installed)")
+    else:
+        event_list.append(new_entry)
+        print(f"  appended new {event_name} entry (total now {len(event_list)})")
+
+
+upsert("Stop", stop_entry, legacy_substring="codex_self_evolution.cli stop-review")
+upsert("SessionStart", session_start_entry, legacy_substring="codex_self_evolution.cli session-start")
 
 path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 PY

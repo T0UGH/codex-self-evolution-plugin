@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .compiler.engine import preflight_compile, run_compile
 from .hooks.codex_bridge import map_codex_stop_payload
-from .hooks.session_start import session_start
+from .hooks.session_start import format_session_start_for_codex, session_start
 from .hooks.stop_review import stop_review
 from .recall.search import search_recall
 from .recall.workflow import build_focused_recall, evaluate_recall_trigger, evaluate_session_recall
@@ -21,8 +21,18 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     session_parser = subparsers.add_parser("session-start")
-    session_parser.add_argument("--cwd", required=True)
+    # Required for manual/test invocation; ignored when --from-stdin reads cwd
+    # from the Codex hook payload.
+    session_parser.add_argument("--cwd")
     session_parser.add_argument("--state-dir")
+    session_parser.add_argument(
+        "--from-stdin",
+        action="store_true",
+        help="Read a Codex SessionStart hook JSON payload from stdin, extract "
+             "cwd, build the stable-background bundle, and emit Codex "
+             "hookSpecificOutput JSON so the context is injected as "
+             "DeveloperInstructions in the model's session.",
+    )
 
     stop_parser = subparsers.add_parser("stop-review")
     stop_parser.add_argument("--hook-payload")
@@ -74,6 +84,52 @@ def _run_stop_review(args: argparse.Namespace) -> dict:
                 Path(args.hook_payload).unlink()
             except OSError:
                 pass
+
+
+def _handle_session_start_from_stdin(args: argparse.Namespace) -> int:
+    """Codex SessionStart hook entry point.
+
+    Codex sends a JSON payload on stdin (fields per
+    developers.openai.com/codex/hooks: session_id, transcript_path, cwd,
+    hook_event_name, model, source) and expects a JSON response on stdout
+    within the hook timeout. We return a Codex ``hookSpecificOutput`` shape
+    whose ``additionalContext`` text gets injected as ``DeveloperInstructions``
+    in the model session — verified against codex-cli 0.122.0.
+
+    Error discipline: this hook runs at session startup and must never block.
+    Any parse or runtime failure falls through to ``{"continue": true,
+    "warning": ...}`` so Codex can still start — worst case the user's
+    session just won't have the stable-background prefix injected.
+    """
+    try:
+        raw = sys.stdin.read()
+        codex_payload = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError as exc:
+        print(json.dumps({"continue": True, "warning": f"invalid codex payload: {exc}"}))
+        return 0
+
+    if not isinstance(codex_payload, dict):
+        print(json.dumps({"continue": True, "warning": "codex payload is not an object"}))
+        return 0
+
+    # Prefer the cwd Codex tells us about. Fall back to --cwd only for manual
+    # shell testing of the hook command outside a real Codex session.
+    cwd = codex_payload.get("cwd") if isinstance(codex_payload.get("cwd"), str) else None
+    if not cwd:
+        cwd = args.cwd
+    if not cwd:
+        print(json.dumps({"continue": True, "warning": "no cwd in codex payload or --cwd flag"}))
+        return 0
+
+    try:
+        session_result = session_start(cwd=cwd, state_dir=args.state_dir)
+        codex_output = format_session_start_for_codex(session_result)
+    except Exception as exc:  # noqa: BLE001 — never block session startup
+        print(json.dumps({"continue": True, "warning": f"session_start failed: {exc}"}))
+        return 0
+
+    print(json.dumps(codex_output))
+    return 0
 
 
 def _handle_stop_from_stdin(args: argparse.Namespace) -> int:
@@ -164,6 +220,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "session-start":
+        if args.from_stdin:
+            return _handle_session_start_from_stdin(args)
+        if not args.cwd:
+            parser.error("session-start requires --cwd or --from-stdin")
         result = session_start(cwd=args.cwd, state_dir=args.state_dir)
     elif args.command == "stop-review":
         if args.from_stdin:
