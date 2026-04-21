@@ -4,7 +4,22 @@
 
 ---
 
-## 2026-04-21 提供 install / uninstall 脚本
+## ✅ 2026-04-21 提供 install / uninstall 脚本(已完成)
+
+**落地位置**:
+
+- `scripts/install-codex-hook.sh`:幂等注入 ~/.codex/hooks.json 的 Stop entry,
+  用 `codex-self-evolution-plugin managed` 作为 marker;检测 legacy 手工装过的
+  同功能 entry 自动升级(不重复追加)。
+- `scripts/uninstall-codex-hook.sh`:只删带 marker 的条目,不碰其他工具的 hook。
+
+文档也已更新(getting-started.md 阶段 3、README 顶部 quickstart)。
+
+---
+
+以下是原 TODO 记录,保留做历史上下文参考:
+
+## ~~2026-04-21 提供 install / uninstall 脚本~~(上面已完成)
 
 ### 背景
 

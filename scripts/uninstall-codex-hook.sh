@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Remove the codex-self-evolution-plugin Stop hook entries installed by
+# ./scripts/install-codex-hook.sh. Identifies our entries by the marker
+# string embedded in the hook command, so this script cannot accidentally
+# delete hooks installed by other tools or the user.
+#
+# Intentionally does NOT touch:
+#   - ~/.bashrc (MINIMAX_* exports are the user's shell config)
+#   - ~/.codex/config.toml (shell_environment_policy may benefit other tools)
+#   - the repo itself (.venv / .env.provider stay put)
+set -euo pipefail
+
+HOOKS_JSON="$HOME/.codex/hooks.json"
+MARKER="codex-self-evolution-plugin managed"
+
+info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
+
+if [ ! -f "$HOOKS_JSON" ]; then
+    info "no $HOOKS_JSON — nothing to uninstall"
+    exit 0
+fi
+
+command -v python3 >/dev/null 2>&1 || { warn "python3 not found; cannot edit hooks.json safely"; exit 1; }
+
+BACKUP="$HOOKS_JSON.bak.$(date +%s)"
+cp "$HOOKS_JSON" "$BACKUP"
+info "backed up $HOOKS_JSON → $BACKUP"
+
+python3 - "$HOOKS_JSON" "$MARKER" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+marker = sys.argv[2]
+
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except json.JSONDecodeError as exc:
+    print(f"  existing hooks.json is invalid JSON ({exc}); aborting", file=sys.stderr)
+    sys.exit(1)
+
+hooks = data.get("hooks", {})
+removed_total = 0
+touched_events = []
+
+for event, entries in list(hooks.items()):
+    kept = []
+    removed_here = 0
+    for entry in entries:
+        matched = False
+        for h in entry.get("hooks", []):
+            if marker in h.get("command", ""):
+                matched = True
+                break
+        if matched:
+            removed_here += 1
+            continue
+        kept.append(entry)
+    if removed_here:
+        touched_events.append((event, removed_here))
+    hooks[event] = kept
+
+removed_total = sum(n for _, n in touched_events)
+
+# Drop now-empty event lists so hooks.json stays tidy.
+for event in list(hooks.keys()):
+    if not hooks[event]:
+        del hooks[event]
+
+path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+if removed_total == 0:
+    print("  no managed hook entries found — nothing changed")
+else:
+    for event, n in touched_events:
+        print(f"  removed {n} managed entry from {event}")
+    print(f"  {removed_total} total")
+PY
+
+info "done."
+echo ""
+echo "Note (not auto-removed, edit by hand if you want to fully clean up):"
+echo "  - ~/.bashrc:   export MINIMAX_API_KEY / MINIMAX_REGION"
+echo "  - ~/.codex/config.toml: [shell_environment_policy] inherit = \"all\""
+echo "  - repo:        .env.provider, .venv"
+echo "Both are harmless if left in place and may also serve other tools."

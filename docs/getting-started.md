@@ -9,9 +9,10 @@
 1. [前置检查](#1-前置检查)
 2. [阶段 1:provider 冒烟](#阶段-1provider-冒烟30-秒)
 3. [阶段 2:手动跑一次完整循环](#阶段-2手动跑一次完整循环2-分钟)
-4. [阶段 3:挂 launchd 自动调度](#阶段-3挂-launchd-自动调度5-分钟)
-5. [Codex CLI 插件集成](#codex-cli-插件集成)
-6. [常见坑](#常见坑)
+4. [阶段 3:挂 Codex 原生 Stop hook(一键脚本)](#阶段-3挂-codex-原生-stop-hook一键脚本1-分钟)
+5. [阶段 4:挂 launchd 自动调度](#阶段-4挂-launchd-自动调度5-分钟)
+6. [Codex CLI 插件集成](#codex-cli-插件集成)
+7. [常见坑](#常见坑)
 
 ---
 
@@ -169,11 +170,60 @@ ls $STATE/suggestions/done/
 
 ---
 
-## 阶段 3:挂 launchd 自动调度(5 分钟)
+## 阶段 3:挂 Codex 原生 Stop hook(一键脚本,1 分钟)
 
-**目的**:让 `compile-preflight → compile` 每 5 分钟自动跑一次,不用你手动触发。
+**目的**:让 Codex 每次对话结束自动触发 stop-review,不再需要手工构造 payload。完成这一步后,你正常用 `codex` / `codex exec` 就自动产出 pending suggestion。
 
-### 3.1 生成你本机的 plist
+### 3.1 运行安装脚本
+
+```bash
+./scripts/install-codex-hook.sh
+```
+
+脚本行为:
+
+1. 前置检查:Python 3.11+、venv、`.env.provider`、`codex` CLI
+2. 备份现有 `~/.codex/hooks.json` 到 `~/.codex/hooks.json.bak.<timestamp>`
+3. 在 `Stop` event 下**幂等**追加一条带标识(`codex-self-evolution-plugin managed`)的 hook entry:
+   - `bash -c 'set -a; . .env.provider; set +a; exec .venv/bin/python -m codex_self_evolution.cli stop-review --from-stdin'`
+   - 自 source `.env.provider` 保证进程能拿到 `MINIMAX_API_KEY`
+   - 超时 10 秒(主进程只耗 ~100ms,真正 reviewer 调用在后台 subprocess 异步,不阻塞 Codex)
+4. 识别 legacy 手工装过的 entry(命令指向同一个 CLI 但没 marker),**升级而非重复追加**
+5. 检查 `~/.codex/config.toml` 是否有 `[shell_environment_policy] inherit = "all"`,没有给提示(建议加,防止 Codex 剥掉 env)
+
+### 3.2 验证
+
+新开一个终端,跑:
+
+```bash
+codex exec 'Say one sentence in Chinese to test my Stop hook.'
+```
+
+等约 15-30 秒(Codex 回复 → Stop hook 触发 → 后台 MiniMax 调用完成):
+
+```bash
+ls -t data/suggestions/pending/ | head -3
+```
+
+有新 envelope 文件就说明端到端闭环通了。
+
+### 3.3 卸载
+
+```bash
+./scripts/uninstall-codex-hook.sh
+```
+
+- 只删带 marker 的条目,**不会误删** vibe-island / luna 等其他工具的 hook
+- 备份一份到 `~/.codex/hooks.json.bak.<timestamp>`
+- 不自动清理:`.bashrc` 的 `export MINIMAX_*`、`config.toml` 的 `shell_environment_policy`、仓库的 `.venv` 和 `.env.provider`——它们可能是你其他工具共用的,脚本不碰
+
+---
+
+## 阶段 4:挂 launchd 自动调度(5 分钟)
+
+**目的**:让 `compile-preflight → compile` 每 5 分钟自动跑一次,消化阶段 3 产出的 pending envelope,不用你手动触发。
+
+### 4.1 生成你本机的 plist
 
 模板在 `docs/launchd/com.codex-self-evolution.preflight.plist`。复制一份出来填空:
 
@@ -197,7 +247,7 @@ cp docs/launchd/com.codex-self-evolution.preflight.plist \
 -m codex_self_evolution.cli compile --once --state-dir data --backend script
 ```
 
-### 3.2 装载 launchd job
+### 4.2 装载 launchd job
 
 ```bash
 # 拷到 ~/Library/LaunchAgents/(用户级,不需要 sudo)
@@ -209,7 +259,7 @@ launchctl load ~/Library/LaunchAgents/com.codex-self-evolution.preflight.plist
 launchctl start com.codex-self-evolution.preflight
 ```
 
-### 3.3 观察
+### 4.3 观察
 
 ```bash
 # 看 job 是否在 launchd 注册表里
@@ -226,7 +276,7 @@ tail -f $REPO/data/scheduler/launchd.stderr.log
 cat $REPO/data/compiler/last_receipt.json
 ```
 
-### 3.4 卸载
+### 4.4 卸载
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.codex-self-evolution.preflight.plist

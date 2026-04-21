@@ -3,6 +3,8 @@
 > 语言：**中文** | [English](README.md)
 >
 > 第一次在本机起步？直接看 [docs/getting-started.md](docs/getting-started.md) 按阶段跑一遍。
+>
+> 已经搭好环境，只想一键挂 Codex Stop hook？跑 `./scripts/install-codex-hook.sh`（卸载用 `uninstall-codex-hook.sh`）。
 
 一个本地的 Codex 插件，运行分阶段的自我进化循环：
 

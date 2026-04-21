@@ -3,6 +3,9 @@
 > Language: **English** | [中文](README_zh.md)
 >
 > First time here? Jump to the step-by-step quickstart: [docs/getting-started.md](docs/getting-started.md) (中文 only, for now).
+>
+> Already set up? One-shot install of the Codex Stop hook:
+> `./scripts/install-codex-hook.sh` (and `uninstall-codex-hook.sh` to remove).
 
 A local Codex plugin that runs a staged self-evolution loop:
 
