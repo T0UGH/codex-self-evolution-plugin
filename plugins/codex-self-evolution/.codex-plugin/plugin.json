@@ -1,6 +1,6 @@
 {
   "name": "codex-self-evolution",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Scheduled self-evolution loop with stable background memory, provider-backed stop review, explicit suggestion states, launchd-style compiler preflight, focused recall, and managed skills.",
   "author": {
     "name": "T0UGH",
@@ -23,7 +23,15 @@
     },
     {
       "name": "compile",
-      "command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend script"
+      "command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend agent:opencode"
+    },
+    {
+      "name": "scan",
+      "command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution scan --backend agent:opencode"
+    },
+    {
+      "name": "status",
+      "command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution status"
     },
     {
       "name": "recall",
@@ -37,7 +45,8 @@
   "hooks": "./hooks.json",
   "scheduler": {
     "recommended": "launchd",
+    "scan_command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution scan --backend agent:opencode",
     "preflight_command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution compile-preflight --state-dir \"$CODEX_STATE_DIR\"",
-    "compile_command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend script"
+    "compile_command": "uvx --from git+https://github.com/T0UGH/codex-self-evolution-plugin codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend agent:opencode"
   }
 }

@@ -4,6 +4,34 @@
 
 ---
 
+## ✅ 2026-04-21 P0-5 marketplace `plugin.json` 对齐新 backend + 新命令(已完成)
+
+**背景**:`plugins/codex-self-evolution/.codex-plugin/plugin.json` 里 compile
+命令硬编码 `--backend script`,scheduler 字段还在用 compile-preflight +
+compile 两步串。这两处跟 P0-2(scan)+ P0-3(install-scheduler)+
+agent:opencode 修通都脱节了。
+
+**落地**:
+
+- `commands[compile].command`:`--backend script` → `--backend agent:opencode`
+- 新增 `commands[scan]`:`scan --backend agent:opencode`,对外暴露 P0-2
+  新命令
+- 新增 `commands[status]`:`status`,对外暴露 P0-4 新命令
+- `scheduler.scan_command` 新增:`scan --backend agent:opencode`(推荐路径)
+- `scheduler.compile_command` 保留做兼容,backend 也改成 agent:opencode
+- `version`: 0.2.0 → 0.3.0
+
+注意:`gap-analysis` 文档里记过 Codex CLI 0.122.0 **还不读**
+plugin manifest 里的 hooks 字段,所以这些改动现在是"forward-compatible
+housekeeping"。等 Codex 放开 plugin hooks(他们的 hooks 还在 active
+development),这些字段立即生效,不需要再跑一轮对齐。
+
+**没改**:`hooks: "./hooks.json"` 声明仍在,hooks.json 文件仍不存在。
+这是故意的 —— 补个占位等 Codex 支持时再填,现在 install-codex-hook.sh
+是唯一可用路径。
+
+---
+
 ## ✅ 2026-04-21 P0-4 `status` 诊断命令(已完成)
 
 **背景**:装完 hooks + scheduler 后,用户没有一个命令能回答"装对了吗?
