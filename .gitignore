@@ -7,6 +7,8 @@ __pycache__/
 .venv/
 venv/
 build/
+dist/
+*.egg-info/
 uv.lock
 
 # Claude Code local config

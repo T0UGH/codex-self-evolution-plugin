@@ -4,10 +4,55 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-self-evolution-plugin"
-version = "0.1.0"
-description = "Hermes-style self-evolution plugin for Codex."
+version = "0.3.0"
+description = "Self-evolution loop for OpenAI Codex: Stop-hook reviewer + scheduled per-repo memory/recall/skill compilation, zero runtime dependencies."
+readme = "README.md"
 requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+    { name = "T0UGH" },
+]
+keywords = [
+    "codex",
+    "openai",
+    "llm",
+    "memory",
+    "recall",
+    "hooks",
+    "plugin",
+    "self-evolution",
+]
+# Keep runtime deps empty — the plugin only uses stdlib. Provider HTTP calls
+# go through urllib (see review/providers.py), which means ``pip install
+# codex-self-evolution-plugin`` lands nothing extra in the user's env. If you
+# ever add a real dep, also update the "zero runtime dependencies" wording
+# in the description above and in README.
 dependencies = []
+
+# Classifiers drive PyPI search + the project page sidebar. Keep the list
+# narrow: only things that are actually true of this package.
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+[project.urls]
+Homepage = "https://github.com/T0UGH/codex-self-evolution-plugin"
+Repository = "https://github.com/T0UGH/codex-self-evolution-plugin"
+Issues = "https://github.com/T0UGH/codex-self-evolution-plugin/issues"
+"Gap analysis" = "https://github.com/T0UGH/codex-self-evolution-plugin/blob/main/docs/2026-04-21-ready-for-others-gap-analysis.md"
+
+[project.optional-dependencies]
+# `pip install codex-self-evolution-plugin[dev]` for contributors.
+dev = ["pytest>=7", "build>=1.0", "twine>=5"]
 
 [project.scripts]
 codex-self-evolution = "codex_self_evolution.cli:main"
@@ -16,7 +61,11 @@ codex-self-evolution = "codex_self_evolution.cli:main"
 package-dir = {"" = "src"}
 
 [tool.setuptools.package-data]
-codex_self_evolution = ["review/prompt.md", "recall/policy.md", "recall/session_recall.md"]
+codex_self_evolution = [
+    "review/prompt.md",
+    "recall/policy.md",
+    "recall/session_recall.md",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

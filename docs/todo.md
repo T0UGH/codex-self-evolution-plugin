@@ -4,6 +4,57 @@
 
 ---
 
+## ✅ 2026-04-21 P2(原标"跳过")PyPI 发包 v0.3.0(已完成)
+
+**意外提前做掉**:gap-analysis 原本标 P2 "依赖外部,等 Codex 放开 plugin
+hooks 再做"。实际 PyPI 发包跟 plugin hooks 没依赖关系 —— PyPI 解决的是
+"用户怎么装 Python 包",跟 Codex 怎么识别插件是两码事。用户要求做掉,
+半小时搞定。
+
+**落地**:
+
+- `pyproject.toml`:补 publish-ready metadata
+  - bump `version` 0.1.0 → 0.3.0(对齐 plugin.json)
+  - `readme = "README.md"` 关联 PyPI 项目页长说明
+  - `license = { file = "LICENSE" }` 关联 LICENSE 文件(P1-8 刚加)
+  - `authors = [{name = "T0UGH"}]`
+  - 8 条 keywords + 10 条 classifiers(License / Python 3.11-3.12 / OS /
+    Topic / Development Status: Beta)
+  - `[project.urls]` 4 条(Homepage / Repository / Issues / Gap analysis)
+  - `[project.optional-dependencies].dev = ["pytest", "build", "twine"]`
+  - `dependencies = []` 保留(plugin 核心全 stdlib,0 第三方依赖 ——
+    是个卖点,改也要同步改 description 里的文字)
+- `.gitignore`:加 `dist/` + `*.egg-info/`(build 副产物,不 track)
+- 装 `build` + `twine`,`python -m build` 产出:
+  - `codex_self_evolution_plugin-0.3.0-py3-none-any.whl`(61K,30 个 py +
+    3 个 md 资源)
+  - `codex_self_evolution_plugin-0.3.0.tar.gz`(87K)
+  - `twine check` 两个都 PASSED
+
+**发布**:
+
+```
+TWINE_USERNAME=__token__ TWINE_PASSWORD=<token> twine upload --non-interactive dist/*
+→ https://pypi.org/project/codex-self-evolution-plugin/0.3.0/
+```
+
+**即时验证**:
+
+```
+$ python3 -m venv /tmp/verify && /tmp/verify/bin/pip install codex-self-evolution-plugin
+$ /tmp/verify/bin/codex-self-evolution status --help
+usage: codex-self-evolution status [-h] [--home HOME]
+```
+
+fresh venv pip install 秒过,CLI entry point 工作,metadata(license/
+URLs/version)在 `pip show` 里都正确显示。
+
+**安全 caveat**:发布用的 token 在用户 prompt 里明文出现,发完立刻 PyPI
+Account Settings → API tokens → 删除 + 重新生成新 token。gh OAuth 之外
+的任何 secret 都不要二次出现在 chat。
+
+---
+
 ## ✅ 2026-04-21 P1-6 结构化日志落盘(已完成)
 
 **背景**:reviewer 超时 / 401 / 模型返 bad JSON / compile 抛异常,任何

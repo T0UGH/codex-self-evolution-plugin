@@ -1,2 +1,0 @@
-[console_scripts]
-codex-self-evolution = codex_self_evolution.cli:main
