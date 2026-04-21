@@ -25,48 +25,61 @@ The compiler is the only component that writes final assets (memory, recall, man
 
 ## Install
 
-> **Reality check**: first-time setup is ~20 minutes, not a one-liner. Codex
-> CLI currently does **not** read plugin-manifest hooks
+> Codex CLI currently does **not** read plugin-manifest hooks
 > ([gap analysis](docs/2026-04-21-ready-for-others-gap-analysis.md)), so the
 > plugin is installed by writing directly to `~/.codex/hooks.json` via the
-> provided scripts. Full step-by-step walkthrough:
+> provided scripts. Hooks and the scheduler both invoke the CLI via
+> `uvx --from codex-self-evolution-plugin ...`, so you don't need a long-lived
+> venv or a repo clone. Full step-by-step guide:
 > [docs/getting-started.md](docs/getting-started.md) (中文).
 
-End-to-end happy-path install on macOS (Python 3.11+):
+End-to-end happy-path install on macOS. The only prerequisite is
+[`uv`](https://docs.astral.sh/uv/#installation) (`brew install uv`):
 
 ```bash
-# 1. clone + venv + pip install
-git clone https://github.com/T0UGH/codex-self-evolution-plugin
-cd codex-self-evolution-plugin
-python3 -m venv .venv && .venv/bin/pip install -e .
+# 1. grab the installer scripts (they're small; no pip/venv/clone needed)
+curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/scripts/install-codex-hook.sh -o /tmp/install-codex-hook.sh
+curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/scripts/install-scheduler.sh -o /tmp/install-scheduler.sh
+chmod +x /tmp/install-*.sh
 
-# 2. provider credentials (file lives under ~/.codex-self-evolution/)
+# 2. provider credentials (lives under ~/.codex-self-evolution/)
 mkdir -p ~/.codex-self-evolution
-cp .env.provider.example ~/.codex-self-evolution/.env.provider
+curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/.env.provider.example \
+  -o ~/.codex-self-evolution/.env.provider
 # edit the file and set MINIMAX_API_KEY (or OPENAI_API_KEY / ANTHROPIC_API_KEY)
 
 # 3. Stop + SessionStart hooks in ~/.codex/hooks.json
-./scripts/install-codex-hook.sh
+/tmp/install-codex-hook.sh
 
 # 4. launchd scheduler running `scan --backend agent:opencode` every 5 min
-./scripts/install-scheduler.sh
+/tmp/install-scheduler.sh
 
 # 5. sanity check
-.venv/bin/python -m codex_self_evolution.cli status | python3 -m json.tool
+uvx --from codex-self-evolution-plugin codex-self-evolution status | python3 -m json.tool
 ```
 
-Want to try the pipeline without touching Codex / launchd? Walk through
-[阶段 2 (stage 2)](docs/getting-started.md#阶段-2手动跑一次完整循环2-分钟)
-in the getting-started guide — it drives the reviewer → compile → memory
-loop entirely from the CLI.
+Every invocation after that (hooks, scheduler, manual `status`) runs out of
+uvx's cached wheel (~100ms warm). Bumping the PyPI release auto-upgrades
+next time a hook fires.
 
-Removing everything: `./scripts/uninstall-scheduler.sh` and
-`./scripts/uninstall-codex-hook.sh` are both idempotent and won't touch
-other tools' hooks or launchd jobs.
+**Developer install** (editable, for contributing): clone, `pip install -e .`,
+and use `.venv/bin/codex-self-evolution ...` directly — see
+[阶段 2](docs/getting-started.md#阶段-2手动跑一次完整循环2-分钟)
+in the guide for a walkthrough that drives reviewer → compile → memory
+entirely from the CLI without touching Codex / launchd.
+
+Removing everything: `/tmp/install-scheduler.sh` has a peer
+`uninstall-scheduler.sh` in the same repo; same for `install-codex-hook.sh`.
+Both are idempotent and won't touch other tools' hooks or launchd jobs.
 
 ---
 
 ## Commands
+
+Every subcommand is invokable via
+`uvx --from codex-self-evolution-plugin codex-self-evolution <subcommand>`
+once `uv` is installed. For readability the examples below drop the
+`uvx --from codex-self-evolution-plugin` prefix.
 
 ```bash
 codex-self-evolution session-start --cwd /path/to/repo

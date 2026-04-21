@@ -4,6 +4,61 @@
 
 ---
 
+## ✅ 2026-04-21 全链路切 uvx(不再需要 clone + venv)(已完成)
+
+**背景**:PyPI 0.3.0 发出去之后,所有用到 CLI 的地方都可以从
+`<repo>/.venv/bin/python -m codex_self_evolution.cli ...` 换成
+`uvx --from codex-self-evolution-plugin codex-self-evolution ...`。用户
+不用 clone 仓库 + 建 venv,只需要装 `uv`。
+
+**切了哪些**:
+
+| 位置 | before | after |
+| --- | --- | --- |
+| `install-codex-hook.sh` 装的 hook command | `<venv>/bin/python -m codex_self_evolution.cli ...` | `uvx --from codex-self-evolution-plugin codex-self-evolution ...` |
+| `install-scheduler.sh` 生成的 plist `ProgramArguments` | `[<venv>/bin/python, -m, codex_self_evolution.cli, scan, ...]` | `[$UVX_BIN, --from, codex-self-evolution-plugin, codex-self-evolution, scan, ...]` |
+| `plugins/codex-self-evolution/.codex-plugin/plugin.json` commands + scheduler | `uvx --from git+https://github.com/T0UGH/...` | `uvx --from codex-self-evolution-plugin ...`(走 PyPI wheel,比 git+sdist 快 10x) |
+| README / README_zh 顶部 Install | 5 步 clone+venv | `curl` installer scripts + `brew install uv`,完全不 clone |
+| getting-started 阶段 3/4 脚本行为描述 | venv path | uvx path + 预热说明 |
+
+**没切**(保留 venv):
+
+- `Makefile`(本地 dev target,venv 最快)
+- getting-started 阶段 2 手工演示(开发者 walkthrough)
+- Dockerfile / docker-e2e.sh(容器里 pip install,uvx 冗余)
+- 历史审计文档(docs/todo.md, implementation-plans)
+
+**调优**:
+
+- Stop hook timeout 10 → **20 秒**(warm uvx 1s,冷启动 1-2s,预算充足)
+- SessionStart hook timeout 5 → **15 秒**
+- install 脚本尾部加 `uvx --from codex-self-evolution-plugin codex-self-evolution --help` **预热**,第一次 hook 触发就不用吃 wheel 下载的延迟
+- 版本策略:**latest**(不 pin),PyPI 发新版下次 hook 触发自动升级。CLI
+  要保持 backward compat
+- uvx 路径策略:
+  - Codex `bash -c` hook:**依赖 PATH**(简洁,bash 继承 shell PATH 通常有 uvx)
+  - launchd `ProgramArguments[0]`:**绝对路径**(launchd 强制,不走 PATH)
+  - plist `EnvironmentVariables.PATH`:探测的 uvx dir + opencode dir + 标准
+    `/opt/homebrew/bin:/usr/local/bin:...`
+
+**真机冒烟**:
+
+- uninstall → install 一轮:hook command 换成 uvx 版,timeout 20/15,
+  plist ProgramArguments 换成 uvx 调用
+- `launchctl kickstart` 触发 → `plugin.log` 写入 `{"kind":"scan","exit_code":0,"duration_ms":5}`
+- `codex exec --json` 触发(foreground + </dev/null):plugin.log 写入
+  `{"kind":"session-start","duration_ms":1}` + `{"kind":"stop-review","duration_ms":5,"mode":"from_stdin"}`,warm uvx cache 下毫秒级
+- install/uninstall/re-install 三轮幂等通过
+
+**教训**:P0-0 就记录过 "codex exec --json 在 run_in_background 下会
+hang,stdin 不 close",这次验证时又重复踩了两次。修 bash tool 调用加
+`</dev/null` 后秒通。**今后涉及 codex exec 冒烟,一律前台 + </dev/null**。
+
+**PyPI 包版本未 bump**:plugin.json 和脚本改动都不影响 PyPI 包内容,
+维持 0.3.0。未来改 Python 代码再 bump。
+
+---
+
 ## ✅ 2026-04-21 P2(原标"跳过")PyPI 发包 v0.3.0(已完成)
 
 **意外提前做掉**:gap-analysis 原本标 P2 "依赖外部,等 Codex 放开 plugin

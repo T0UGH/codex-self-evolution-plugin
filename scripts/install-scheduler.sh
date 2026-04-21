@@ -17,12 +17,16 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VENV_PYTHON="$REPO/.venv/bin/python"
 PLUGIN_HOME="$HOME/.codex-self-evolution"
 LOG_DIR="$PLUGIN_HOME/logs"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 LABEL="com.codex-self-evolution.preflight"
 PLIST_PATH="$LAUNCH_AGENTS_DIR/$LABEL.plist"
+# PyPI package name. Scheduler invokes plugin via `uvx --from <pkg>
+# <entry-point>` so the plist doesn't hardcode a repo/venv path — users
+# upgrading the plugin just get it on the next PyPI release.
+PYPI_PACKAGE="codex-self-evolution-plugin"
+ENTRY_POINT="codex-self-evolution"
 # Default: drain every 5 minutes. Matches the old hand-edited plist and is
 # a reasonable tradeoff — compile itself takes seconds to minutes, and
 # suggestions sitting in pending/ cost nothing until they're compiled.
@@ -37,10 +41,10 @@ fail()  { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ---------- preflight ----------
 info "preflight checks"
-[ -x "$VENV_PYTHON" ] || fail "$VENV_PYTHON not executable. Run scripts/install-codex-hook.sh first (it sets up the venv)."
-"$VENV_PYTHON" -c 'from codex_self_evolution.cli import main' \
-    || fail "venv python cannot import codex_self_evolution.cli"
-echo "  venv python OK"
+command -v uvx >/dev/null 2>&1 || fail "uvx not found on PATH. Install with: brew install uv"
+UVX_BIN="$(command -v uvx)"
+UVX_DIR="$(dirname "$UVX_BIN")"
+echo "  uvx OK at $UVX_BIN"
 
 mkdir -p "$LAUNCH_AGENTS_DIR" "$LOG_DIR"
 
@@ -59,14 +63,18 @@ else
 fi
 # launchd default PATH is narrow. Always include /opt/homebrew/bin (Apple
 # Silicon) and /usr/local/bin (Intel) even if opencode wasn't found today —
-# user may install it later without re-running this script.
+# user may install it later without re-running this script. Also prepend
+# the uvx directory we actually detected above so the plist can resolve
+# `uvx` regardless of whether it was installed via brew (/opt/homebrew/bin)
+# or the astral curl script (~/.local/bin).
 PLIST_PATH_ENV="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-if [ -n "$OPENCODE_DIR" ]; then
+for dir in "$UVX_DIR" "$OPENCODE_DIR"; do
+    [ -z "$dir" ] && continue
     case ":$PLIST_PATH_ENV:" in
-        *":$OPENCODE_DIR:"*) ;;  # already included
-        *) PLIST_PATH_ENV="$OPENCODE_DIR:$PLIST_PATH_ENV" ;;
+        *":$dir:"*) ;;  # already present
+        *) PLIST_PATH_ENV="$dir:$PLIST_PATH_ENV" ;;
     esac
-fi
+done
 
 # ---------- clean up any previous install ----------
 # bootout is idempotent-ish: noop if the service isn't loaded. Stderr is
@@ -88,9 +96,10 @@ cat > "$PLIST_PATH" <<PLIST
 
     <key>ProgramArguments</key>
     <array>
-        <string>$VENV_PYTHON</string>
-        <string>-m</string>
-        <string>codex_self_evolution.cli</string>
+        <string>$UVX_BIN</string>
+        <string>--from</string>
+        <string>$PYPI_PACKAGE</string>
+        <string>$ENTRY_POINT</string>
         <string>scan</string>
         <string>--backend</string>
         <string>$BACKEND</string>
@@ -127,6 +136,14 @@ info "loading $LABEL into launchd"
 # bootstrap is the modern replacement for `load -w`. domain-target gui/<uid>
 # means "user's GUI session" — same as the old "user" domain for LaunchAgents.
 launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH"
+
+# ---------- warm uvx cache ----------
+# First uvx invocation downloads the wheel + builds an ephemeral venv
+# (~1-2s). Subsequent invocations hit cache (~100ms). Warming now means
+# the very first scheduler tick won't eat timeout budget on wheel download.
+info "warming uvx cache (first run downloads wheel; subsequent runs hit cache)"
+uvx --from "$PYPI_PACKAGE" "$ENTRY_POINT" --help >/dev/null 2>&1 || \
+    warn "  uvx warmup failed — first scheduler tick may be slower than steady state"
 
 info "done."
 echo ""

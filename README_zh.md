@@ -24,44 +24,57 @@ compiler 是唯一负责最终资产写入（memory、recall、managed skills、
 
 ## 安装
 
-> **Reality check**：第一次装完整链路大约 **20 分钟**,不是一行命令。Codex
-> CLI 目前**还不读** plugin manifest 里的 hooks 字段
+> Codex CLI 目前**还不读** plugin manifest 里的 hooks 字段
 > ([差距分析](docs/2026-04-21-ready-for-others-gap-analysis.md)),所以我们
-> 直接往 `~/.codex/hooks.json` 写 marker-protected entry。完整分阶段指南:
+> 直接往 `~/.codex/hooks.json` 写 marker-protected entry。hook 和 scheduler
+> 都通过 `uvx --from codex-self-evolution-plugin ...` 调 CLI,**不需要 clone
+> 仓库,也不需要常驻 venv**。完整分阶段指南:
 > [docs/getting-started.md](docs/getting-started.md)。
 
-macOS + Python 3.11+ 的 happy path:
+macOS happy path。唯一前置:[`uv`](https://docs.astral.sh/uv/#installation)
+(`brew install uv`):
 
 ```bash
-# 1. clone + venv + pip install
-git clone https://github.com/T0UGH/codex-self-evolution-plugin
-cd codex-self-evolution-plugin
-python3 -m venv .venv && .venv/bin/pip install -e .
+# 1. 拿 installer 脚本(脚本本身很小,不 clone 仓库)
+curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/scripts/install-codex-hook.sh -o /tmp/install-codex-hook.sh
+curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/scripts/install-scheduler.sh -o /tmp/install-scheduler.sh
+chmod +x /tmp/install-*.sh
 
-# 2. provider 凭据(文件放 ~/.codex-self-evolution/ 下)
+# 2. provider 凭据(放 ~/.codex-self-evolution/ 下)
 mkdir -p ~/.codex-self-evolution
-cp .env.provider.example ~/.codex-self-evolution/.env.provider
+curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/.env.provider.example \
+  -o ~/.codex-self-evolution/.env.provider
 # 编辑并填 MINIMAX_API_KEY(或 OPENAI_API_KEY / ANTHROPIC_API_KEY)
 
-# 3. 往 ~/.codex/hooks.json 装 Stop + SessionStart entries
-./scripts/install-codex-hook.sh
+# 3. 往 ~/.codex/hooks.json 装 Stop + SessionStart
+/tmp/install-codex-hook.sh
 
 # 4. launchd scheduler(每 5 分钟跑 scan --backend agent:opencode)
-./scripts/install-scheduler.sh
+/tmp/install-scheduler.sh
 
 # 5. 盘点一下
-.venv/bin/python -m codex_self_evolution.cli status | python3 -m json.tool
+uvx --from codex-self-evolution-plugin codex-self-evolution status | python3 -m json.tool
 ```
 
-只想先跑 CLI 闭环不碰 Codex / launchd?看
-[阶段 2 手动跑一次完整循环](docs/getting-started.md#阶段-2手动跑一次完整循环2-分钟)。
+后续每次调用(hooks、scheduler、手动 `status`)都走 uvx cached wheel,warm
+启动 ~100ms。发布新 PyPI 版本时下次 hook 触发自动升级。
 
-完全清理:`./scripts/uninstall-scheduler.sh` + `./scripts/uninstall-codex-hook.sh`,
-都是幂等的,不碰其他工具的 hook / launchd job。
+**开发者安装**(editable,贡献代码):clone + `pip install -e .`,用
+`.venv/bin/codex-self-evolution` 直接调。
+[阶段 2](docs/getting-started.md#阶段-2手动跑一次完整循环2-分钟) 给了
+完整 CLI 驱动 reviewer → compile → memory 的 walkthrough,不需要 Codex /
+launchd。
+
+完全清理:`/tmp/install-scheduler.sh` 同目录有 `uninstall-scheduler.sh`,
+`install-codex-hook.sh` 同理。都是幂等,不碰其他工具的 hook / launchd job。
 
 ---
 
 ## 命令
+
+所有子命令都可以通过
+`uvx --from codex-self-evolution-plugin codex-self-evolution <subcmd>`
+调用,以下示例省略这个前缀:
 
 ```bash
 codex-self-evolution session-start --cwd /path/to/repo

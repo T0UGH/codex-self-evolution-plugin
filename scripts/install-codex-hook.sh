@@ -14,8 +14,6 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOOKS_JSON="$HOME/.codex/hooks.json"
 CONFIG_TOML="$HOME/.codex/config.toml"
-VENV="$REPO/.venv"
-VENV_PYTHON="$VENV/bin/python"
 # User config + per-project state all live under ~/.codex-self-evolution,
 # parallel to ~/.claude/. Keeps the plugin's source tree out of the user's
 # dotfile concerns and out of every repo they work in.
@@ -23,6 +21,11 @@ PLUGIN_HOME="$HOME/.codex-self-evolution"
 ENV_FILE="$PLUGIN_HOME/.env.provider"
 LEGACY_ENV_FILE="$REPO/.env.provider"
 ENV_EXAMPLE="$REPO/.env.provider.example"
+# PyPI package name. We pull via `uvx --from <pkg> <entry-point>` so the
+# user's environment stays clean (no venv to create/maintain, no global
+# pip install, no clone required long-term).
+PYPI_PACKAGE="codex-self-evolution-plugin"
+ENTRY_POINT="codex-self-evolution"
 # Embedded in the hook command as a bash no-op (`:` swallows its args), so the
 # uninstall script can grep for it without us needing to introduce a custom
 # JSON field that Codex's schema validator might reject.
@@ -35,33 +38,17 @@ fail()  { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 # ---------- preflight ----------
 info "preflight checks"
 
-command -v python3 >/dev/null 2>&1 || fail "python3 not found on PATH"
-
-PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-case "$PY_VER" in
-    3.11|3.12|3.13|3.14|3.15|3.16) ;;
-    *) fail "python3 >= 3.11 required, found $PY_VER" ;;
-esac
-echo "  python3 $PY_VER OK"
+# `uv`/`uvx` is the only runtime we require — no more clone-a-repo +
+# create-a-venv + pip-install-editable dance. If the user doesn't have it
+# yet, point them at the official installer rather than auto-installing
+# (we don't want to surprise-curl a binary into their PATH).
+if ! command -v uvx >/dev/null 2>&1; then
+    fail "uvx not found on PATH. Install with: brew install uv  (or: curl -LsSf https://astral.sh/uv/install.sh | sh)"
+fi
+UVX_VERSION=$(uvx --version 2>/dev/null | head -1)
+echo "  uvx OK ($UVX_VERSION)"
 
 command -v codex >/dev/null 2>&1 || warn "codex CLI not found on PATH (hook will still be installed; just won't fire until codex is installed)"
-
-if [ ! -x "$VENV_PYTHON" ]; then
-    warn "$VENV_PYTHON not found"
-    read -r -p "    create a venv and pip install -e . now? [y/N] " reply
-    if [[ "$reply" =~ ^[Yy]$ ]]; then
-        python3 -m venv "$VENV"
-        "$VENV_PYTHON" -m pip install --quiet --upgrade pip
-        "$VENV_PYTHON" -m pip install --quiet -e "$REPO"
-        echo "  venv created and plugin installed editable"
-    else
-        fail "aborting: venv required so the hook command can run the plugin"
-    fi
-fi
-# Confirm the entry point resolves.
-"$VENV_PYTHON" -c 'from codex_self_evolution.cli import main' \
-    || fail "venv python cannot import codex_self_evolution.cli (run: $VENV_PYTHON -m pip install -e $REPO)"
-echo "  venv python imports CLI OK"
 
 mkdir -p "$PLUGIN_HOME"
 
@@ -97,15 +84,16 @@ fi
 # ---------- upsert the hooks ----------
 info "upserting Stop + SessionStart hooks in $HOOKS_JSON"
 
-python3 - "$HOOKS_JSON" "$REPO" "$MARKER" "$ENV_FILE" <<'PY'
+python3 - "$HOOKS_JSON" "$MARKER" "$ENV_FILE" "$PYPI_PACKAGE" "$ENTRY_POINT" <<'PY'
 import json
 import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1])
-repo = sys.argv[2]
-marker = sys.argv[3]
-env_file = sys.argv[4]
+marker = sys.argv[2]
+env_file = sys.argv[3]
+pypi_package = sys.argv[4]
+entry_point = sys.argv[5]
 
 if path.exists():
     try:
@@ -120,30 +108,31 @@ else:
 hooks = data.setdefault("hooks", {})
 
 # Stop hook: runs the reviewer. Needs .env.provider for MINIMAX_API_KEY etc.
-# Timeout 10s is fine because --from-stdin detaches the real reviewer
-# subprocess — the hook itself just writes a tempfile and exits.
+# Timeout 20s handles cold-start uvx cases (first invocation after a plugin
+# update ~1-2s, warm ≤1s). --from-stdin detaches the real reviewer subprocess
+# so the hook itself just writes a tempfile, spawns, and exits.
 stop_command = (
     f"bash -c ': {marker}; "
     f"set -a; . {env_file} 2>/dev/null; set +a; "
-    f"exec {repo}/.venv/bin/python -m codex_self_evolution.cli stop-review --from-stdin'"
+    f"exec uvx --from {pypi_package} {entry_point} stop-review --from-stdin'"
 )
 stop_entry = {
-    "hooks": [{"type": "command", "command": stop_command, "timeout": 10}]
+    "hooks": [{"type": "command", "command": stop_command, "timeout": 20}]
 }
 
 # SessionStart hook: synchronously assembles stable-background + recall
 # policy, emits Codex `hookSpecificOutput.additionalContext` JSON. Does NOT
-# need .env.provider (no LLM call). Timeout 5s is ample — this path just
-# reads a few MD files and concatenates them.
+# need .env.provider (no LLM call). Timeout 15s covers cold uvx; warm hits
+# ~150ms for reading a few MD files.
 # Verified against codex-cli 0.122.0 that additionalContext actually gets
 # injected as DeveloperInstructions in the model session. See
 # docs/todo.md 2026-04-21 P0-0 entry for the research trail.
 session_start_command = (
     f"bash -c ': {marker}; "
-    f"exec {repo}/.venv/bin/python -m codex_self_evolution.cli session-start --from-stdin'"
+    f"exec uvx --from {pypi_package} {entry_point} session-start --from-stdin'"
 )
 session_start_entry = {
-    "hooks": [{"type": "command", "command": session_start_command, "timeout": 5}]
+    "hooks": [{"type": "command", "command": session_start_command, "timeout": 15}]
 }
 
 
@@ -201,6 +190,15 @@ if [ -f "$CONFIG_TOML" ]; then
 else
     warn "$CONFIG_TOML not found — run codex at least once to create it, then re-run this script"
 fi
+
+# ---------- warm uvx cache ----------
+# First uvx invocation downloads the wheel + builds an ephemeral venv
+# (~1-2s). We warm before the first Stop/SessionStart fire so the user's
+# first Codex session doesn't eat the hook timeout budget on a wheel
+# download.
+info "warming uvx cache"
+uvx --from "$PYPI_PACKAGE" "$ENTRY_POINT" --help >/dev/null 2>&1 || \
+    warn "  uvx warmup failed — first hook fire may be slower than steady state"
 
 info "done."
 echo ""

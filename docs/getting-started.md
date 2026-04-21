@@ -190,20 +190,21 @@ ls $STATE/suggestions/done/
 
 脚本行为:
 
-1. 前置检查:Python 3.11+、venv、`~/.codex-self-evolution/.env.provider`、`codex` CLI
+1. 前置检查:`uvx` 在 PATH、`~/.codex-self-evolution/.env.provider`、`codex` CLI(**不再要求 venv**)
 2. 如果检测到 repo 根有老的 `.env.provider`,**自动 `mv` 到 `~/.codex-self-evolution/.env.provider`**(单一来源,避免两处配置漂移)
 3. 备份现有 `~/.codex/hooks.json` 到 `~/.codex/hooks.json.bak.<timestamp>`
 4. 在 `Stop` event 下**幂等**追加一条带标识(`codex-self-evolution-plugin managed`)的 hook entry:
-   - `bash -c 'set -a; . ~/.codex-self-evolution/.env.provider; set +a; exec .venv/bin/python -m codex_self_evolution.cli stop-review --from-stdin'`
+   - `bash -c 'set -a; . ~/.codex-self-evolution/.env.provider; set +a; exec uvx --from codex-self-evolution-plugin codex-self-evolution stop-review --from-stdin'`
    - 自 source `~/.codex-self-evolution/.env.provider` 保证进程能拿到 `MINIMAX_API_KEY`
-   - 超时 10 秒(主进程只耗 ~100ms,真正 reviewer 调用在后台 subprocess 异步,不阻塞 Codex)
+   - 超时 20 秒(主进程只耗 ~100ms 读 stdin + spawn 后台 reviewer;uvx warm cache 下几乎瞬时,冷启动 1-2s 仍在预算内)
 5. 在 `SessionStart` event 下同样幂等追加一条 entry:
-   - `bash -c 'exec .venv/bin/python -m codex_self_evolution.cli session-start --from-stdin'`
+   - `bash -c 'exec uvx --from codex-self-evolution-plugin codex-self-evolution session-start --from-stdin'`
    - **不需要 source `.env.provider`**(不调 LLM,只读 memory/recall 本地文件组 additionalContext)
-   - 超时 5 秒(~100ms 够用)
+   - 超时 15 秒(warm ~150ms,预留冷启动余量)
    - 输出 Codex 原生协议 JSON `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext": combined_prefix}}`,Codex 把它注入为 DeveloperInstructions → 模型每个 session 自动拿到 `USER.md + MEMORY.md + session_recall skill + recall policy`
 6. 识别 legacy 手工装过的 entry(命令指向同一个 CLI 但没 marker),**升级而非重复追加**
 7. 检查 `~/.codex/config.toml` 是否有 `[shell_environment_policy] inherit = "all"`,没有给提示(建议加,防止 Codex 剥掉 env)
+8. 预热 uvx cache(`uvx --from codex-self-evolution-plugin codex-self-evolution --help`),第一次 hook 触发就不用吃 wheel 下载的延迟
 
 ### 3.2 验证
 
@@ -273,12 +274,13 @@ JSON 丢弃(不会报错,就是"悄悄没效果")。如果模型答不出 XANADU
 
 脚本行为:
 
-1. 前置检查:`$REPO/.venv/bin/python` 能 import CLI
-2. 自动探测本机 `opencode` 路径,写到 plist 的 `EnvironmentVariables.PATH` 里(launchd 默认 PATH 很窄,不含 Homebrew/usr/local,**不做这步 scheduler 永远 fallback 到 script backend**)
-3. 写 `~/Library/LaunchAgents/com.codex-self-evolution.preflight.plist`,命令是
-   `$VENV/bin/python -m codex_self_evolution.cli scan --backend agent:opencode`
+1. 前置检查:`uvx` 在 PATH(**不再要求 venv**)
+2. 自动探测 `uvx` + `opencode` 路径,两个 dir 都写进 plist `EnvironmentVariables.PATH`(launchd 默认 PATH 不含 Homebrew/usr/local/~/.local/bin,**不做这步 scheduler 要么起不来,要么永远 fallback 到 script backend**)
+3. 写 `~/Library/LaunchAgents/com.codex-self-evolution.preflight.plist`,`ProgramArguments` 是
+   `[$UVX_BIN, --from, codex-self-evolution-plugin, codex-self-evolution, scan, --backend, agent:opencode]`(`ProgramArguments[0]` launchd 要求绝对路径,install 时探测)
 4. `launchctl bootout`(清老的,容错)→ `bootstrap`(新 API)加载
 5. 幂等:再跑一次会 bootout 后重装,仍然只有一条 job
+6. 预热 uvx cache,避免第一次 tick 吃 wheel 下载时间
 
 可用 env 变量覆盖默认:
 
