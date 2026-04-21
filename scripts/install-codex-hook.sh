@@ -16,7 +16,12 @@ HOOKS_JSON="$HOME/.codex/hooks.json"
 CONFIG_TOML="$HOME/.codex/config.toml"
 VENV="$REPO/.venv"
 VENV_PYTHON="$VENV/bin/python"
-ENV_FILE="$REPO/.env.provider"
+# User config + per-project state all live under ~/.codex-self-evolution,
+# parallel to ~/.claude/. Keeps the plugin's source tree out of the user's
+# dotfile concerns and out of every repo they work in.
+PLUGIN_HOME="$HOME/.codex-self-evolution"
+ENV_FILE="$PLUGIN_HOME/.env.provider"
+LEGACY_ENV_FILE="$REPO/.env.provider"
 ENV_EXAMPLE="$REPO/.env.provider.example"
 # Embedded in the hook command as a bash no-op (`:` swallows its args), so the
 # uninstall script can grep for it without us needing to introduce a custom
@@ -58,6 +63,17 @@ fi
     || fail "venv python cannot import codex_self_evolution.cli (run: $VENV_PYTHON -m pip install -e $REPO)"
 echo "  venv python imports CLI OK"
 
+mkdir -p "$PLUGIN_HOME"
+
+# One-shot migration: if the user had the old repo-root .env.provider from
+# a previous install, move it into the home config dir. We use `mv` (not copy)
+# so there's a single source of truth — accidentally hand-editing the stale
+# repo copy would be a confusing failure mode.
+if [ ! -f "$ENV_FILE" ] && [ -f "$LEGACY_ENV_FILE" ]; then
+    mv "$LEGACY_ENV_FILE" "$ENV_FILE"
+    info "migrated legacy .env.provider from $LEGACY_ENV_FILE → $ENV_FILE"
+fi
+
 if [ ! -f "$ENV_FILE" ]; then
     warn ".env.provider missing at $ENV_FILE"
     warn "  the hook will still install, but reviewer calls will fail with 401 unless"
@@ -66,7 +82,7 @@ if [ ! -f "$ENV_FILE" ]; then
         warn "  tip: cp $ENV_EXAMPLE $ENV_FILE  then fill in the key"
     fi
 else
-    echo "  .env.provider present"
+    echo "  .env.provider present at $ENV_FILE"
 fi
 
 # ---------- backup ----------
@@ -81,7 +97,7 @@ fi
 # ---------- upsert the hook ----------
 info "upserting Stop hook in $HOOKS_JSON"
 
-python3 - "$HOOKS_JSON" "$REPO" "$MARKER" <<'PY'
+python3 - "$HOOKS_JSON" "$REPO" "$MARKER" "$ENV_FILE" <<'PY'
 import json
 import pathlib
 import sys
@@ -89,6 +105,7 @@ import sys
 path = pathlib.Path(sys.argv[1])
 repo = sys.argv[2]
 marker = sys.argv[3]
+env_file = sys.argv[4]
 
 if path.exists():
     try:
@@ -105,7 +122,7 @@ stop_list = hooks.setdefault("Stop", [])
 
 command = (
     f"bash -c ': {marker}; "
-    f"set -a; . {repo}/.env.provider 2>/dev/null; set +a; "
+    f"set -a; . {env_file} 2>/dev/null; set +a; "
     f"exec {repo}/.venv/bin/python -m codex_self_evolution.cli stop-review --from-stdin'"
 )
 new_entry = {
@@ -166,5 +183,8 @@ info "done."
 echo ""
 echo "Next steps:"
 echo "  1. Start a new codex session: codex (or codex exec 'hi')"
-echo "  2. After your first turn, inspect $REPO/data/suggestions/pending/"
+echo "  2. After your first turn, inspect the per-project bucket:"
+echo "       ls $PLUGIN_HOME/projects/"
+echo "       # each repo gets its own dir named after its path (/ → -)"
+echo "       ls $PLUGIN_HOME/projects/*/suggestions/pending/"
 echo "  3. To remove this hook later: $REPO/scripts/uninstall-codex-hook.sh"

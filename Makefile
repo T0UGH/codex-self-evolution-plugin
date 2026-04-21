@@ -1,6 +1,9 @@
 PYTHON ?= /Users/haha/hermes-agent/venv/bin/python3.11
 IMAGE ?= codex-self-evolution-e2e
-ENV_FILE ?= .env.provider
+# User config lives under ~/.codex-self-evolution/ (installed by
+# scripts/install-codex-hook.sh). Override ENV_FILE=.env.provider if you
+# still keep a repo-root copy, or point anywhere else.
+ENV_FILE ?= $(HOME)/.codex-self-evolution/.env.provider
 
 .PHONY: test docker-build docker-run docker-e2e preflight e2e-local provider-smoke-minimax provider-smoke-openai provider-smoke-anthropic
 

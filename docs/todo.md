@@ -4,34 +4,34 @@
 
 ---
 
-## 2026-04-21 pending suggestions 跨 repo 统一入口
+## ✅ 2026-04-21 pending suggestions 跨 repo 统一入口(已完成)
 
-### 背景
+**最终方案**:借鉴 Claude Code 的 `~/.claude/projects/<mangled-abs-path>/` 设计,
+每个 repo 在 `~/.codex-self-evolution/projects/-<abs-path-with-slashes-as-dashes>/`
+下有自己独立的 bucket。保留 per-repo 隔离的语义,同时把所有 repo 的数据归集到
+home 下,**原始代码仓库完全不再被塞 `data/`**。
 
-现在每个 Codex session 在自己的 `cwd` 下写 `data/suggestions/pending/`,今天一上午有效 pending 就散在 3 个仓库里:
+**落地位置**:
 
-- `~/code/github/codex-self-evolution-plugin/data/suggestions/pending/`
-- `~/go/src/code.byted.org/ad/incentive/data/suggestions/pending/`
-- `~/go/src/code.byted.org/luna/server_cc_marketplace/data/suggestions/pending/`
+- `src/codex_self_evolution/config.py`:
+  - 新增 `HOME_DIR_ENV = "CODEX_SELF_EVOLUTION_HOME"` / `get_home_dir()`
+  - 新增 `mangle_project_path()`(`/` → `-`,和 Claude 一致)
+  - `build_paths(state_dir=None)` 默认路由到
+    `<home>/projects/<mangled-cwd>/` 而不是 `<cwd>/data/`
+- `scripts/install-codex-hook.sh`:
+  - hook command 改 source `~/.codex-self-evolution/.env.provider`
+  - 如果检测到 repo 根有老 `.env.provider`,自动 `mv` 到 home
+  - "Next steps" 打印全局 bucket 的 glob
+- `Makefile`:`ENV_FILE` 默认指向 `~/.codex-self-evolution/.env.provider`
+- README.md / README_zh.md:目录布局图、`--state-dir` 默认值、`.env.provider`
+  位置同步改
+- `docs/getting-started.md`:各阶段改用新路径
+- 新增测试 `tests/test_config_home.py`(5 个用例锁定 mangling + 默认路由)
 
-回看 / 审批 / 统计时必须一个个 repo 去 ls,实际不可持续。
+**老数据处理**:暂不迁移。原有的 3 个 repo 里的 `<repo>/data/` 保持不动,用户
+自己决定是否删除。新 session 全部写新位置。
 
-根因:`hooks/stop_review.py` 把 `cwd` 当 `repo_root`,`config.build_paths` 默认让 `state_dir = <cwd>/data`。
-
-### 候选方案
-
-- **A. 全局 state_dir**:所有 repo 共享 `~/.codex-self-evolution/data/`,最简单但 MEMORY.md 混合,失去 repo 隔离
-- **B. 索引汇总(倾向)**:每 repo 各自 `data/` 不动,额外往 `~/.codex-self-evolution/inbox/` 写一条指向原 pending 的 symlink 或索引 json,作为全局审阅队列
-- **C. 按 repo fingerprint 分目录**:全局根目录 + 子目录隔离,迁移成本最高
-
-倾向 B — 改动最小,不破坏现有语义,pending 队列有单一入口即可。
-
-### 待定细节
-
-- inbox 文件的命名:`<repo_fingerprint>-<suggestion_id>.json` 还是 `<timestamp>-<suggestion_id>.json`
-- 用 symlink 还是拷贝一份元数据(cwd / summary / family count)
-- 审批动作(将来的 `approve` / `discard` 命令)走 inbox 还是各 repo;应该能两边都触达
-- 迁移现有已散落的 pending:是否要一次性 import 过去
+**未做**:迁移脚本 `scripts/migrate-legacy-data.sh`。需要时再加。
 
 ---
 

@@ -59,23 +59,27 @@ python -m codex_self_evolution.cli session-start --cwd /path/to/repo
 | Flag / 参数 | 必须 | 默认值 | 用途 |
 | --- | --- | --- | --- |
 | `--cwd` | `session-start`、`recall`、`recall-trigger` 必须 | — | 当前会话操作的 repo。 |
-| `--state-dir` | 可选 | `<cwd>/data` | 持久化运行时状态的根目录（suggestions、memory、recall、skills、compiler receipts、review snapshots、scheduler）。 |
+| `--state-dir` | 可选 | `~/.codex-self-evolution/projects/<mangled-cwd>/` | 持久化运行时状态根目录（suggestions、memory、recall、skills、compiler receipts、review snapshots、scheduler）。每个 repo 自动按绝对路径（`/` → `-`）分配独立 bucket,用户代码仓库保持干净。设 `CODEX_SELF_EVOLUTION_HOME` 可整体迁移根目录。 |
 | `--repo-root` | `compile`、`compile-preflight` 可选 | 当前进程 CWD | 当 `--state-dir` 未指定时用来解析 state-dir 的 repo 根。 |
 | `--once` | `compile` 可选 | 关闭 | 只跑一次 compile，不循环。 |
 | `--backend` | `compile` 可选 | `script` | 取值 `script` 或 `agent:opencode`。默认 scheduler plist 用 `agent:opencode`。 |
 | `--explicit` | `recall-trigger` 可选 | 关闭 | 标记该 recall 触发为用户显式发起。 |
 
-`--state-dir` 下的目录布局：
+`--state-dir` 下的目录布局(默认 `~/.codex-self-evolution/projects/<mangled-cwd>/`):
 
 ```
-data/
-├── suggestions/{pending,processing,done,failed,discarded}/
-├── memory/            # USER.md, MEMORY.md, memory.json
-├── recall/            # index.json, compiled.md
-├── skills/managed/    # managed skill markdown + manifest.json
-├── compiler/          # compile.lock, last_receipt.json
-├── review/snapshots/  # Stop 时的标准化 snapshot
-└── scheduler/
+~/.codex-self-evolution/
+├── .env.provider                 # API key(由 install-codex-hook.sh 管理)
+└── projects/
+    └── -Users-alice-code-myrepo/ # 一个 repo 一个 bucket;/ → -
+        ├── suggestions/{pending,processing,done,failed,discarded}/
+        ├── memory/               # USER.md, MEMORY.md, memory.json
+        ├── recall/               # index.json, compiled.md
+        ├── skills/managed/       # managed skill markdown + manifest.json
+        ├── compiler/             # compile.lock, last_receipt.json
+        ├── review/snapshots/     # Stop 时的标准化 snapshot
+        ├── review/failed/        # reviewer parse 失败时落盘的原始响应
+        └── scheduler/
 ```
 
 ### 2. Hook 环境变量（Codex 注入）
@@ -216,14 +220,17 @@ codex-self-evolution compile --once --state-dir data --backend agent:opencode
 | --- | --- | --- | --- |
 | `PYTHON` | Makefile targets | `/Users/haha/hermes-agent/venv/bin/python3.11` | `make test`、`make preflight`、`make provider-smoke-*` 使用的解释器。自己 venv 路径不同时请覆盖。 |
 | `IMAGE` | `make docker-*` | `codex-self-evolution-e2e` | Docker 镜像 tag。 |
-| `ENV_FILE` | `make provider-smoke-*` | `.env.provider` | 跑真实 provider 冒烟测试前自动 source。 |
+| `ENV_FILE` | `make provider-smoke-*` | `~/.codex-self-evolution/.env.provider` | 跑真实 provider 冒烟测试前自动 source。放在插件 home 目录,与已安装的 Stop hook 共用同一份文件。如果你仍保留 repo 根的老副本,设 `ENV_FILE=.env.provider` 覆盖。 |
 
-存在 `.env.provider` 文件时 Makefile 会自动 source。从模板复制：
+存在 `.env.provider` 时 Makefile 会自动 source。从模板复制到插件 home 目录:
 
 ```bash
-cp .env.provider.example .env.provider
-# 填上需要的 key
+mkdir -p ~/.codex-self-evolution
+cp .env.provider.example ~/.codex-self-evolution/.env.provider
+# 填上需要的 key — make provider-smoke-* 和已安装的 Stop hook 都读同一份
 ```
+
+`scripts/install-codex-hook.sh` 第一次执行时会自动把 repo 根的老 `.env.provider` 迁移到 `~/.codex-self-evolution/.env.provider`。
 
 ---
 

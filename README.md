@@ -60,23 +60,27 @@ This section lists everything you can configure. All variables are **optional by
 | Flag / arg | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `--cwd` | Required for `session-start`, `recall`, `recall-trigger` | — | Repo the session is operating on. |
-| `--state-dir` | Optional | `<cwd>/data` | Root of persistent runtime state (suggestions, memory, recall, skills, compiler receipts, review snapshots, scheduler). |
+| `--state-dir` | Optional | `~/.codex-self-evolution/projects/<mangled-cwd>/` | Root of persistent runtime state (suggestions, memory, recall, skills, compiler receipts, review snapshots, scheduler). Each repo gets an isolated bucket named after its absolute path with `/` → `-`, so user source trees stay clean. Override with `CODEX_SELF_EVOLUTION_HOME` to relocate the whole root. |
 | `--repo-root` | Optional for `compile`, `compile-preflight` | CWD of process | Repo root used to resolve `state-dir` when `--state-dir` is omitted. |
 | `--once` | Optional for `compile` | off | Run a single compile pass instead of looping. |
 | `--backend` | Optional for `compile` | `script` | `script` or `agent:opencode`. The default scheduler plist uses `agent:opencode`. |
 | `--explicit` | Optional for `recall-trigger` | off | Mark the recall trigger as user-explicit. |
 
-State layout under `--state-dir`:
+State layout under `--state-dir` (default `~/.codex-self-evolution/projects/<mangled-cwd>/`):
 
 ```
-data/
-├── suggestions/{pending,processing,done,failed,discarded}/
-├── memory/            # USER.md, MEMORY.md, memory.json
-├── recall/            # index.json, compiled.md
-├── skills/managed/    # managed skill markdown + manifest.json
-├── compiler/          # compile.lock, last_receipt.json
-├── review/snapshots/  # normalized Stop-time snapshots
-└── scheduler/
+~/.codex-self-evolution/
+├── .env.provider                 # API keys (created by install-codex-hook.sh)
+└── projects/
+    └── -Users-alice-code-myrepo/ # one bucket per repo; / → -
+        ├── suggestions/{pending,processing,done,failed,discarded}/
+        ├── memory/               # USER.md, MEMORY.md, memory.json
+        ├── recall/               # index.json, compiled.md
+        ├── skills/managed/       # managed skill markdown + manifest.json
+        ├── compiler/             # compile.lock, last_receipt.json
+        ├── review/snapshots/     # normalized Stop-time snapshots
+        ├── review/failed/        # raw reviewer response when parse fails
+        └── scheduler/
 ```
 
 ### 2. Hook environment variables (Codex-provided)
@@ -217,14 +221,18 @@ codex-self-evolution compile --once --state-dir data --backend agent:opencode
 | --- | --- | --- | --- |
 | `PYTHON` | Makefile targets | `/Users/haha/hermes-agent/venv/bin/python3.11` | Interpreter for `make test`, `make preflight`, `make provider-smoke-*`. Override if your venv lives elsewhere. |
 | `IMAGE` | `make docker-*` | `codex-self-evolution-e2e` | Docker image tag. |
-| `ENV_FILE` | `make provider-smoke-*` | `.env.provider` | Sourced before running real-provider smoke tests. |
+| `ENV_FILE` | `make provider-smoke-*` | `~/.codex-self-evolution/.env.provider` | Sourced before running real-provider smoke tests. Lives under the plugin home dir so it's shared with the installed Stop hook. Set `ENV_FILE=.env.provider` if you still keep a repo-root copy. |
 
-`.env.provider` is auto-sourced by the Makefile if present. Copy from the template:
+`.env.provider` is auto-sourced by the Makefile if present. Copy from the template into the plugin home dir:
 
 ```bash
-cp .env.provider.example .env.provider
-# fill the keys you need
+mkdir -p ~/.codex-self-evolution
+cp .env.provider.example ~/.codex-self-evolution/.env.provider
+# fill the keys you need — both make provider-smoke-* and the installed
+# Stop hook read from this single location.
 ```
+
+`scripts/install-codex-hook.sh` will auto-migrate a legacy `<repo>/.env.provider` into `~/.codex-self-evolution/.env.provider` on its first run.
 
 ---
 

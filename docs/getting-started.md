@@ -74,16 +74,21 @@ python3 -m venv .venv
 **目的**:在不依赖 Codex CLI 的情况下,完整演示 `session-start → stop-review → preflight → compile → 产物落盘` 的闭环。
 
 ```bash
-# 1. 定义:被插件“记忆”的目标 repo,以及状态目录
+# 1. 定义:被插件“记忆”的目标 repo,以及 playground 用的 state 目录
 REPO=/path/to/your/target/repo          # 可以就填本仓库本身,做 self-hosting
-STATE=$REPO/data
+STATE=/tmp/csep-tutorial                # 教程用独立目录便于随时 rm -rf
 ```
+
+**默认位置**:不指定 `--state-dir` 时,所有状态(suggestions/memory/recall/review)
+都会写到 `~/.codex-self-evolution/projects/<$REPO-absolute-path-with-/-replaced-by-->`,
+**不再污染原始代码仓库**。下面教程里为了好清理用了 `/tmp/csep-tutorial`,生产
+场景直接省略 `--state-dir` 即可。
 
 建议 `$REPO` 就填这个插件自身的路径作为 playground:
 
 ```bash
 REPO=/Users/$USER/code/github/codex-self-evolution-plugin
-STATE=$REPO/data
+STATE=/tmp/csep-tutorial
 ```
 
 ### 2.1 Session 初始化
@@ -182,14 +187,15 @@ ls $STATE/suggestions/done/
 
 脚本行为:
 
-1. 前置检查:Python 3.11+、venv、`.env.provider`、`codex` CLI
-2. 备份现有 `~/.codex/hooks.json` 到 `~/.codex/hooks.json.bak.<timestamp>`
-3. 在 `Stop` event 下**幂等**追加一条带标识(`codex-self-evolution-plugin managed`)的 hook entry:
-   - `bash -c 'set -a; . .env.provider; set +a; exec .venv/bin/python -m codex_self_evolution.cli stop-review --from-stdin'`
-   - 自 source `.env.provider` 保证进程能拿到 `MINIMAX_API_KEY`
+1. 前置检查:Python 3.11+、venv、`~/.codex-self-evolution/.env.provider`、`codex` CLI
+2. 如果检测到 repo 根有老的 `.env.provider`,**自动 `mv` 到 `~/.codex-self-evolution/.env.provider`**(单一来源,避免两处配置漂移)
+3. 备份现有 `~/.codex/hooks.json` 到 `~/.codex/hooks.json.bak.<timestamp>`
+4. 在 `Stop` event 下**幂等**追加一条带标识(`codex-self-evolution-plugin managed`)的 hook entry:
+   - `bash -c 'set -a; . ~/.codex-self-evolution/.env.provider; set +a; exec .venv/bin/python -m codex_self_evolution.cli stop-review --from-stdin'`
+   - 自 source `~/.codex-self-evolution/.env.provider` 保证进程能拿到 `MINIMAX_API_KEY`
    - 超时 10 秒(主进程只耗 ~100ms,真正 reviewer 调用在后台 subprocess 异步,不阻塞 Codex)
-4. 识别 legacy 手工装过的 entry(命令指向同一个 CLI 但没 marker),**升级而非重复追加**
-5. 检查 `~/.codex/config.toml` 是否有 `[shell_environment_policy] inherit = "all"`,没有给提示(建议加,防止 Codex 剥掉 env)
+5. 识别 legacy 手工装过的 entry(命令指向同一个 CLI 但没 marker),**升级而非重复追加**
+6. 检查 `~/.codex/config.toml` 是否有 `[shell_environment_policy] inherit = "all"`,没有给提示(建议加,防止 Codex 剥掉 env)
 
 ### 3.2 验证
 
@@ -202,7 +208,9 @@ codex exec 'Say one sentence in Chinese to test my Stop hook.'
 等约 15-30 秒(Codex 回复 → Stop hook 触发 → 后台 MiniMax 调用完成):
 
 ```bash
-ls -t data/suggestions/pending/ | head -3
+# 每个 repo 自动分到 ~/.codex-self-evolution/projects/<mangled-path>/
+ls ~/.codex-self-evolution/projects/
+ls -t ~/.codex-self-evolution/projects/*/suggestions/pending/ | head -3
 ```
 
 有新 envelope 文件就说明端到端闭环通了。
@@ -215,7 +223,7 @@ ls -t data/suggestions/pending/ | head -3
 
 - 只删带 marker 的条目,**不会误删** vibe-island / luna 等其他工具的 hook
 - 备份一份到 `~/.codex/hooks.json.bak.<timestamp>`
-- 不自动清理:`.bashrc` 的 `export MINIMAX_*`、`config.toml` 的 `shell_environment_policy`、仓库的 `.venv` 和 `.env.provider`——它们可能是你其他工具共用的,脚本不碰
+- 不自动清理:`.bashrc` 的 `export MINIMAX_*`、`config.toml` 的 `shell_environment_policy`、`~/.codex-self-evolution/` 下的数据和 `.env.provider`——卸载只动 hook,数据你自己决定保留还是删
 
 ---
 
@@ -238,13 +246,13 @@ cp docs/launchd/com.codex-self-evolution.preflight.plist \
 | --- | --- | --- |
 | `/ABSOLUTE/PATH/TO/codex-self-evolution-plugin` | 你的仓库绝对路径 | 出现 4 次 |
 | `/Users/haha/hermes-agent/venv/bin/python3.11` | 你的 `.venv/bin/python` 绝对路径 | 出现 2 次 |
-| `--state-dir data` | 如需自定义 state 路径才改 | 保持 `data` 就写 `$REPO/data` |
+| `--state-dir data` | 改成 `--state-dir $HOME/.codex-self-evolution/projects/<mangled-repo-path>` 或直接删掉整个 `--state-dir` 参数让插件自己推导 | 现在的默认目录是 `~/.codex-self-evolution/projects/<repo-path-with-/-replaced-by-->` |
 | `StartInterval` | 选一个:`60` / `300`(默认) / `900` | 唤醒间隔秒数 |
 
-同时把 `--backend agent:opencode` 改成 `--backend script`(原因同 2.5):
+同时把 `--backend agent:opencode` 改成 `--backend script`(原因同 2.5),并删掉 `--state-dir` 参数让插件自己路由到 `~/.codex-self-evolution/projects/...`:
 
 ```xml
--m codex_self_evolution.cli compile --once --state-dir data --backend script
+-m codex_self_evolution.cli compile --once --backend script
 ```
 
 ### 4.2 装载 launchd job
@@ -265,15 +273,19 @@ launchctl start com.codex-self-evolution.preflight
 # 看 job 是否在 launchd 注册表里
 launchctl list | grep codex
 
+# 插件 home(所有 repo 共享)+ 当前 repo 自己的 bucket
+HOME_ROOT=~/.codex-self-evolution
+BUCKET="$HOME_ROOT/projects/$(python3 -c "print('$REPO'.replace('/', '-'))")"
+
 # 看 preflight 最近一次的输出
-cat $REPO/data/scheduler/last-preflight.json
+cat $BUCKET/scheduler/last-preflight.json
 
 # 看 stdout / stderr 日志
-tail -f $REPO/data/scheduler/launchd.stdout.log
-tail -f $REPO/data/scheduler/launchd.stderr.log
+tail -f $BUCKET/scheduler/launchd.stdout.log
+tail -f $BUCKET/scheduler/launchd.stderr.log
 
 # 看 compile receipt
-cat $REPO/data/compiler/last_receipt.json
+cat $BUCKET/compiler/last_receipt.json
 ```
 
 ### 4.4 卸载
@@ -321,7 +333,7 @@ codex plugin --help 2>&1 | head -20
 
 env 变量没传到子进程。两种修法:
 
-- 把 key 写进 `.env.provider`(从 `.env.provider.example` 复制),Makefile 和冒烟脚本会 auto-source
+- 把 key 写进 `~/.codex-self-evolution/.env.provider`(从 repo 根的 `.env.provider.example` 复制),Makefile、冒烟脚本、装好的 Stop hook 都 auto-source 同一份
 - 或者在启动前 export:
   ```bash
   export MINIMAX_API_KEY=your-key
@@ -339,10 +351,11 @@ launchd job 需要 key 时,plist 里加:
 
 ### 3. `compile-preflight` 一直返回 `skip_locked`
 
-看 `$STATE/compiler/compile.lock` 是否还在:
+看当前 repo bucket 里的 lock 是否还在:
 
 ```bash
-cat $REPO/data/compiler/compile.lock
+BUCKET=~/.codex-self-evolution/projects/$(python3 -c "print('$REPO'.replace('/', '-'))")
+cat $BUCKET/compiler/compile.lock
 ```
 
 有 pid:
@@ -367,10 +380,15 @@ reviewer 认为本轮没什么可沉淀的。换个更具体、更有"干了啥"
 ### 6. 想重置所有状态从头来一次
 
 ```bash
-rm -rf $REPO/data
+# 重置单个 repo 的 state
+BUCKET=~/.codex-self-evolution/projects/$(python3 -c "print('$REPO'.replace('/', '-'))")
+rm -rf $BUCKET
+
+# 或者,重置所有 repo 的 state(不删 .env.provider)
+rm -rf ~/.codex-self-evolution/projects/
 ```
 
-runtime state 全部在 `data/` 下,没有数据库、没有外部状态。
+runtime state 全部在 `~/.codex-self-evolution/projects/<mangled-repo>/` 下,没有数据库、没有外部状态。
 
 ---
 
