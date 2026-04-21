@@ -1,0 +1,43 @@
+name: tests
+
+# Plain pytest matrix. Deliberately does NOT run provider smoke tests
+# (those hit real MiniMax / OpenAI / Anthropic endpoints and need secrets
+# that aren't appropriate for a public OSS CI). Docker e2e, lint, and
+# mypy are also skipped for now — the P0/P1 push optimized for
+# "someone can install this" before "CI checks every style issue".
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the floor declared in pyproject.toml; 3.12 catches
+        # anything that creeps in with newer Python semantics.
+        # 3.13+ isn't on ubuntu-latest yet at time of writing.
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install (editable) + pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest
+
+      - name: Run pytest
+        # -q keeps the log volume reasonable; individual test names still
+        # print on failure via the short summary.
+        run: pytest -q
