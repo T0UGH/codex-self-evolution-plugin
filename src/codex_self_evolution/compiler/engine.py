@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..config import DEFAULT_BATCH_SIZE, DEFAULT_LOCK_STALE_SECONDS, build_paths
-from ..config import PLUGIN_OWNER
+from ..config import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_LOCK_STALE_SECONDS,
+    PLUGIN_OWNER,
+    PROJECTS_SUBDIR,
+    build_paths,
+    get_home_dir,
+)
 from ..managed_skills.manifest import dump_manifest, load_manifest
 from ..schemas import CompilerReceipt, SuggestionEnvelope
 from ..storage import (
@@ -205,3 +211,122 @@ def run_compile(
         )
         receipt_path = write_receipt(paths.compiler_dir, receipt)
         return {"status": "skip_locked", "processed_count": 0, "receipt_path": str(receipt_path)}
+
+
+def scan_all_projects(
+    home: str | Path | None = None,
+    backend: str = "agent:opencode",
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    allow_fallback: bool = True,
+    stale_after_seconds: int = DEFAULT_LOCK_STALE_SECONDS,
+) -> dict:
+    """Run preflight + compile on every per-project bucket under ``<home>/projects/``.
+
+    Intended for the launchd scheduler: a single invocation drains every repo
+    that has accumulated pending suggestions, without the user having to
+    enumerate them or stand up one plist per repo (which would become
+    unmaintainable as they add repos).
+
+    Per-bucket exceptions are **isolated**: a corrupt / mid-migration / locked
+    bucket surfaces as an ``error`` entry in the result list but does not stop
+    the scan from processing the others. This matters because the scan runs
+    unattended — a single bad bucket should not wedge the whole pipeline.
+
+    The default ``backend="agent:opencode"`` matches where we want production
+    scheduling to land (see docs/2026-04-21-ready-for-others-gap-analysis.md
+    P0-5). Callers that want the deterministic script path (tests / CI) pass
+    ``backend="script"`` explicitly.
+
+    Returns a summary:
+
+    .. code-block:: json
+
+        {
+          "home": "/home/alice/.codex-self-evolution",
+          "total_projects": 3,
+          "results": [
+            {"project": "-home-alice-repo1",
+             "state_dir": "...",
+             "preflight_status": "run",
+             "compile_status": "success",
+             "processed_count": 5,
+             "backend": "agent:opencode",
+             "receipt_path": "...",
+             "error": null},
+            ...
+          ],
+          "counts": {"run": 1, "skipped": 1, "failed": 1}
+        }
+
+    Nothing is written outside the per-bucket state dirs — scan itself has no
+    output store, just the aggregated return value (which the CLI prints to
+    stdout for the scheduler to log).
+    """
+    home_dir = Path(home).expanduser().resolve() if home else get_home_dir()
+    projects_dir = home_dir / PROJECTS_SUBDIR
+    counts = {"run": 0, "skipped": 0, "failed": 0}
+    results: list[dict] = []
+
+    if not projects_dir.is_dir():
+        # First ever launchd run on a fresh install: nothing to do, surface
+        # that honestly instead of 500-ing.
+        return {
+            "home": str(home_dir),
+            "total_projects": 0,
+            "results": results,
+            "counts": counts,
+        }
+
+    for bucket_path in sorted(projects_dir.iterdir()):
+        if not bucket_path.is_dir():
+            continue
+        entry: dict = {
+            "project": bucket_path.name,
+            "state_dir": str(bucket_path),
+            "preflight_status": None,
+            "compile_status": "not_run",
+            "processed_count": 0,
+            "backend": None,
+            "receipt_path": None,
+            "error": None,
+        }
+        try:
+            preflight = preflight_compile(
+                state_dir=bucket_path,
+                stale_after_seconds=stale_after_seconds,
+            )
+            entry["preflight_status"] = preflight["status"]
+            if preflight["status"] != "run":
+                entry["compile_status"] = preflight["status"]
+                counts["skipped"] += 1
+            else:
+                compile_result = run_compile(
+                    state_dir=bucket_path,
+                    batch_size=batch_size,
+                    backend=backend,
+                    allow_fallback=allow_fallback,
+                )
+                entry["compile_status"] = compile_result["status"]
+                entry["processed_count"] = compile_result.get("processed_count", 0)
+                entry["backend"] = compile_result.get("backend", backend)
+                entry["receipt_path"] = compile_result.get("receipt_path")
+                if compile_result["status"] == "success":
+                    counts["run"] += 1
+                else:
+                    # Non-success but non-error (e.g. raced another runner and
+                    # got skip_locked mid-run) still counts as skipped.
+                    counts["skipped"] += 1
+        except Exception as exc:  # noqa: BLE001 — per-bucket isolation is the point
+            entry["error"] = f"{type(exc).__name__}: {exc}"
+            if entry["preflight_status"] is None:
+                entry["preflight_status"] = "error"
+            entry["compile_status"] = "error"
+            counts["failed"] += 1
+        results.append(entry)
+
+    return {
+        "home": str(home_dir),
+        "total_projects": len(results),
+        "results": results,
+        "counts": counts,
+    }

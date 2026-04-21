@@ -4,6 +4,48 @@
 
 ---
 
+## ✅ 2026-04-21 P0-2 CLI `scan` 子命令:全局扫所有 bucket(已完成)
+
+**背景**:launchd scheduler 要一次性消化 `~/.codex-self-evolution/projects/*`
+下所有 bucket 的 pending。原来 `compile-preflight` + `compile` 都针对单个 repo,
+scheduler 要么每 repo 一个 plist(不可维护),要么手工脚本 loop。
+
+**落地**:
+
+- `compiler/engine.py`:新增 `scan_all_projects(home=None, backend="agent:opencode", ...)`
+  - 遍历 `<home>/projects/*/`,每 bucket 跑 preflight → if run then compile
+  - **per-bucket 异常隔离**:一个 bucket 抛错不影响其他(`except Exception` 包进 entry.error,继续 loop)
+  - 默认 backend=`agent:opencode`(不是 script —— scan 面向生产 scheduler,agent 不可用自动 fallback)
+  - 返回聚合 JSON:`{home, total_projects, results[], counts{run,skipped,failed}}`
+  - bucket 按字典序遍历,保证 scheduler 日志 diffable
+  - 空 home / 空 projects dir / 非 dir 项都返回 empty summary,绝不抛
+- `cli.py`:加 `scan` 子命令,`--home` + `--backend` 两个 flag
+
+**单测**:新增 `test_scan.py`(10 用例)
+
+- boundary:missing home、空 projects、非 dir 项都返回 empty summary
+- happy path:有 pending 的 bucket → success、无 pending → skip_empty、2 bucket 混合
+- **per-bucket 异常隔离**:preflight 抛 + compile 抛两种路径都验证"坏 bucket 失败其他 bucket 正常处理"
+- CLI 输出合法 JSON、默认 backend=agent:opencode(regression guard)
+
+**真机冒烟**:
+
+```
+$ scan --backend script
+→ 8 buckets → 43 pending 全部 processed → 0 failed
+$ scan (重跑) → 全部 skip_empty
+```
+
+一次扫描把 4 个 repo 累计 41 条 pending + 4 条 probe 残留全吃掉了。P0-3
+install-scheduler.sh 直接调这个命令。
+
+**副作用发现**:P0-0 调研时的 `/tmp/csep-*` 临时 repo 留下了 4 个"僵尸"bucket
+(对应目录早没了)。scan 能正确 skip_empty 它们不会 crash,但长期数据冗余。
+这次手动删了。**潜在 P2**:scan 或 status 命令识别 "state_dir 对应的 cwd 已
+不存在" 的 bucket 并告警/归档(非 P0,记在这里备忘)。
+
+---
+
 ## ✅ 2026-04-21 P0-1 install 脚本装 SessionStart hook(已完成)
 
 **落地**:

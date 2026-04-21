@@ -8,7 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .compiler.engine import preflight_compile, run_compile
+from .compiler.engine import preflight_compile, run_compile, scan_all_projects
 from .hooks.codex_bridge import map_codex_stop_payload
 from .hooks.session_start import format_session_start_for_codex, session_start
 from .hooks.stop_review import stop_review
@@ -59,6 +59,22 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_parser = subparsers.add_parser("compile-preflight")
     preflight_parser.add_argument("--state-dir")
     preflight_parser.add_argument("--repo-root")
+
+    scan_parser = subparsers.add_parser(
+        "scan",
+        help="Run preflight+compile on every project bucket under <home>/projects/. "
+             "Designed for launchd/cron scheduling — a single invocation drains all "
+             "repos that have pending suggestions, with per-bucket exception isolation.",
+    )
+    scan_parser.add_argument(
+        "--home",
+        help="Override CODEX_SELF_EVOLUTION_HOME for this invocation (default "
+             "~/.codex-self-evolution). Mostly useful in tests.",
+    )
+    # Unlike `compile`, scan defaults to agent:opencode since it runs unattended
+    # and users who care about LLM cost will have flipped opencode off anyway.
+    # Fallback to script still kicks in automatically if opencode is unavailable.
+    scan_parser.add_argument("--backend", default="agent:opencode")
 
     recall_parser = subparsers.add_parser("recall")
     recall_parser.add_argument("--query", required=True)
@@ -235,6 +251,8 @@ def main(argv: list[str] | None = None) -> int:
         result = run_compile(repo_root=args.repo_root, state_dir=args.state_dir, backend=args.backend)
     elif args.command == "compile-preflight":
         result = preflight_compile(repo_root=args.repo_root, state_dir=args.state_dir)
+    elif args.command == "scan":
+        result = scan_all_projects(home=args.home, backend=args.backend)
     elif args.command == "recall":
         result = {"query": args.query, "results": search_recall(query=args.query, cwd=args.cwd, state_dir=args.state_dir)}
     elif args.command == "recall-trigger":
