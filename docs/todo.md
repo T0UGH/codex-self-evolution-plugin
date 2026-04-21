@@ -4,6 +4,55 @@
 
 ---
 
+## ✅ 2026-04-21 P0-3 `install-scheduler.sh` 自动生成全局 plist(已完成)
+
+**背景**:之前 launchd 调度是"复制模板 → 手改 4 处占位 → launchctl load"。
+占位路径错一处 job 就默默不跑,没人发现。更糟:老模板还是
+`compile-preflight + compile` 两步串 + `--state-dir data`(老路径),
+跟 per-repo home + scan 两个改动都脱节了。
+
+**落地**:
+
+- `scripts/install-scheduler.sh`:一键装 launchd user agent
+  - 自动探测 `opencode` 路径塞进 plist `EnvironmentVariables.PATH`
+    (launchd 默认 PATH 极窄,不做这步 scheduler 永远 fallback 到 script
+    backend —— 最大的历史坑)
+  - plist 主体:`<venv>/bin/python -m codex_self_evolution.cli scan
+    --backend agent:opencode`(P0-2 的成果)
+  - `RunAtLoad=false`(避免装 plist 立即触发、日志乱),`StartInterval=300`
+  - 幂等:`launchctl bootout`(清老的,容错)→ `bootstrap` 新 API
+  - 日志 `~/.codex-self-evolution/logs/launchd.{stdout,stderr}.log`
+    (P1-6 做完整 logging 前的最小方案)
+  - 可用 env 覆盖:`CSEP_SCHEDULER_INTERVAL` / `CSEP_SCHEDULER_BACKEND`
+- `scripts/uninstall-scheduler.sh`:bootout + rm plist。不清 logs 留做
+  post-mortem
+- `docs/getting-started.md` 阶段 4 重写:从"手改 4 处占位"改成"一句
+  `./scripts/install-scheduler.sh`",列出两个 env 变量
+- **删除 `docs/launchd/com.codex-self-evolution.preflight.plist`**:
+  老模板每个字段都过期了(`data/` 路径、compile-preflight+compile 两
+  步串),保留只会让用户 copy 出去踩坑。scripts/install-scheduler.sh
+  是唯一路径
+
+**真机冒烟**:
+
+```
+$ ./scripts/install-scheduler.sh
+  opencode found at /opt/homebrew/bin/opencode
+  ...
+  loading com.codex-self-evolution.preflight into launchd
+
+$ launchctl list | grep codex-self-evolution
+  -  0  com.codex-self-evolution.preflight
+
+$ launchctl kickstart "gui/$(id -u)/com.codex-self-evolution.preflight"
+  → 日志: {"counts":{"run":1,"skipped":4,"failed":0}, ...}
+
+$ ./scripts/uninstall-scheduler.sh → ✅ gone
+$ install-scheduler.sh 重装 → ✅ 幂等,还是一条 job
+```
+
+---
+
 ## ✅ 2026-04-21 P0-2 CLI `scan` 子命令:全局扫所有 bucket(已完成)
 
 **背景**:launchd scheduler 要一次性消化 `~/.codex-self-evolution/projects/*`

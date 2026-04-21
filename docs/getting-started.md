@@ -260,75 +260,59 @@ JSON 丢弃(不会报错,就是"悄悄没效果")。如果模型答不出 XANADU
 
 ---
 
-## 阶段 4:挂 launchd 自动调度(5 分钟)
+## 阶段 4:挂 launchd 自动调度(一键脚本)
 
-**目的**:让 `compile-preflight → compile` 每 5 分钟自动跑一次,消化阶段 3 产出的 pending envelope,不用你手动触发。
+**目的**:让 `scan`(preflight + compile,across all buckets)每 5 分钟自动跑一次,消化 Stop hook 积累的 pending envelope,不用你手动触发。
 
-### 4.1 生成你本机的 plist
-
-模板在 `docs/launchd/com.codex-self-evolution.preflight.plist`。复制一份出来填空:
+### 4.1 装载
 
 ```bash
-cp docs/launchd/com.codex-self-evolution.preflight.plist \
-   /tmp/com.codex-self-evolution.preflight.plist
+./scripts/install-scheduler.sh
 ```
 
-编辑 `/tmp/com.codex-self-evolution.preflight.plist`,**必改的 4 处**:
+脚本行为:
 
-| 占位 | 替换为 | 说明 |
+1. 前置检查:`$REPO/.venv/bin/python` 能 import CLI
+2. 自动探测本机 `opencode` 路径,写到 plist 的 `EnvironmentVariables.PATH` 里(launchd 默认 PATH 很窄,不含 Homebrew/usr/local,**不做这步 scheduler 永远 fallback 到 script backend**)
+3. 写 `~/Library/LaunchAgents/com.codex-self-evolution.preflight.plist`,命令是
+   `$VENV/bin/python -m codex_self_evolution.cli scan --backend agent:opencode`
+4. `launchctl bootout`(清老的,容错)→ `bootstrap`(新 API)加载
+5. 幂等:再跑一次会 bootout 后重装,仍然只有一条 job
+
+可用 env 变量覆盖默认:
+
+| 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `/ABSOLUTE/PATH/TO/codex-self-evolution-plugin` | 你的仓库绝对路径 | 出现 4 次 |
-| `/Users/haha/hermes-agent/venv/bin/python3.11` | 你的 `.venv/bin/python` 绝对路径 | 出现 2 次 |
-| `--state-dir data` | 改成 `--state-dir $HOME/.codex-self-evolution/projects/<mangled-repo-path>` 或直接删掉整个 `--state-dir` 参数让插件自己推导 | 现在的默认目录是 `~/.codex-self-evolution/projects/<repo-path-with-/-replaced-by-->` |
-| `StartInterval` | 选一个:`60` / `300`(默认) / `900` | 唤醒间隔秒数 |
+| `CSEP_SCHEDULER_INTERVAL` | `300` | 秒。改成 `60` 更激进,`900` 更省电 |
+| `CSEP_SCHEDULER_BACKEND` | `agent:opencode` | `script` 禁掉语义合并(testing/debug 用) |
 
-保持 `--backend agent:opencode`(已经真正跑通),删掉 `--state-dir` 参数让插件自己路由到 `~/.codex-self-evolution/projects/...`:
-
-```xml
--m codex_self_evolution.cli compile --once --backend agent:opencode
-```
-
-> 需要把 `opencode` 的路径加到 plist 的 `EnvironmentVariables.PATH` 里(launchd 默认 PATH 很窄,通常不包含 Homebrew)。例如 `PATH=/opt/homebrew/bin:/usr/bin:/bin`。
-
-### 4.2 装载 launchd job
-
-```bash
-# 拷到 ~/Library/LaunchAgents/(用户级,不需要 sudo)
-cp /tmp/com.codex-self-evolution.preflight.plist \
-   ~/Library/LaunchAgents/
-
-# 装载并立即触发一次
-launchctl load ~/Library/LaunchAgents/com.codex-self-evolution.preflight.plist
-launchctl start com.codex-self-evolution.preflight
-```
-
-### 4.3 观察
+### 4.2 观察
 
 ```bash
 # 看 job 是否在 launchd 注册表里
-launchctl list | grep codex
+launchctl list | grep codex-self-evolution
 
-# 插件 home(所有 repo 共享)+ 当前 repo 自己的 bucket
-HOME_ROOT=~/.codex-self-evolution
-BUCKET="$HOME_ROOT/projects/$(python3 -c "print('$REPO'.replace('/', '-'))")"
+# 手动触发一次,不用等 5 分钟
+launchctl kickstart "gui/$(id -u)/com.codex-self-evolution.preflight"
 
-# 看 preflight 最近一次的输出
-cat $BUCKET/scheduler/last-preflight.json
+# 最近一次 scan 的全局 JSON 汇总
+cat ~/.codex-self-evolution/logs/launchd.stdout.log
 
-# 看 stdout / stderr 日志
-tail -f $BUCKET/scheduler/launchd.stdout.log
-tail -f $BUCKET/scheduler/launchd.stderr.log
+# 有异常时看这个(正常运行应该是空的)
+cat ~/.codex-self-evolution/logs/launchd.stderr.log
 
-# 看 compile receipt
+# 某个具体 repo 的 compile receipt
+BUCKET=~/.codex-self-evolution/projects/$(python3 -c "print('$REPO'.replace('/', '-'))")
 cat $BUCKET/compiler/last_receipt.json
 ```
 
-### 4.4 卸载
+### 4.3 卸载
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.codex-self-evolution.preflight.plist
-rm ~/Library/LaunchAgents/com.codex-self-evolution.preflight.plist
+./scripts/uninstall-scheduler.sh
 ```
+
+只删我们这条 plist,不碰其他 launchd job。`~/.codex-self-evolution/logs/` 下的日志文件不自动清,留着 post-mortem。
 
 ---
 
