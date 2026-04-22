@@ -10,6 +10,8 @@ SuggestionState = Literal["pending", "processing", "done", "failed", "discarded"
 
 ALLOWED_FAMILIES = {"memory_updates", "recall_candidate", "skill_action"}
 ALLOWED_SKILL_ACTIONS = {"create", "patch", "edit", "retire"}
+ALLOWED_MEMORY_ACTIONS = {"add", "replace", "remove"}
+ALLOWED_MEMORY_SCOPES = {"global", "user"}
 ALLOWED_STATES = {"pending", "processing", "done", "failed", "discarded"}
 
 
@@ -58,6 +60,28 @@ class Suggestion:
             action = _require_non_empty_string(details.get("action"), "details.action")
             if action not in ALLOWED_SKILL_ACTIONS:
                 raise SchemaError(f"unsupported skill action: {action}")
+        elif family == "memory_updates":
+            # `action` is optional and defaults to "add" downstream. Older queued
+            # suggestions written before this field existed have no action key and
+            # must continue to compile as-is, so we only validate when present.
+            action_raw = details.get("action")
+            if action_raw is not None:
+                if not isinstance(action_raw, str) or action_raw not in ALLOWED_MEMORY_ACTIONS:
+                    raise SchemaError(
+                        f"details.action for memory_updates must be one of {sorted(ALLOWED_MEMORY_ACTIONS)}"
+                    )
+                if action_raw in {"replace", "remove"}:
+                    old_summary = details.get("old_summary")
+                    if not isinstance(old_summary, str) or not old_summary.strip():
+                        raise SchemaError(
+                            f"details.old_summary is required for memory_updates action={action_raw!r}"
+                        )
+            scope_raw = details.get("scope")
+            if scope_raw is not None:
+                if not isinstance(scope_raw, str) or scope_raw not in ALLOWED_MEMORY_SCOPES:
+                    raise SchemaError(
+                        f"details.scope for memory_updates must be one of {sorted(ALLOWED_MEMORY_SCOPES)}"
+                    )
         confidence = data.get("confidence", 1.0)
         if not isinstance(confidence, (int, float)) or not 0 <= float(confidence) <= 1:
             raise SchemaError("confidence must be between 0 and 1")

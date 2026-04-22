@@ -93,6 +93,114 @@ def test_compile_memory_prefers_content_over_note():
     assert records["global"][0]["content"] == "explicit content"
 
 
+def test_compile_memory_replace_overwrites_matching_entry_by_old_summary():
+    existing = {
+        "user": [],
+        "global": [
+            {"summary": "Lite v1 架构决策", "content": "default workflow_only", "confidence": 0.7},
+            {"summary": "unrelated fact", "content": "keep me", "confidence": 0.8},
+        ],
+    }
+    suggestions = [
+        Suggestion(
+            family="memory_updates",
+            summary="v1 recovery: history_only confirmed",
+            details={
+                "scope": "global",
+                "action": "replace",
+                "old_summary": "Lite v1",
+                "content": "v1 recovery is history_only. Lite workflow deferred to v2.",
+            },
+            confidence=1.0,
+        ),
+    ]
+    records = compile_memory(suggestions, existing_index=existing)
+    global_records = records["global"]
+    assert len(global_records) == 2
+    # Match is by substring of old_summary against existing entry's summary.
+    first = next(item for item in global_records if "history_only" in item["summary"])
+    assert first["content"].startswith("v1 recovery is history_only")
+    assert first["confidence"] == 1.0
+    # Unrelated entry is untouched.
+    other = next(item for item in global_records if item["summary"] == "unrelated fact")
+    assert other["content"] == "keep me"
+
+
+def test_compile_memory_remove_drops_matching_entry():
+    existing = {
+        "user": [],
+        "global": [
+            {"summary": "round1 pending review", "content": "task state noise", "confidence": 0.5},
+            {"summary": "durable convention", "content": "keep me", "confidence": 0.9},
+        ],
+    }
+    suggestions = [
+        Suggestion(
+            family="memory_updates",
+            summary="housekeeping: drop stale task-state entry",
+            details={
+                "scope": "global",
+                "action": "remove",
+                "old_summary": "round1 pending",
+            },
+        ),
+    ]
+    records = compile_memory(suggestions, existing_index=existing)
+    contents = [item["content"] for item in records["global"]]
+    assert contents == ["keep me"]
+
+
+def test_compile_memory_replace_skipped_when_old_summary_ambiguous():
+    existing = {
+        "user": [],
+        "global": [
+            {"summary": "C2 gap: workflow contract", "content": "first", "confidence": 0.7},
+            {"summary": "C2 gap: timeout budget", "content": "second", "confidence": 0.8},
+        ],
+    }
+    suggestions = [
+        Suggestion(
+            family="memory_updates",
+            summary="replacement",
+            details={
+                "scope": "global",
+                "action": "replace",
+                "old_summary": "C2 gap",
+                "content": "replacement content",
+            },
+        ),
+    ]
+    records = compile_memory(suggestions, existing_index=existing)
+    # Ambiguous match: both existing entries survive, replacement is discarded.
+    contents = sorted(item["content"] for item in records["global"])
+    assert contents == ["first", "second"]
+
+
+def test_compile_memory_replace_with_no_match_is_dropped_silently():
+    existing = {
+        "user": [],
+        "global": [
+            {"summary": "unrelated", "content": "keep", "confidence": 0.9},
+        ],
+    }
+    suggestions = [
+        Suggestion(
+            family="memory_updates",
+            summary="nothing to replace",
+            details={
+                "scope": "global",
+                "action": "replace",
+                "old_summary": "does not exist",
+                "content": "would-be new content",
+            },
+        ),
+    ]
+    records = compile_memory(suggestions, existing_index=existing)
+    contents = [item["content"] for item in records["global"]]
+    # Existing entry untouched, phantom replacement not written as an add.
+    assert contents == ["keep"]
+
+
 def test_compile_memory_tolerates_malformed_existing_entries():
     existing = {
         "user": [

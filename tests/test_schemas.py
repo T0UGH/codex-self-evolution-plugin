@@ -34,6 +34,108 @@ def test_reviewer_output_rejects_unexpected_keys():
 
 
 
+def test_memory_updates_accepts_optional_action_and_scope():
+    output = ReviewerOutput.from_dict(
+        {
+            "memory_updates": [
+                {
+                    "summary": "updated fact",
+                    "details": {
+                        "scope": "global",
+                        "action": "replace",
+                        "old_summary": "old fact",
+                        "content": "new content",
+                    },
+                }
+            ],
+            "recall_candidate": [],
+            "skill_action": [],
+        }
+    )
+    suggestion = output.memory_updates[0]
+    assert suggestion.details["action"] == "replace"
+    assert suggestion.details["old_summary"] == "old fact"
+
+
+def test_memory_updates_rejects_invalid_action():
+    with pytest.raises(SchemaError):
+        ReviewerOutput.from_dict(
+            {
+                "memory_updates": [
+                    {
+                        "summary": "bad",
+                        "details": {"scope": "global", "action": "upsert", "content": "x"},
+                    }
+                ],
+                "recall_candidate": [],
+                "skill_action": [],
+            }
+        )
+
+
+def test_memory_updates_rejects_invalid_scope():
+    with pytest.raises(SchemaError):
+        ReviewerOutput.from_dict(
+            {
+                "memory_updates": [
+                    {
+                        "summary": "bad",
+                        "details": {"scope": "team", "content": "x"},
+                    }
+                ],
+                "recall_candidate": [],
+                "skill_action": [],
+            }
+        )
+
+
+def test_memory_updates_replace_requires_old_summary():
+    with pytest.raises(SchemaError):
+        ReviewerOutput.from_dict(
+            {
+                "memory_updates": [
+                    {
+                        "summary": "bad",
+                        "details": {"scope": "global", "action": "replace", "content": "x"},
+                    }
+                ],
+                "recall_candidate": [],
+                "skill_action": [],
+            }
+        )
+
+
+def test_memory_updates_remove_requires_old_summary():
+    with pytest.raises(SchemaError):
+        ReviewerOutput.from_dict(
+            {
+                "memory_updates": [
+                    {
+                        "summary": "bad",
+                        "details": {"scope": "global", "action": "remove"},
+                    }
+                ],
+                "recall_candidate": [],
+                "skill_action": [],
+            }
+        )
+
+
+def test_memory_updates_without_action_still_parses_as_add():
+    # Legacy queued suggestions have no `action` key; they must still parse so
+    # the pipeline doesn't strand pre-upgrade work in pending/.
+    output = ReviewerOutput.from_dict(
+        {
+            "memory_updates": [
+                {"summary": "a", "details": {"content": "b"}},
+            ],
+            "recall_candidate": [],
+            "skill_action": [],
+        }
+    )
+    assert output.memory_updates[0].details.get("action") is None
+
+
 def test_suggestion_envelope_requires_schema_version_one_and_state():
     with pytest.raises(SchemaError):
         SuggestionEnvelope.from_dict(
