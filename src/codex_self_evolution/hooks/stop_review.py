@@ -72,12 +72,17 @@ def stop_review(hook_payload: str | Path, state_dir: str | Path | None = None) -
         transition_log=[{"at": timestamp, "from": "", "to": "pending", "reason": provider_result.provider}],
     )
     destination = append_pending_suggestion(paths, envelope)
+    families = {"memory_updates": 0, "recall_candidate": 0, "skill_action": 0}
+    for suggestion in envelope.suggestions:
+        if suggestion.family in families:
+            families[suggestion.family] += 1
     return {
         "hook": "Stop",
         "pending_suggestion_path": str(destination),
         "review_snapshot_path": str(snapshot_path),
         "reviewer_provider": provider_result.provider,
         "suggestion_count": len(envelope.suggestions),
+        "suggestion_families": families,
         "skipped_suggestion_count": len(skipped_suggestions),
         "skipped_suggestions": skipped_suggestions,
     }

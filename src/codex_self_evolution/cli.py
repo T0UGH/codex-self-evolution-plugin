@@ -385,6 +385,23 @@ def _observability_extras(command: str | None, result: object) -> dict:
         if aggregate.get("buckets_processed", 0) > 0 or aggregate.get("total_memory_suggestions", 0) > 0:
             return {"aggregate": aggregate}
         return {}
+    if command == "stop-review":
+        # The background reviewer is where MiniMax actually runs. Without
+        # these fields you can't tell whether "0 memory_updates at compile
+        # time" meant "reviewer emitted none" (working-as-intended, SKIP
+        # list too strict) or "all reviewer calls 529'd" (upstream outage).
+        extras: dict = {}
+        provider = result.get("reviewer_provider")
+        if provider:
+            extras["reviewer_provider"] = provider
+        for key in ("suggestion_count", "skipped_suggestion_count"):
+            value = result.get(key)
+            if isinstance(value, int):
+                extras[key] = value
+        families = result.get("suggestion_families")
+        if isinstance(families, dict) and families:
+            extras["suggestion_families"] = families
+        return extras
     return {}
 
 

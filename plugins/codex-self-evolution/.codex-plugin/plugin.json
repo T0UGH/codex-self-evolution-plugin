@@ -1,6 +1,6 @@
 {
   "name": "codex-self-evolution",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Scheduled self-evolution loop with stable background memory, provider-backed stop review, explicit suggestion states, launchd-style compiler preflight, focused recall, and managed skills.",
   "author": {
     "name": "T0UGH",

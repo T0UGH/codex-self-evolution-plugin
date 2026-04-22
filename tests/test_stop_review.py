@@ -51,6 +51,48 @@ def test_stop_review_reconstructs_snapshot_and_writes_pending_artifact(tmp_path)
 
 
 
+def test_stop_review_returns_suggestion_families_breakdown(tmp_path):
+    """The per-family breakdown is what lets plugin.log distinguish a
+    reviewer that's emitting 0 memory_updates (SKIP too strict) from one
+    that's emitting 0 of anything at all (upstream failure). Downstream,
+    cli._observability_extras reads this dict and forwards it into the log
+    line so operators can see it without re-parsing done/ receipts."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    payload = tmp_path / "payload.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "thread_id": "thread-fam",
+                "turn_id": "turn-fam",
+                "cwd": str(repo),
+                "reviewer_provider": "dummy",
+                "provider_stub_response": {
+                    "memory_updates": [
+                        {"summary": "m1", "details": {"content": "a"}},
+                        {"summary": "m2", "details": {"content": "b", "scope": "user"}},
+                    ],
+                    "recall_candidate": [
+                        {"summary": "r1", "details": {"content": "c"}},
+                    ],
+                    "skill_action": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = stop_review(hook_payload=payload, state_dir=state)
+    assert result["suggestion_count"] == 3
+    assert result["skipped_suggestion_count"] == 0
+    assert result["suggestion_families"] == {
+        "memory_updates": 2,
+        "recall_candidate": 1,
+        "skill_action": 0,
+    }
+    assert result["reviewer_provider"] == "dummy"
+
+
 def test_stop_review_dumps_raw_text_when_reviewer_parse_fails(tmp_path):
     """Truncated-JSON scenarios (e.g. max_tokens cutoff) should land the
     reviewer's raw response on disk under review/failed/ so we can inspect
