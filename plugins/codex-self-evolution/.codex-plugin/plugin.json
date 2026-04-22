@@ -1,7 +1,7 @@
 {
   "name": "codex-self-evolution",
-  "version": "0.7.0",
-  "description": "Scheduled self-evolution loop with stable background memory, provider-backed stop review, explicit suggestion states, launchd-style compiler preflight, focused recall, and managed skills.",
+  "version": "0.7.1",
+  "description": "Scheduled self-evolution loop with stable background memory, provider-backed stop review, explicit suggestion states, launchd-style compiler preflight, focused recall, managed skills, and per-profile api_key_env so multiple anthropic-style providers can coexist.",
   "author": {
     "name": "T0UGH",
     "url": "https://github.com/T0UGH"

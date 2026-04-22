@@ -42,13 +42,26 @@ max_retries = 2
 retry_backoff = [2.0, 5.0]
 
 
-# GLM via Zhipu's Anthropic-compatible endpoint. Uses $ANTHROPIC_API_KEY
-# (with the Zhipu key as the value — our provider sends `x-api-key` which
-# GLM accepts).
+# GLM via Zhipu's Anthropic-compatible endpoint. `api_key_env` binds this
+# profile to $ZHIPU_API_KEY so it doesn't collide with `kimi` or other
+# anthropic-style profiles.
 [profiles.glm]
 provider = "anthropic-style"
 model = "glm-5"
 base_url = "https://open.bigmodel.cn/api/anthropic/v1/messages"
+api_key_env = "ZHIPU_API_KEY"
+timeout_seconds = 60
+max_retries = 2
+retry_backoff = [3.0, 8.0]
+
+
+# Kimi (Moonshot) via its Anthropic-compatible endpoint. Uses $KIMI_API_KEY
+# so `config use kimi` doesn't require touching GLM's key.
+[profiles.kimi]
+provider = "anthropic-style"
+model = "kimi-k2.6"
+base_url = "https://api.kimi.com/coding/v1/messages"
+api_key_env = "KIMI_API_KEY"
 timeout_seconds = 60
 max_retries = 2
 retry_backoff = [3.0, 8.0]

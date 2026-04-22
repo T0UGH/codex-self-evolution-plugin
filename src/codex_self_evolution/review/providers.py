@@ -87,9 +87,15 @@ class HTTPReviewProvider:
         *,
         max_retries: int | None = None,
         backoff_seconds: tuple[float, ...] | None = None,
+        api_key_env: str | None = None,
     ) -> None:
         self.name = name
         self.dialect = dialect
+        # Per-profile API-key env override — lets two anthropic-style profiles
+        # (GLM, Kimi) each bind to a distinct env var instead of sharing the
+        # dialect-default ANTHROPIC_API_KEY. Empty/None = use the dialect
+        # default (see ``resolve_api_key``).
+        self.api_key_env = api_key_env or ""
         # Per-provider retry tuning — lets load_config push PluginConfig values
         # in without touching every call site. Backoff list length MUST be >=
         # max_retries; if not, we pad with the last element so clients don't
@@ -159,6 +165,16 @@ class HTTPReviewProvider:
         explicit = options.get("api_key")
         if explicit:
             return str(explicit)
+        # Profile-level override wins over dialect default, so two
+        # anthropic-style profiles can each point at a distinct env var.
+        if self.api_key_env:
+            value = os.getenv(self.api_key_env)
+            if value:
+                return str(value)
+            raise ReviewProviderError(
+                f"{self.name} provider requires api_key or {self.api_key_env} "
+                f"(set via profile.api_key_env)"
+            )
         if self.dialect == "openai":
             env_var = "OPENAI_API_KEY"
         elif self.dialect == "anthropic":
@@ -355,6 +371,8 @@ def build_review_provider_from_config(name: str, config) -> ReviewProvider:
         if len(padded) < provider.max_retries and padded:
             padded = tuple(padded) + (padded[-1],) * (provider.max_retries - len(padded))
         provider.backoff_seconds = padded
+        if config.reviewer.api_key_env:
+            provider.api_key_env = config.reviewer.api_key_env
     return provider
 
 

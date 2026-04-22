@@ -46,6 +46,12 @@ class ReviewerConfig:
     provider: str = "minimax"
     model: str = ""
     base_url: str = ""
+    # Name of the env var to read the API key from. Lets two
+    # anthropic-style profiles (e.g. GLM + Kimi) each bind to their own key
+    # (ZHIPU_API_KEY / KIMI_API_KEY) instead of fighting over the shared
+    # ANTHROPIC_API_KEY slot. Empty = fall back to dialect default
+    # (MINIMAX_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY).
+    api_key_env: str = ""
     timeout_seconds: float = 30.0
     max_tokens: int = 4096
     max_retries: int = 2
@@ -349,6 +355,18 @@ def load_config(
     config.reviewer.base_url = base_url
     sources["reviewer.base_url"] = base_url_source
 
+    # api_key_env is opt-in; users leave it blank to keep the dialect
+    # default env var. No env override — this is a per-profile declaration.
+    api_key_env, api_key_env_source = _resolve(
+        field_path="reviewer.api_key_env",
+        new_env=None,
+        env_map=env_map,
+        toml_value=reviewer_toml.get("api_key_env"),
+        default=config.reviewer.api_key_env,
+    )
+    config.reviewer.api_key_env = api_key_env
+    sources["reviewer.api_key_env"] = api_key_env_source
+
     config.reviewer.timeout_seconds, sources["reviewer.timeout_seconds"] = _resolve_number(
         "reviewer.timeout_seconds",
         new_env="CODEX_SELF_EVOLUTION_REVIEWER_TIMEOUT",
@@ -641,7 +659,8 @@ _RECOGNIZED_PATHS: frozenset[str] = frozenset([
 # Fields allowed inside [profiles.<name>]. Mirrors ReviewerConfig shape —
 # the resolver uses this same schema regardless of which profile is active.
 _RECOGNIZED_PROFILE_FIELDS: frozenset[str] = frozenset([
-    "provider", "model", "base_url", "timeout_seconds", "max_tokens",
+    "provider", "model", "base_url", "api_key_env",
+    "timeout_seconds", "max_tokens",
     "max_retries", "retry_backoff",
     "subprocess",
     "subprocess.command", "subprocess.payload_mode",
