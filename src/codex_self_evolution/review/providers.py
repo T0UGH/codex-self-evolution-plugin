@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import socket
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -15,6 +18,36 @@ ANTHROPIC_VERSION = "2023-06-01"
 MINIMAX_GLOBAL_BASE = "https://api.minimax.io"
 MINIMAX_CN_BASE = "https://api.minimaxi.com"
 MINIMAX_MESSAGES_PATH = "/anthropic/v1/messages"
+
+# HTTP status codes we treat as transient. 408 request timeout, 425 too early,
+# 429 rate limited, 500-504 server errors, and 529 which MiniMax (and
+# Anthropic-style providers) uses for "overloaded_error". Anything outside
+# this set is considered user error (bad key, malformed request) and not
+# retried — retrying a 401 won't change anything.
+_RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504, 529}
+
+# Two extra attempts after the initial one (so at most 3 calls total).
+# Backoff is conservative because the reviewer runs in a detached background
+# process — adding 2-7s of extra latency is fine, but spending 30s on a
+# sleep that might still fail is not.
+_MAX_RETRIES = 2
+_BACKOFF_SECONDS = (2.0, 5.0)
+
+_logger = logging.getLogger(__name__)
+
+
+def _is_timeout_error(exc: BaseException) -> bool:
+    """Recognize socket-level timeouts across the Python version matrix.
+
+    urllib sometimes wraps the timeout in URLError(reason=TimeoutError), and
+    sometimes the raw TimeoutError / socket.timeout propagates. Both need
+    the same retry treatment.
+    """
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    if isinstance(exc, urllib.error.URLError):
+        return isinstance(exc.reason, (TimeoutError, socket.timeout))
+    return False
 
 
 class ReviewProviderError(RuntimeError):
@@ -145,24 +178,81 @@ class HTTPReviewProvider:
     def run(self, snapshot: dict[str, Any], prompt: str, options: dict[str, Any]) -> ProviderResult:
         api_base = str(options.get("api_base") or self.default_api_base())
         payload = self.build_request_payload(snapshot, prompt, options)
-        request = urllib.request.Request(
-            api_base,
-            data=json.dumps(payload).encode("utf-8"),
-            headers=self.build_headers(options),
-            method="POST",
-        )
+        headers = self.build_headers(options)
+        request_body = json.dumps(payload).encode("utf-8")
         timeout = float(options.get("timeout_seconds", 30))
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                body = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise ReviewProviderError(f"{self.name} request failed: HTTP {exc.code}: {body[:500]}") from exc
-        except urllib.error.URLError as exc:
-            raise ReviewProviderError(f"{self.name} request failed: {exc}") from exc
+
+        body = self._execute_with_retries(api_base, request_body, headers, timeout)
         parsed = json.loads(body)
         raw_text = self._extract_text(parsed)
         return ProviderResult(provider=self.name, raw_text=raw_text, response_payload=parsed, request_payload=payload)
+
+    def _execute_with_retries(
+        self,
+        api_base: str,
+        request_body: bytes,
+        headers: dict[str, str],
+        timeout: float,
+    ) -> str:
+        """POST to ``api_base`` with exponential-backoff retry on transient errors.
+
+        Only 429 / 5xx / 529 / socket timeouts are retried; 4xx client errors
+        and auth failures raise immediately since retrying them just wastes
+        a real-time window and amplifies the user's eventual backlog of
+        "this one turn's memory signal was dropped" complaints.
+
+        Each retry rebuilds the :class:`Request` object — the previous one
+        already had its body buffer consumed on failure in some cases, and
+        rebuilding is essentially free compared to the HTTP round-trip.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES + 1):
+            request = urllib.request.Request(
+                api_base,
+                data=request_body,
+                headers=headers,
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return response.read().decode("utf-8")
+            except urllib.error.HTTPError as exc:
+                err_body = exc.read().decode("utf-8", errors="replace")
+                if exc.code in _RETRYABLE_STATUS_CODES and attempt < _MAX_RETRIES:
+                    _logger.info(
+                        "%s retrying after HTTP %s (attempt %d/%d)",
+                        self.name, exc.code, attempt + 1, _MAX_RETRIES + 1,
+                    )
+                    time.sleep(_BACKOFF_SECONDS[attempt])
+                    last_exc = exc
+                    continue
+                raise ReviewProviderError(
+                    f"{self.name} request failed: HTTP {exc.code}: {err_body[:500]}"
+                ) from exc
+            except urllib.error.URLError as exc:
+                if _is_timeout_error(exc) and attempt < _MAX_RETRIES:
+                    _logger.info(
+                        "%s retrying after timeout (attempt %d/%d)",
+                        self.name, attempt + 1, _MAX_RETRIES + 1,
+                    )
+                    time.sleep(_BACKOFF_SECONDS[attempt])
+                    last_exc = exc
+                    continue
+                raise ReviewProviderError(f"{self.name} request failed: {exc}") from exc
+            except (TimeoutError, socket.timeout) as exc:
+                if attempt < _MAX_RETRIES:
+                    _logger.info(
+                        "%s retrying after raw timeout (attempt %d/%d)",
+                        self.name, attempt + 1, _MAX_RETRIES + 1,
+                    )
+                    time.sleep(_BACKOFF_SECONDS[attempt])
+                    last_exc = exc
+                    continue
+                raise ReviewProviderError(f"{self.name} request failed: {exc}") from exc
+        # Loop only exits via return or raise; this line is unreachable, but
+        # defensive in case the logic above is ever refactored incorrectly.
+        assert last_exc is not None  # pragma: no cover
+        raise ReviewProviderError(f"{self.name} request failed after retries: {last_exc}") from last_exc
 
     def _extract_text(self, payload: dict[str, Any]) -> str:
         if self.dialect == "openai":

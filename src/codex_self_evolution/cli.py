@@ -335,7 +335,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
         print(json.dumps(result, indent=2, sort_keys=True))
-        _log_command(logger, args.command, started, exit_code=0)
+        log_extras = _observability_extras(args.command, result)
+        _log_command(logger, args.command, started, exit_code=0, **log_extras)
         return 0
     except SystemExit:
         # argparse calls sys.exit(2) for bad args; re-raise so the user still
@@ -352,6 +353,39 @@ def main(argv: list[str] | None = None) -> int:
             error_message=str(exc)[:400],
         )
         raise
+
+
+def _observability_extras(command: str | None, result: object) -> dict:
+    """Surface the reviewer-action breakdown into the per-invocation log line
+    so a week of plugin.log entries is enough to answer "did Phase 1 work?"
+    without jq-iterating every receipt.
+
+    - ``compile``: pull memory_action_stats straight from run_compile result
+    - ``scan``: pull the aggregate across all buckets touched this run
+    Anything else: no extras (keeps session-start / stop-review log lines tight).
+    """
+    if not isinstance(result, dict):
+        return {}
+    if command == "compile":
+        stats = result.get("memory_action_stats") or {}
+        extras: dict = {}
+        if stats:
+            extras["memory_action_stats"] = stats
+        fallback = result.get("fallback_backend")
+        if fallback:
+            extras["fallback_backend"] = fallback
+        discarded = result.get("discarded_count") or 0
+        if discarded:
+            extras["discarded_count"] = discarded
+        return extras
+    if command == "scan":
+        aggregate = result.get("aggregate") or {}
+        # Only log when something actually ran — skip-empty scans would
+        # otherwise bloat plugin.log with a dozen zero-count lines.
+        if aggregate.get("buckets_processed", 0) > 0 or aggregate.get("total_memory_suggestions", 0) > 0:
+            return {"aggregate": aggregate}
+        return {}
+    return {}
 
 
 def _log_command(

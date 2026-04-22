@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from ..config import (
     DEFAULT_BATCH_SIZE,
@@ -26,6 +27,42 @@ from ..storage import (
     lock_status,
 )
 from .backends import build_compile_context, get_backend
+
+
+def _tally_memory_actions(envelopes: list[SuggestionEnvelope]) -> dict[str, Any]:
+    """Count reviewer-requested memory actions across a compile batch.
+
+    Returns a dict with action totals and scope distribution. Populated into
+    :class:`CompilerReceipt.memory_action_stats` so observability can tell
+    whether the reviewer is actually using the ``replace`` / ``remove`` /
+    scope-routing capabilities introduced in Phase 1 — without this, the
+    receipts only report aggregate ``memory_records`` which conflates "new
+    entries added" with "existing entries passed through untouched".
+
+    Empty dict when the batch has no memory_updates; keeps legacy receipts
+    that parse old schema happy.
+    """
+    actions: dict[str, int] = {"add": 0, "replace": 0, "remove": 0}
+    by_scope: dict[str, int] = {"user": 0, "global": 0}
+    total = 0
+    for envelope in envelopes:
+        for suggestion in envelope.suggestions:
+            if suggestion.family != "memory_updates":
+                continue
+            total += 1
+            action = str(suggestion.details.get("action") or "add").strip().lower()
+            if action in actions:
+                actions[action] += 1
+            scope = str(suggestion.details.get("scope") or "global").strip().lower()
+            if scope in by_scope:
+                by_scope[scope] += 1
+    if total == 0:
+        return {}
+    return {
+        "total": total,
+        "by_action": actions,
+        "by_scope": by_scope,
+    }
 
 
 def _render_memory_markdown(title: str, records: list[dict]) -> str:
@@ -167,6 +204,7 @@ def run_compile(
                 receipt_path = write_receipt(paths.compiler_dir, receipt)
                 return {"status": "skip_empty", "processed_count": 0, "receipt_path": str(receipt_path)}
             envelopes = [SuggestionEnvelope.from_dict(load_json(path)) for path, _ in claimed]
+            memory_action_stats = _tally_memory_actions(envelopes)
             backend_impl = get_backend(backend)
             context = build_compile_context(paths, envelopes)
             artifacts = backend_impl.compile(envelopes, context, {"allow_fallback": allow_fallback})
@@ -196,9 +234,18 @@ def run_compile(
                 managed_skills=len(artifacts.compiled_skills),
                 item_receipts=item_receipts,
                 fallback_backend=artifacts.fallback_backend,
+                memory_action_stats=memory_action_stats,
             )
             receipt_path = write_receipt(paths.compiler_dir, receipt)
-            return {"status": "success", "processed_count": len(claimed), "receipt_path": str(receipt_path), "backend": artifacts.backend_name}
+            return {
+                "status": "success",
+                "processed_count": len(claimed),
+                "receipt_path": str(receipt_path),
+                "backend": artifacts.backend_name,
+                "fallback_backend": artifacts.fallback_backend,
+                "memory_action_stats": memory_action_stats,
+                "discarded_count": len(artifacts.discarded_items),
+            }
     except CompileLockError:
         receipt = CompilerReceipt(
             run_status="skip_locked",
@@ -317,6 +364,9 @@ def scan_all_projects(
                 entry["processed_count"] = compile_result.get("processed_count", 0)
                 entry["backend"] = compile_result.get("backend", backend)
                 entry["receipt_path"] = compile_result.get("receipt_path")
+                entry["fallback_backend"] = compile_result.get("fallback_backend")
+                entry["memory_action_stats"] = compile_result.get("memory_action_stats", {})
+                entry["discarded_count"] = compile_result.get("discarded_count", 0)
                 if compile_result["status"] == "success":
                     counts["run"] += 1
                 else:
@@ -336,4 +386,43 @@ def scan_all_projects(
         "total_projects": len(results),
         "results": results,
         "counts": counts,
+        "aggregate": _aggregate_scan_stats(results),
+    }
+
+
+def _aggregate_scan_stats(results: list[dict]) -> dict[str, Any]:
+    """Roll up per-bucket metrics into a single dict for plugin.log readers.
+
+    Without this every observability question ("did reviewer use replace
+    anywhere today?") requires jq-iterating the full results array. With it
+    one log line per scan tells the whole story.
+    """
+    actions = {"add": 0, "replace": 0, "remove": 0}
+    scopes = {"user": 0, "global": 0}
+    total_suggestions = 0
+    buckets_with_fallback = 0
+    buckets_processed = 0
+    total_discarded = 0
+    for entry in results:
+        stats = entry.get("memory_action_stats") or {}
+        if stats:
+            total_suggestions += int(stats.get("total", 0) or 0)
+            for key, value in (stats.get("by_action") or {}).items():
+                if key in actions:
+                    actions[key] += int(value or 0)
+            for key, value in (stats.get("by_scope") or {}).items():
+                if key in scopes:
+                    scopes[key] += int(value or 0)
+        if entry.get("compile_status") == "success":
+            buckets_processed += 1
+            if entry.get("fallback_backend"):
+                buckets_with_fallback += 1
+            total_discarded += int(entry.get("discarded_count", 0) or 0)
+    return {
+        "buckets_processed": buckets_processed,
+        "buckets_with_fallback": buckets_with_fallback,
+        "total_memory_suggestions": total_suggestions,
+        "actions": actions,
+        "scopes": scopes,
+        "total_discarded": total_discarded,
     }

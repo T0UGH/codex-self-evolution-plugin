@@ -4,6 +4,54 @@
 
 ---
 
+## ✅ 2026-04-22 观察性打点 + Reviewer HTTP 重试(已完成,v0.5.0)
+
+**背景**:Phase 1 写时 dedup 上线后无指标可看 → 一周后无法判断 SKIP 清单是否生效、
+是否真用了 replace、USER.md 有没有被填。同时 plugin.log 显示每小时都有
+MiniMax HTTP 529 overloaded_error 或 30s read timeout,每次失败丢一轮 turn 的 memory 信号。
+
+**落地**:
+
+1. **观察性打点**(`CompilerReceipt.memory_action_stats` + `scan aggregate`):
+   - 新增 `_tally_memory_actions(envelopes)`:从 suggestion envelope 里提取
+     `{total, by_action: {add, replace, remove}, by_scope: {user, global}}`
+   - 写入 `CompilerReceipt`、`run_compile` 返回值、`scan_all_projects` per-bucket 输出
+   - 新增 `_aggregate_scan_stats(results)`:per-bucket 汇总成 scan 级别的
+     `{buckets_processed, buckets_with_fallback, total_memory_suggestions,
+     actions, scopes, total_discarded}`
+   - `cli.py::_observability_extras()`:把 stats 打进 `_log_command` 的 extras,
+     plugin.log 里一行 JSON 就能看清这一轮/这一 scan 的 reviewer 行为分布
+
+2. **Reviewer HTTP 重试**(`review/providers.py`):
+   - `_RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504, 529}`
+   - `_MAX_RETRIES = 2`,backoff `[2s, 5s]`
+   - 新增 `_is_timeout_error()` 识别 socket.timeout/TimeoutError/URLError 包裹的 timeout
+   - 401/403/400 等非 transient 错误立即 raise,不浪费 backoff 预算
+   - 背景 reviewer 进程的 retry 延迟对用户无影响(父 hook 已 return)
+
+3. **测试**(12 个新):
+   - `test_memory_action_stats.py` 6 个:tally 各种场景 + scan 汇总
+   - `test_reviewer_retry.py` 6 个:529/timeout/URLError-timeout 都能重试成功、
+     401 不重试、持久 529 耗尽预算后 raise
+   - 全量 195 passed
+
+**预期效果**(观察期 1-2 周):
+
+打开 plugin.log 看 scan 日志,能直接看到当天汇总:
+```json
+{"msg": "cli command completed", "kind": "scan", "aggregate":
+ {"buckets_processed": 3, "buckets_with_fallback": 0,
+  "total_memory_suggestions": 12, "actions": {"add": 8, "replace": 3, "remove": 1},
+  "scopes": {"user": 2, "global": 10}, "total_discarded": 0}}
+```
+
+- `replace > 0` → 软容量提示生效
+- `user > 0` → Phase 1 scope 分流生效
+- `buckets_with_fallback == 0` → agent:opencode 真正跑通
+- `total_discarded == 0` → 没 reviewer 产出垃圾被 compile_memory 丢
+
+---
+
 ## ✅ 2026-04-22 Worktree 归并(已完成)
 
 **背景**:`/Users/bytedance/go/src/code.byted.org/luna/` 下用户大量使用 git worktree,
