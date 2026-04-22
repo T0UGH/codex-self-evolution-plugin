@@ -26,12 +26,10 @@ MINIMAX_MESSAGES_PATH = "/anthropic/v1/messages"
 # retried — retrying a 401 won't change anything.
 _RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504, 529}
 
-# Two extra attempts after the initial one (so at most 3 calls total).
-# Backoff is conservative because the reviewer runs in a detached background
-# process — adding 2-7s of extra latency is fine, but spending 30s on a
-# sleep that might still fail is not.
-_MAX_RETRIES = 2
-_BACKOFF_SECONDS = (2.0, 5.0)
+# Defaults for retry policy. Now overridable via PluginConfig.reviewer so
+# users can tune them per-provider (e.g. longer backoff for slow free tiers).
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_BACKOFF_SECONDS: tuple[float, ...] = (2.0, 5.0)
 
 _logger = logging.getLogger(__name__)
 
@@ -82,9 +80,27 @@ class DummyReviewProvider:
 
 
 class HTTPReviewProvider:
-    def __init__(self, name: str, dialect: str) -> None:
+    def __init__(
+        self,
+        name: str,
+        dialect: str,
+        *,
+        max_retries: int | None = None,
+        backoff_seconds: tuple[float, ...] | None = None,
+    ) -> None:
         self.name = name
         self.dialect = dialect
+        # Per-provider retry tuning — lets load_config push PluginConfig values
+        # in without touching every call site. Backoff list length MUST be >=
+        # max_retries; if not, we pad with the last element so clients don't
+        # have to synchronise the two fields when only tweaking one.
+        self.max_retries = max_retries if max_retries is not None else DEFAULT_MAX_RETRIES
+        if backoff_seconds is None:
+            backoff_seconds = DEFAULT_BACKOFF_SECONDS
+        if len(backoff_seconds) < self.max_retries and backoff_seconds:
+            last = backoff_seconds[-1]
+            backoff_seconds = tuple(backoff_seconds) + (last,) * (self.max_retries - len(backoff_seconds))
+        self.backoff_seconds = tuple(backoff_seconds)
 
     def build_request_payload(self, snapshot: dict[str, Any], prompt: str, options: dict[str, Any]) -> dict[str, Any]:
         model = str(options.get("model") or self.default_model())
@@ -206,7 +222,7 @@ class HTTPReviewProvider:
         rebuilding is essentially free compared to the HTTP round-trip.
         """
         last_exc: Exception | None = None
-        for attempt in range(_MAX_RETRIES + 1):
+        for attempt in range(self.max_retries + 1):
             request = urllib.request.Request(
                 api_base,
                 data=request_body,
@@ -218,34 +234,34 @@ class HTTPReviewProvider:
                     return response.read().decode("utf-8")
             except urllib.error.HTTPError as exc:
                 err_body = exc.read().decode("utf-8", errors="replace")
-                if exc.code in _RETRYABLE_STATUS_CODES and attempt < _MAX_RETRIES:
+                if exc.code in _RETRYABLE_STATUS_CODES and attempt < self.max_retries:
                     _logger.info(
                         "%s retrying after HTTP %s (attempt %d/%d)",
-                        self.name, exc.code, attempt + 1, _MAX_RETRIES + 1,
+                        self.name, exc.code, attempt + 1, self.max_retries + 1,
                     )
-                    time.sleep(_BACKOFF_SECONDS[attempt])
+                    time.sleep(self.backoff_seconds[attempt])
                     last_exc = exc
                     continue
                 raise ReviewProviderError(
                     f"{self.name} request failed: HTTP {exc.code}: {err_body[:500]}"
                 ) from exc
             except urllib.error.URLError as exc:
-                if _is_timeout_error(exc) and attempt < _MAX_RETRIES:
+                if _is_timeout_error(exc) and attempt < self.max_retries:
                     _logger.info(
                         "%s retrying after timeout (attempt %d/%d)",
-                        self.name, attempt + 1, _MAX_RETRIES + 1,
+                        self.name, attempt + 1, self.max_retries + 1,
                     )
-                    time.sleep(_BACKOFF_SECONDS[attempt])
+                    time.sleep(self.backoff_seconds[attempt])
                     last_exc = exc
                     continue
                 raise ReviewProviderError(f"{self.name} request failed: {exc}") from exc
             except (TimeoutError, socket.timeout) as exc:
-                if attempt < _MAX_RETRIES:
+                if attempt < self.max_retries:
                     _logger.info(
                         "%s retrying after raw timeout (attempt %d/%d)",
-                        self.name, attempt + 1, _MAX_RETRIES + 1,
+                        self.name, attempt + 1, self.max_retries + 1,
                     )
-                    time.sleep(_BACKOFF_SECONDS[attempt])
+                    time.sleep(self.backoff_seconds[attempt])
                     last_exc = exc
                     continue
                 raise ReviewProviderError(f"{self.name} request failed: {exc}") from exc
@@ -280,6 +296,66 @@ def get_review_provider(name: str) -> ReviewProvider:
     if name == "minimax":
         return HTTPReviewProvider(name=name, dialect="minimax")
     raise ReviewProviderError(f"unknown review provider: {name}")
+
+
+def build_review_provider_from_config(name: str, config) -> ReviewProvider:
+    """Pick a provider instance with :class:`PluginConfig` values injected.
+
+    Subprocess providers (``codex-cli`` / ``opencode-cli``) are only built
+    by this path — :func:`get_review_provider` doesn't know about them.
+
+    For HTTP providers and ``dummy`` we defer to
+    :func:`get_review_provider` so tests that monkeypatch that symbol
+    (``runner.get_review_provider``) keep working exactly as before.
+    After construction we still swap in config's retry-tuning values
+    when the result is an :class:`HTTPReviewProvider`.
+    """
+    from .subprocess_provider import (
+        SubprocessReviewProvider,
+        DEFAULT_CODEX_CLI_ARGV,
+        DEFAULT_OPENCODE_CLI_ARGV,
+    )
+
+    backoff_tuple = (
+        tuple(config.reviewer.retry_backoff)
+        if config.reviewer.retry_backoff
+        else DEFAULT_BACKOFF_SECONDS
+    )
+
+    if name == "codex-cli":
+        argv = list(config.reviewer.subprocess.command) or list(DEFAULT_CODEX_CLI_ARGV)
+        return SubprocessReviewProvider(
+            name=name,
+            argv=argv,
+            payload_mode=config.reviewer.subprocess.payload_mode or "stdin",
+            response_format=config.reviewer.subprocess.response_format or "codex-events",
+            timeout=config.reviewer.subprocess.timeout_seconds,
+            max_retries=config.reviewer.max_retries,
+            backoff_seconds=backoff_tuple,
+        )
+
+    if name == "opencode-cli":
+        argv = list(config.reviewer.subprocess.command) or list(DEFAULT_OPENCODE_CLI_ARGV)
+        return SubprocessReviewProvider(
+            name=name,
+            argv=argv,
+            payload_mode=config.reviewer.subprocess.payload_mode or "stdin",
+            response_format=config.reviewer.subprocess.response_format or "opencode-events",
+            timeout=config.reviewer.subprocess.timeout_seconds,
+            max_retries=config.reviewer.max_retries,
+            backoff_seconds=backoff_tuple,
+        )
+
+    # HTTP + dummy path: reuse the simple factory so monkeypatches of
+    # ``get_review_provider`` still hit. Then tune retries for HTTP.
+    provider = get_review_provider(name)
+    if isinstance(provider, HTTPReviewProvider):
+        provider.max_retries = config.reviewer.max_retries
+        padded = backoff_tuple
+        if len(padded) < provider.max_retries and padded:
+            padded = tuple(padded) + (padded[-1],) * (provider.max_retries - len(padded))
+        provider.backoff_seconds = padded
+    return provider
 
 
 def _normalize_json_text(raw_text: str) -> str:

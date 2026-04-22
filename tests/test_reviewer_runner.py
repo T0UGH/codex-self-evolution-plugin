@@ -110,7 +110,10 @@ def test_reviewer_retries_on_top_level_parse_failure_then_succeeds(monkeypatch):
                 return ProviderResult(provider=self.name, raw_text="not-json-the-first-time")
             return ProviderResult(provider=self.name, raw_text=good_payload)
 
-    monkeypatch.setattr(runner_module, "get_review_provider", lambda name: FlakyProvider())
+    # v0.6.0 runner reaches the provider via build_review_provider_from_config.
+    # Patch that entry point so the test injector still wins.
+    monkeypatch.setattr(runner_module, "build_review_provider_from_config",
+                        lambda name, config: FlakyProvider())
     output, result, skipped = run_reviewer({"reviewer_provider": "flaky"}, parse_retries=2)
 
     assert call_count["value"] == 2, "should have retried once"
@@ -132,7 +135,8 @@ def test_reviewer_gives_up_after_exhausting_parse_retries(monkeypatch):
             call_count["value"] += 1
             return ProviderResult(provider=self.name, raw_text="nope nope nope")
 
-    monkeypatch.setattr(runner_module, "get_review_provider", lambda name: AlwaysBad())
+    monkeypatch.setattr(runner_module, "build_review_provider_from_config",
+                        lambda name, config: AlwaysBad())
     with pytest.raises(SchemaError):
         run_reviewer({"reviewer_provider": "always-bad"}, parse_retries=2)
 

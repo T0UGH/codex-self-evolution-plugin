@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from ..config import PACKAGE_ROOT
+from ..config_file import LoadResult, PluginConfig, load_config
 from ..schemas import SchemaError
 from .providers import (
     ProviderResult,
     ReviewProviderError,
+    build_review_provider_from_config,
     get_review_provider,
     parse_reviewer_output_lenient,
 )
@@ -44,26 +47,62 @@ def run_reviewer(
     provider_name: str | None = None,
     provider_options: dict[str, Any] | None = None,
     parse_retries: int = DEFAULT_PARSE_RETRIES,
+    config: PluginConfig | None = None,
+    home: Path | None = None,
 ) -> tuple[Any, ProviderResult, list[dict[str, Any]]]:
     """Run the reviewer and return ``(ReviewerOutput, provider_result, skipped)``.
 
-    - Per-item malformed suggestions are dropped (see lenient parser); they are
-      reported through ``skipped`` so the caller can log how many items died.
-    - On a top-level parse failure we re-call the provider up to
-      ``parse_retries`` additional times; this covers the minimax/openai-style
-      quirk where the same prompt occasionally returns non-conformant JSON.
-    - If every attempt still fails, raises ``ReviewerParseFailure`` with the
-      raw text from every attempt attached, so the caller can persist them.
-    - Auth / transport errors (``ReviewProviderError`` from the HTTP layer)
-      are not retried — they are raised immediately.
+    Resolution order for provider selection (highest wins):
+
+    1. ``provider_name`` kwarg (explicit override; legacy callers still set this)
+    2. ``review_input["reviewer_provider"]`` (legacy — from snapshot payload)
+    3. ``config.reviewer.provider`` (new — config.toml + env)
+    4. "dummy" as last resort (unit tests / dev scaffolding)
+
+    Similarly, model / base_url / timeout / max_tokens / max_retries /
+    retry_backoff are sourced from config.reviewer unless explicit
+    ``provider_options`` overrides them.
+
+    Behaviour for existing callers that don't pass ``config`` stays
+    backward-compatible: we call :func:`load_config` to pick up whatever the
+    user has in ``~/.codex-self-evolution/config.toml`` (or defaults if
+    absent). Tests that want full isolation can pass ``config=PluginConfig()``
+    directly.
     """
     prompt = load_prompt()
+    # Options explicitly passed in still win — they are the most specific caller intent.
     options = dict(provider_options or {})
     if reviewer_output_override is not None:
         options["stub_response"] = reviewer_output_override
         provider_name = provider_name or "dummy"
-    selected_provider = provider_name or str(review_input.get("reviewer_provider") or "dummy")
-    provider = get_review_provider(selected_provider)
+
+    # Determine the source of truth for config-driven fields.
+    if config is None:
+        try:
+            config = load_config(home=home).config
+        except Exception:  # noqa: BLE001 — config load is a soft fallback
+            config = PluginConfig()
+
+    # Provider selection precedence.
+    selected_provider = (
+        provider_name
+        or str(review_input.get("reviewer_provider") or "").strip()
+        or config.reviewer.provider
+        or "dummy"
+    )
+
+    # Pull config-driven defaults into options without overwriting caller
+    # values. This is how HTTP provider picks up [reviewer] model/base_url/etc.
+    options.setdefault("model", config.reviewer.model or None)
+    options.setdefault("timeout_seconds", config.reviewer.timeout_seconds)
+    options.setdefault("max_tokens", config.reviewer.max_tokens)
+    if config.reviewer.base_url:
+        options.setdefault("api_base", config.reviewer.base_url)
+
+    # Drop None entries so downstream `options.get("model") or default` still resolves.
+    options = {k: v for k, v in options.items() if v is not None}
+
+    provider = build_review_provider_from_config(selected_provider, config)
 
     attempts = max(1, parse_retries + 1)
     raw_texts: list[str] = []
