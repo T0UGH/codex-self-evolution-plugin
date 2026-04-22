@@ -15,6 +15,7 @@ from .hooks.codex_bridge import map_codex_stop_payload
 from .hooks.session_start import format_session_start_for_codex, session_start
 from .hooks.stop_review import stop_review
 from .logging_setup import configure as configure_logging, get_logger
+from .migrate import run_migration
 from .recall.search import search_recall
 from .recall.workflow import build_focused_recall, evaluate_recall_trigger, evaluate_session_recall
 
@@ -90,6 +91,22 @@ def build_parser() -> argparse.ArgumentParser:
     # and users who care about LLM cost will have flipped opencode off anyway.
     # Fallback to script still kicks in automatically if opencode is unavailable.
     scan_parser.add_argument("--backend", default="agent:opencode")
+
+    migrate_parser = subparsers.add_parser(
+        "migrate-worktrees",
+        help="Consolidate buckets that belong to git worktrees of the same logical "
+             "repo. Without --apply runs in dry-run mode and prints the plan.",
+    )
+    migrate_parser.add_argument(
+        "--home",
+        help="Override CODEX_SELF_EVOLUTION_HOME for this invocation.",
+    )
+    migrate_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually perform the migration. Without this flag the command "
+             "only prints the plan (dry-run).",
+    )
 
     recall_parser = subparsers.add_parser("recall")
     recall_parser.add_argument("--query", required=True)
@@ -283,6 +300,11 @@ def main(argv: list[str] | None = None) -> int:
             result = scan_all_projects(home=args.home, backend=args.backend)
         elif args.command == "status":
             result = collect_status(home=args.home)
+        elif args.command == "migrate-worktrees":
+            result = run_migration(
+                home=Path(args.home).expanduser().resolve() if args.home else None,
+                apply=args.apply,
+            )
         elif args.command == "recall":
             result = {"query": args.query, "results": search_recall(query=args.query, cwd=args.cwd, state_dir=args.state_dir)}
         elif args.command == "recall-trigger":

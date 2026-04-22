@@ -9,6 +9,7 @@ from ..config import (
     PROJECTS_SUBDIR,
     build_paths,
     get_home_dir,
+    is_archived_bucket,
 )
 from ..managed_skills.manifest import dump_manifest, load_manifest
 from ..schemas import CompilerReceipt, SuggestionEnvelope
@@ -279,6 +280,12 @@ def scan_all_projects(
 
     for bucket_path in sorted(projects_dir.iterdir()):
         if not bucket_path.is_dir():
+            continue
+        # Archived buckets are the tombstones left by `migrate-worktrees` after
+        # a worktree consolidation. They carry historical receipts but no live
+        # work — processing them would re-run compile against stale snapshots
+        # and dirty the receipts, so we explicitly skip them.
+        if is_archived_bucket(bucket_path.name):
             continue
         entry: dict = {
             "project": bucket_path.name,

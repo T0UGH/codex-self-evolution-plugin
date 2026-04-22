@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .config import PROJECTS_SUBDIR, get_home_dir
+from .config import PROJECTS_SUBDIR, get_home_dir, is_archived_bucket
 
 HOOK_MARKER = "codex-self-evolution-plugin managed"
 LAUNCHD_LABEL = "com.codex-self-evolution.preflight"
@@ -240,6 +240,7 @@ def _inspect_bucket(bucket: Path) -> dict[str, Any]:
     return {
         "project": bucket.name,
         "state_dir": str(bucket),
+        "archived": is_archived_bucket(bucket.name),
         "counts": counts,
         "last_receipt": _read_last_receipt(bucket / "compiler" / "last_receipt.json"),
     }

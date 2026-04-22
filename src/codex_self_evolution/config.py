@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -47,6 +48,121 @@ def mangle_project_path(path: Path) -> str:
     return str(path).replace("/", "-")
 
 
+def unmangle_bucket_name(name: str) -> Path:
+    """Reverse of :func:`mangle_project_path`.
+
+    The result is a nominal path — it may or may not still exist on disk. Used
+    by the worktree migration to figure out which bucket corresponds to which
+    original cwd before deciding whether to consolidate.
+    """
+    return Path(name.replace("-", "/"))
+
+
+# Suffix marking buckets that have been archived by the worktree-migration
+# flow. The scheduler's ``scan_all_projects`` explicitly skips anything under
+# this suffix so old buckets stop accumulating compile receipts after consolidation.
+ARCHIVED_BUCKET_SUFFIX = ".archived"
+
+
+def is_archived_bucket(bucket_name: str) -> bool:
+    """True when ``bucket_name`` matches the ``<name>.archived.<ts>`` pattern
+    produced by worktree consolidation (or the bare ``.archived`` suffix an
+    older migration might have used). Used by scheduler scan and diagnostics
+    to skip tombstone buckets consistently."""
+    return bucket_name.endswith(ARCHIVED_BUCKET_SUFFIX) or f"{ARCHIVED_BUCKET_SUFFIX}." in bucket_name
+
+# Sidecar file that stores the bucket's canonical cwd. Written lazily by
+# :func:`build_paths`; read by the worktree migration to identify a bucket's
+# original working directory without relying on the lossy
+# :func:`unmangle_bucket_name` round-trip (paths containing ``-`` collide with
+# the ``/``→``-`` mangling). Legacy buckets that predate this marker fall
+# back to unmangling.
+CANONICAL_CWD_MARKER = ".canonical_cwd"
+
+
+def _maybe_write_canonical_cwd(state_dir: Path, cwd: Path) -> None:
+    """Write the canonical-cwd marker if the bucket directory exists.
+
+    Intentionally a no-op when ``state_dir`` is not yet created — the first
+    write into a fresh bucket (e.g. a stop-review snapshot) creates the dir,
+    and the next ``build_paths`` call for that bucket materialises the
+    marker. That two-phase materialisation keeps this helper side-effect-free
+    on pristine checkouts that call ``build_paths`` without actually writing
+    anything (notably, many unit tests).
+    """
+    if not state_dir.is_dir():
+        return
+    marker = state_dir / CANONICAL_CWD_MARKER
+    if marker.exists():
+        return
+    try:
+        marker.write_text(f"{cwd}\n", encoding="utf-8")
+    except OSError:
+        # Marker is an optimisation for the migration tool — best-effort only.
+        pass
+
+
+def detect_repo_identity(path: Path, timeout: float = 2.0) -> Path | None:
+    """Return the canonical repo root for ``path``, or ``None`` if not in git.
+
+    Git worktrees of the same logical repository share a single ``.git``
+    *common directory*. Running ``git rev-parse --git-common-dir`` in any
+    linked worktree returns the main worktree's ``.git`` (or ``.git`` itself
+    from the main worktree); the parent of that common dir is the canonical
+    working-tree root. All linked worktrees collapse to the same identity.
+
+    Returns the resolved absolute path of the canonical working tree. Caller
+    is expected to fall back to ``path`` itself when this returns ``None`` —
+    e.g. ``path`` is not in a git repo, ``git`` is not installed, or the call
+    timed out. That preserves the pre-worktree-aware behaviour as a safe
+    default and keeps non-git use cases working.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=path,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    raw = result.stdout.strip()
+    if not raw:
+        return None
+    # Relative paths (".git") resolve against the query path; absolute paths
+    # pass through Path.resolve() to normalise symlinks.
+    common_dir = Path(raw)
+    if not common_dir.is_absolute():
+        common_dir = (path / common_dir)
+    try:
+        resolved = common_dir.resolve()
+    except (OSError, RuntimeError):
+        return None
+    # Normal git repo: common dir is "<repo>/.git" → canonical root is parent.
+    # Bare repo: common dir is the repo itself → use as-is. We detect this by
+    # checking whether the basename is exactly ".git".
+    if resolved.name == ".git":
+        return resolved.parent
+    return resolved
+
+
+def resolve_bucket_key(repo_root: Path) -> Path:
+    """Canonical bucket-key path for a cwd, worktree-aware.
+
+    Worktrees of the same repo resolve to the same canonical path; unrelated
+    repos (different clones, separate origins) stay isolated. Non-git dirs
+    fall back to the cwd itself — this keeps out-of-tree usage working and
+    preserves the pre-migration bucket layout when the user has set up state
+    that way.
+    """
+    identity = detect_repo_identity(repo_root)
+    return identity if identity is not None else repo_root
+
+
 @dataclass(frozen=True)
 class Paths:
     repo_root: Path
@@ -81,7 +197,9 @@ def build_paths(repo_root: str | Path | None = None, state_dir: str | Path | Non
     if state_dir:
         resolved_state = Path(state_dir).resolve()
     else:
-        resolved_state = get_home_dir() / PROJECTS_SUBDIR / mangle_project_path(resolved_repo)
+        bucket_key = resolve_bucket_key(resolved_repo)
+        resolved_state = get_home_dir() / PROJECTS_SUBDIR / mangle_project_path(bucket_key)
+        _maybe_write_canonical_cwd(resolved_state, bucket_key)
     suggestions_dir = resolved_state / "suggestions"
     skills_dir = resolved_state / "skills"
     review_dir = resolved_state / "review"

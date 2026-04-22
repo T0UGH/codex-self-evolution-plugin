@@ -4,6 +4,123 @@
 
 ---
 
+## ✅ 2026-04-22 Worktree 归并(已完成)
+
+**背景**:`/Users/bytedance/go/src/code.byted.org/luna/` 下用户大量使用 git worktree,
+同一逻辑仓有 2-3 个并列目录(如 `commerce_offer` + `commerce_offer_feature` + `commerce_offer_new_coin3`)。
+老的 bucket 规则按 cwd 分,导致同一仓的 durable 知识被学 N 次,彼此不互通。USER.md 也各写各的。
+
+**判断**:durable 项目知识(架构决策/API 契约/团队约定)是 branch-invariant,
+分支特定的任务状态已被 Phase 1 SKIP 清单禁止写入 → 默认结论"worktrees of same
+repo 共享 memory"。
+
+**已落地**:
+
+1. **bucket key 切到 git common-dir 的 realpath**(`src/codex_self_evolution/config.py`):
+   - 新增 `detect_repo_identity(path)` 通过 `git rev-parse --git-common-dir` 解析主 worktree
+   - 新增 `resolve_bucket_key(repo_root)` 封装"识别 → fallback 到 cwd"
+   - `build_paths` 使用 `resolve_bucket_key`,所有 worktree 自动归并到同一 bucket
+   - 非 git 目录 / git 不可用 → 回退到老的 mangled-cwd 行为
+
+2. **`.canonical_cwd` marker 文件**:
+   - 解决 mangle `/`→`-` 的有损问题(路径含 `-` 时 unmangle 歧义)
+   - `build_paths` 在 bucket dir 存在且 marker 缺失时懒写入
+   - 迁移工具优先读 marker,unmangle 只作为 legacy fallback
+
+3. **`migrate-worktrees` CLI 命令**(`src/codex_self_evolution/migrate.py`):
+   - `plan_migration`:扫 `projects/*/`,识别出 "linked worktree" 类 bucket
+   - `run_migration --apply`:合并 memory.json(走现有 `_normalize_existing_entry` 去重)+
+     重渲染 MEMORY.md/USER.md + 搬 `suggestions/pending/` + 源 bucket 改名为
+     `<name>.archived.<timestamp>`
+   - Dry-run 默认,`--apply` 才真改
+   - done/failed/discarded/recall/skills 保留在 archived bucket(历史数据,不影响管道)
+
+4. **scheduler + diagnostics 跳过 archived**(`compiler/engine.py`, `diagnostics.py`):
+   - 新增 `is_archived_bucket(name)` helper 统一判定
+   - `scan_all_projects` 不再对 `.archived.<ts>` 跑 compile
+   - `status` 输出里每个 bucket 加 `archived` 标志
+
+5. **测试覆盖**(`tests/test_worktree_bucket_key.py` + `tests/test_migrate_worktrees.py`):
+   - 12 个新测试,覆盖:真实 `git worktree add` 识别、多 worktree 归并、非 git fallback、
+     独立 clone 保持隔离、dry-run vs apply、memory dedup、pending 搬迁、archived 跳过
+   - 全量 173 passed
+
+**真实 dry-run 结果**(用户机器 2026-04-22 实际数据):
+- 1 个迁移候选:`commerce_offer_feature`(9 memory entries)→ `commerce_offer`
+- 3 个主 worktree 正确标为 canonical
+- 1 个仓(`codex-self-evolution-plugin`)因路径含 `-` 的 legacy unmangle 问题显示
+  "cwd no longer exists",等下次 `cd` 进来跑 codex 触发 marker 写入后可消失
+
+**待执行**:`uvx --from codex-self-evolution-plugin codex-self-evolution migrate-worktrees --apply`
+用户自己挑时机跑。未跑前新 entry 会开始按正确 bucket key 落盘,老 bucket 是孤儿但不破坏数据。
+
+---
+
+## ✅ 2026-04-22 MEMORY.md 写时 dedup Phase 1(已完成)
+
+**背景**:观察到 luna_inner_bot 单仓 MEMORY.md 46 条 entry 中存在大量近重复和过期
+task-state 条目(MR !14 merged、round1 complete、round2 pending 等),reviewer 每次
+看到相关讨论都单独 append,没有 dedup 机制。USER.md 所有仓全空因为 prompt 里从未
+引导分类到 user scope。
+
+**参考**:hermes-agent (`~/.claude/references` 等价物在 `~/.../hermes-agent/tools/memory_tool.py`)
+的 MEMORY.md 维护机制 + T0UGH/hermes-source-reading 的阅读笔记。
+
+**决策范围**(用户明确不做的):
+
+- ❌ 硬容量上限(reviewer 超限仍然写入成功,不阻断管道)
+- ❌ § 分隔符迁移(保持老 `## <title>` 格式,避免迁移风险)
+- ❌ 周期性 compaction(留到 100+ 条再考虑)
+
+**已落地**(Phase 1 写时 dedup):
+
+1. **reviewer prompt 重写**(`src/codex_self_evolution/review/prompt.md`):
+   - 明确指向 `comparison_materials.current_memory_md` / `current_user_md` 作为 dedup 依据
+   - 加入 SKIP 清单(task progress / session outcomes / MR state / commit hashes / TODO state)
+   - 要求 `memory_updates` 必须显式声明 `details.scope: "global" | "user"`
+   - 引入 `details.action: add | replace | remove`(默认 `add`,向后兼容)
+   - 软容量提示(MEMORY 2200 chars / USER 1375 chars,超限不拒绝但提示优先 replace)
+   - 具体 JSON 示例覆盖 add / replace / user scope 三种形态
+
+2. **schema 校验**(`schemas.py`):
+   - 新增 `ALLOWED_MEMORY_ACTIONS = {"add", "replace", "remove"}`
+   - 新增 `ALLOWED_MEMORY_SCOPES = {"global", "user"}`
+   - `Suggestion.from_dict` 对 `memory_updates` 校验:
+     - `action` 可选,必须在白名单
+     - `replace` / `remove` 必须携带 `details.old_summary`
+     - `scope` 可选,必须在白名单
+
+3. **compiler dispatch**(`compiler/memory.py`):
+   - `add`:保留原语义(exact content dedup + max confidence merge)
+   - `replace`:按 `old_summary` 子串匹配 existing entry(单匹配或全相同才执行,否则跳过)
+   - `remove`:同 match 逻辑,找到则 pop
+   - 歧义 / unmatched 时 `logger.warning` + 跳过,**不让 bad suggestion 撕掉稳定 memory**
+
+4. **测试**(`tests/test_compiler_memory.py`, `tests/test_schemas.py`):
+   - 新增 10 个测试覆盖 replace/remove/歧义/无匹配/schema 各种拒绝路径
+   - 向后兼容:`test_memory_updates_without_action_still_parses_as_add` 验证老格式仍能 parse
+   - 全量 161 passed
+
+**向后兼容性**:
+
+- 旧 `suggestions/pending/` 里排队的 suggestion 没有 `action` 字段 → 默认走 `add` 路径
+- 旧 memory.json 里的 entry 格式不变
+- 不升 `schema_version`(仍是 1)
+
+**预期效果**(下一轮真实 stop-review 触发后观察):
+
+- USER.md 应该开始有 entry(reviewer 看到 SKIP 清单后能把用户偏好分流到 `scope: "user"`)
+- luna_inner_bot 新 entry 应该更少冗余(reviewer 看到 current_memory_md 会选 replace)
+- task-state 类垃圾 entry 应该不再新增(SKIP 清单明确禁止)
+
+**待观察**:
+
+- reviewer(MiniMax-M2.7)是否真的 respect 软容量提示 —— 无程序强制,完全看模型
+- `old_summary` 子串匹配中文场景下的歧义率 —— 现有多匹配保护是否够用
+- 历史 46 条 entry 的清理 —— Phase 1 不动存量,等观察 1-2 周看 reviewer 自己会不会提 replace/remove
+
+---
+
 ## ✅ 2026-04-21 全链路切 uvx(不再需要 clone + venv)(已完成)
 
 **背景**:PyPI 0.3.0 发出去之后,所有用到 CLI 的地方都可以从
