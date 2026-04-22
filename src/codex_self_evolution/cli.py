@@ -10,6 +10,14 @@ import time
 from pathlib import Path
 
 from .compiler.engine import preflight_compile, run_compile, scan_all_projects
+from .config_file import (
+    ConfigError,
+    LoadResult,
+    config_to_dict,
+    get_config_path,
+    load_config,
+)
+from .config_file_template import CONFIG_TEMPLATE
 from .diagnostics import collect_status
 from .env_loader import hydrate_env_for_subprocesses
 from .hooks.codex_bridge import map_codex_stop_payload
@@ -92,6 +100,57 @@ def build_parser() -> argparse.ArgumentParser:
     # and users who care about LLM cost will have flipped opencode off anyway.
     # Fallback to script still kicks in automatically if opencode is unavailable.
     scan_parser.add_argument("--backend", default="agent:opencode")
+
+    config_parser = subparsers.add_parser(
+        "config",
+        help="Inspect / initialise / validate ~/.codex-self-evolution/config.toml "
+             "— the single source of truth for plugin behavior (provider, "
+             "model, backend, timeouts). Sibling .env.provider keeps API keys.",
+    )
+    config_sub = config_parser.add_subparsers(dest="config_command", required=True)
+
+    config_show = config_sub.add_parser(
+        "show",
+        help="Print the fully-resolved configuration — including which layer "
+             "(env var / config.toml / default) each value came from.",
+    )
+    config_show.add_argument("--home")
+    config_show.add_argument(
+        "--raw",
+        action="store_true",
+        help="Print raw config.toml contents instead of the merged resolution.",
+    )
+
+    config_init = config_sub.add_parser(
+        "init",
+        help="Write a starter config.toml skeleton. Refuses to overwrite by default.",
+    )
+    config_init.add_argument("--home")
+    config_init.add_argument("--force", action="store_true",
+                              help="Overwrite an existing config.toml.")
+
+    config_validate = config_sub.add_parser(
+        "validate",
+        help="Load + lint the current config. Exits 0 on clean, 1 on warnings, 2 on parse error.",
+    )
+    config_validate.add_argument("--home")
+
+    config_path = config_sub.add_parser(
+        "path",
+        help="Print the absolute path to config.toml (whether or not it exists).",
+    )
+    config_path.add_argument("--home")
+
+    config_migrate = config_sub.add_parser(
+        "migrate-from-env",
+        help="Scan os.environ (including .env.provider) for legacy reviewer/compile "
+             "settings and write them to config.toml so behavior is explicitly "
+             "captured in one place. Does not modify .env.provider — you can "
+             "unset the legacy vars yourself afterward.",
+    )
+    config_migrate.add_argument("--home")
+    config_migrate.add_argument("--force", action="store_true",
+                                 help="Overwrite an existing config.toml.")
 
     migrate_parser = subparsers.add_parser(
         "migrate-worktrees",
@@ -319,6 +378,14 @@ def main(argv: list[str] | None = None) -> int:
                 home=Path(args.home).expanduser().resolve() if args.home else None,
                 apply=args.apply,
             )
+        elif args.command == "config":
+            result = _handle_config_subcommand(args)
+            if result.get("_exit_code") is not None:
+                exit_code = result.pop("_exit_code")
+                print(json.dumps(result, indent=2, sort_keys=True))
+                _log_command(logger, args.command, started, exit_code=exit_code,
+                             subcommand=args.config_command)
+                return exit_code
         elif args.command == "recall":
             result = {"query": args.query, "results": search_recall(query=args.query, cwd=args.cwd, state_dir=args.state_dir)}
         elif args.command == "recall-trigger":
@@ -353,6 +420,214 @@ def main(argv: list[str] | None = None) -> int:
             error_message=str(exc)[:400],
         )
         raise
+
+
+def _handle_config_subcommand(args: argparse.Namespace) -> dict:
+    """Dispatcher for ``codex-self-evolution config <subcommand>``.
+
+    Returns a dict; callers check for ``_exit_code`` to handle non-zero
+    exit paths (validate warnings, migrate no-ops, etc.) uniformly.
+    """
+    home = Path(args.home).expanduser().resolve() if args.home else None
+    if args.config_command == "path":
+        return {"_exit_code": 0, "config_path": str(get_config_path(home))}
+
+    if args.config_command == "init":
+        path = get_config_path(home)
+        existed_before = path.exists()
+        if existed_before and not args.force:
+            return {
+                "_exit_code": 1,
+                "status": "exists",
+                "config_path": str(path),
+                "error": "config.toml already exists; use --force to overwrite",
+            }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+        return {
+            "_exit_code": 0,
+            "status": "overwritten" if existed_before else "created",
+            "config_path": str(path),
+        }
+
+    if args.config_command == "migrate-from-env":
+        # Pull env-driven values into a persisted config.toml so behavior
+        # is explicit rather than implicit. Only writes the fields whose
+        # sources are environment overrides — defaults stay commented out.
+        path = get_config_path(home)
+        if path.exists() and not args.force:
+            return {
+                "_exit_code": 1,
+                "status": "exists",
+                "config_path": str(path),
+                "error": "config.toml already exists; use --force to overwrite",
+            }
+        loaded = load_config(home=home)
+        toml_text = _render_migrated_toml(loaded)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(toml_text, encoding="utf-8")
+        migrated = [k for k, v in loaded.sources.items() if v.startswith("env:")]
+        return {
+            "_exit_code": 0,
+            "status": "migrated",
+            "config_path": str(path),
+            "migrated_fields": sorted(migrated),
+            "hint": "Review the file; unset the legacy env vars in .env.provider once you've confirmed.",
+        }
+
+    if args.config_command == "show":
+        if args.raw:
+            path = get_config_path(home)
+            if path.is_file():
+                return {"_exit_code": 0, "config_path": str(path),
+                        "config_exists": True, "raw": path.read_text(encoding="utf-8")}
+            return {"_exit_code": 0, "config_path": str(path),
+                    "config_exists": False, "raw": ""}
+        try:
+            loaded = load_config(home=home)
+        except ConfigError as exc:
+            return {"_exit_code": 2, "status": "parse_error", "error": str(exc)}
+        env_provider_view = _env_provider_api_key_summary(home)
+        return {
+            "_exit_code": 0,
+            "config_path": str(loaded.config_path),
+            "config_exists": loaded.config_exists,
+            "schema_version": loaded.config.schema_version,
+            "resolved": config_to_dict(loaded.config),
+            "sources": loaded.sources,
+            "warnings": loaded.warnings,
+            "env_provider": env_provider_view,
+        }
+
+    if args.config_command == "validate":
+        try:
+            loaded = load_config(home=home)
+        except ConfigError as exc:
+            return {"_exit_code": 2, "status": "parse_error", "error": str(exc)}
+        exit_code = 1 if loaded.warnings else 0
+        return {
+            "_exit_code": exit_code,
+            "status": "ok" if exit_code == 0 else "warnings",
+            "config_path": str(loaded.config_path),
+            "config_exists": loaded.config_exists,
+            "warnings": loaded.warnings,
+        }
+
+    return {"_exit_code": 2, "error": f"unknown config subcommand: {args.config_command}"}
+
+
+def _env_provider_api_key_summary(home: Path | None) -> dict:
+    """Show API key presence (never values) for `config show` output.
+
+    Reuses the same logic as diagnostics._check_env_provider — the
+    reviewer provider decision often hinges on "is this key set at all?",
+    so surfacing it alongside resolved config saves a round-trip to
+    `status`.
+    """
+    from .diagnostics import _check_env_provider
+    from .config import get_home_dir
+
+    home_dir = home or get_home_dir()
+    data = _check_env_provider(home_dir)
+    return {
+        "path": data["path"],
+        "exists": data["exists"],
+        "keys_set": data["keys_set"],
+        "keys_unset": data["keys_unset"],
+        "other_keys_set": data["other_keys_set"],
+    }
+
+
+def _render_migrated_toml(loaded: LoadResult) -> str:
+    """Emit a config.toml that captures the current env-driven values as
+    TOML settings. Kept deliberately small: only writes fields whose
+    source was an env var (legacy or new), so defaults stay clean.
+
+    We hand-roll TOML output because Python's stdlib ``tomllib`` is
+    read-only; pulling in ``tomli-w`` would break our zero-deps promise.
+    Output format matches the template: section headers + key = value.
+    """
+    cfg = loaded.config
+    srcs = loaded.sources
+
+    def emit(key: str, value: Any) -> str:
+        if isinstance(value, bool):
+            return f"{key} = {'true' if value else 'false'}"
+        if isinstance(value, (int, float)):
+            return f"{key} = {value}"
+        if isinstance(value, list):
+            inner = ", ".join(_toml_string_or_number(v) for v in value)
+            return f"{key} = [{inner}]"
+        return f'{key} = "{_toml_escape(str(value))}"'
+
+    def from_env(path: str) -> bool:
+        return srcs.get(path, "default").startswith("env:")
+
+    lines = [
+        "# Generated by `codex-self-evolution config migrate-from-env`.",
+        "# Captured legacy env-driven values; review before relying on.",
+        "",
+        "schema_version = 1",
+        "",
+    ]
+
+    # reviewer section
+    reviewer_lines: list[str] = []
+    for attr, path in [
+        ("provider", "reviewer.provider"),
+        ("model", "reviewer.model"),
+        ("base_url", "reviewer.base_url"),
+        ("timeout_seconds", "reviewer.timeout_seconds"),
+    ]:
+        if from_env(path):
+            reviewer_lines.append(emit(attr, getattr(cfg.reviewer, attr)))
+    if reviewer_lines:
+        lines.append("[reviewer]")
+        lines.extend(reviewer_lines)
+        lines.append("")
+
+    # compile section
+    compile_lines: list[str] = []
+    if from_env("compile.backend"):
+        compile_lines.append(emit("backend", cfg.compile.backend))
+    if compile_lines:
+        lines.append("[compile]")
+        lines.extend(compile_lines)
+        lines.append("")
+
+    # compile.opencode
+    opencode_lines: list[str] = []
+    for attr, path in [
+        ("model", "compile.opencode.model"),
+        ("agent", "compile.opencode.agent"),
+    ]:
+        if from_env(path):
+            opencode_lines.append(emit(attr, getattr(cfg.compile.opencode, attr)))
+    if opencode_lines:
+        lines.append("[compile.opencode]")
+        lines.extend(opencode_lines)
+        lines.append("")
+
+    # If no env-driven values were found, still emit something useful so
+    # users don't see an empty file and think migration failed.
+    if len(lines) <= 5:
+        lines.append("# No legacy env-driven overrides found in your environment.")
+        lines.append("# Run `codex-self-evolution config init` for the full template instead.")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _toml_escape(s: str) -> str:
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _toml_string_or_number(v: Any) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    return f'"{_toml_escape(str(v))}"'
 
 
 def _observability_extras(command: str | None, result: object) -> dict:
