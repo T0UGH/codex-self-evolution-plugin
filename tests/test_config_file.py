@@ -37,7 +37,9 @@ def _write_config(home: Path, toml: str) -> Path:
 def test_missing_config_returns_defaults(tmp_path: Path) -> None:
     loaded = load_config(home=tmp_path, env={})
     assert loaded.config_exists is False
-    assert loaded.config.schema_version == 1
+    assert loaded.config.schema_version == 2
+    assert loaded.config.active_profile == ""
+    assert loaded.config.profile_names == []
     assert loaded.config.reviewer.provider == "minimax"
     assert loaded.config.reviewer.model == ""
     assert loaded.config.compile.backend == "agent:opencode"
@@ -194,7 +196,10 @@ def test_future_schema_version_raises(tmp_path: Path) -> None:
 def test_missing_schema_version_assumed_current(tmp_path: Path) -> None:
     _write_config(tmp_path, "[reviewer]\nprovider = \"minimax\"\n")
     loaded = load_config(home=tmp_path, env={})
-    assert loaded.config.schema_version == 1
+    # When schema_version is absent we assume the current major; legacy
+    # [reviewer] block still works via the silent lift into a "default" profile.
+    assert loaded.config.schema_version == 2
+    assert loaded.config.reviewer.provider == "minimax"
 
 
 # ---- toml parse errors -------------------------------------------------
@@ -294,8 +299,12 @@ retry_backoff = ["not-a-number", 3.0]
 def test_config_to_dict_serializes_whole_tree(tmp_path: Path) -> None:
     loaded = load_config(home=tmp_path, env={})
     data = config_to_dict(loaded.config)
-    # Every section expected by config show is present.
-    assert set(data.keys()) == {"schema_version", "reviewer", "compile", "scheduler", "log"}
+    # Every section expected by config show is present (schema 2 adds
+    # active_profile + profile_names).
+    assert set(data.keys()) == {
+        "schema_version", "active_profile", "profile_names",
+        "reviewer", "compile", "scheduler", "log",
+    }
     assert "subprocess" in data["reviewer"]
     assert "opencode" in data["compile"]
 
@@ -326,3 +335,148 @@ def test_get_config_path_uses_override(tmp_path: Path) -> None:
 def test_get_config_path_defaults_to_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path))
     assert get_config_path() == tmp_path / "config.toml"
+
+
+# ---- schema 2 profiles -------------------------------------------------
+
+
+def test_schema2_profiles_with_explicit_active(tmp_path: Path) -> None:
+    _write_config(tmp_path, """
+schema_version = 2
+active_profile = "glm"
+
+[profiles.glm]
+provider = "anthropic-style"
+model = "glm-5"
+base_url = "https://open.bigmodel.cn/api/anthropic/v1/messages"
+
+[profiles.minimax]
+provider = "minimax"
+""")
+    loaded = load_config(home=tmp_path, env={})
+    assert loaded.config.active_profile == "glm"
+    assert loaded.config.profile_names == ["glm", "minimax"]
+    assert loaded.config.reviewer.provider == "anthropic-style"
+    assert loaded.config.reviewer.model == "glm-5"
+    # Source labels point at the specific profile.
+    assert loaded.sources["reviewer.provider"] == "profile:glm"
+    assert loaded.sources["reviewer.model"] == "profile:glm"
+    assert loaded.sources["active_profile"] == "config.toml"
+    assert loaded.warnings == []
+
+
+def test_schema2_profiles_switching_active_changes_reviewer(tmp_path: Path) -> None:
+    """Flip active_profile and the resolved reviewer changes with zero
+    other edits — the whole point of profiles."""
+    base = """
+schema_version = 2
+active_profile = "{active}"
+
+[profiles.glm]
+provider = "anthropic-style"
+model = "glm-5"
+
+[profiles.deepseek]
+provider = "openai-compatible"
+model = "deepseek-chat"
+base_url = "https://api.deepseek.com/v1"
+"""
+    _write_config(tmp_path, base.format(active="glm"))
+    loaded = load_config(home=tmp_path, env={})
+    assert loaded.config.reviewer.provider == "anthropic-style"
+
+    _write_config(tmp_path, base.format(active="deepseek"))
+    loaded = load_config(home=tmp_path, env={})
+    assert loaded.config.reviewer.provider == "openai-compatible"
+    assert loaded.config.reviewer.base_url == "https://api.deepseek.com/v1"
+
+
+def test_schema2_nonexistent_active_profile_warns_and_falls_back(tmp_path: Path) -> None:
+    _write_config(tmp_path, """
+schema_version = 2
+active_profile = "nope"
+
+[profiles.glm]
+provider = "anthropic-style"
+""")
+    loaded = load_config(home=tmp_path, env={})
+    assert loaded.config.active_profile == ""
+    assert loaded.config.reviewer.provider == "minimax"  # back to default
+    assert any("does not match any" in w for w in loaded.warnings)
+
+
+def test_schema2_single_profile_auto_selected_when_active_missing(tmp_path: Path) -> None:
+    """If only one profile is defined and active_profile isn't set, use it.
+    Spares users the typo-prone extra line when they have one provider."""
+    _write_config(tmp_path, """
+schema_version = 2
+
+[profiles.glm]
+provider = "anthropic-style"
+model = "glm-5"
+""")
+    loaded = load_config(home=tmp_path, env={})
+    assert loaded.config.active_profile == "glm"
+    assert loaded.config.reviewer.provider == "anthropic-style"
+
+
+def test_schema2_multiple_profiles_no_active_picks_default_if_present(tmp_path: Path) -> None:
+    _write_config(tmp_path, """
+schema_version = 2
+
+[profiles.glm]
+provider = "anthropic-style"
+
+[profiles.default]
+provider = "minimax"
+""")
+    loaded = load_config(home=tmp_path, env={})
+    assert loaded.config.active_profile == "default"
+    assert loaded.config.reviewer.provider == "minimax"
+
+
+def test_schema2_profile_field_typo_warns(tmp_path: Path) -> None:
+    _write_config(tmp_path, """
+schema_version = 2
+active_profile = "glm"
+
+[profiles.glm]
+provider = "anthropic-style"
+modle = "glm-5"
+""")
+    loaded = load_config(home=tmp_path, env={})
+    assert any("modle" in w for w in loaded.warnings)
+
+
+def test_schema1_legacy_reviewer_block_still_loads_with_deprecation_warning(tmp_path: Path) -> None:
+    _write_config(tmp_path, """
+schema_version = 1
+[reviewer]
+provider = "minimax"
+model = "MiniMax-M2.7"
+""")
+    loaded = load_config(home=tmp_path, env={})
+    assert loaded.config.reviewer.provider == "minimax"
+    assert loaded.config.reviewer.model == "MiniMax-M2.7"
+    # Synthetic "default" profile was lifted from [reviewer].
+    assert loaded.config.active_profile == "default"
+    # Source should still say config.toml (not profile:default) because
+    # the user didn't actually write [profiles.default].
+    assert loaded.sources["reviewer.provider"] == "config.toml"
+    assert any("deprecated" in w for w in loaded.warnings)
+
+
+def test_env_var_overrides_active_profile_value(tmp_path: Path) -> None:
+    """New-style env vars still win over the active profile's value — they
+    are runtime overrides for experimentation without editing config.toml."""
+    _write_config(tmp_path, """
+schema_version = 2
+active_profile = "glm"
+
+[profiles.glm]
+provider = "anthropic-style"
+model = "glm-5"
+""")
+    loaded = load_config(home=tmp_path, env={"CODEX_SELF_EVOLUTION_REVIEWER_MODEL": "glm-4.5"})
+    assert loaded.config.reviewer.model == "glm-4.5"
+    assert loaded.sources["reviewer.model"] == "env:CODEX_SELF_EVOLUTION_REVIEWER_MODEL"

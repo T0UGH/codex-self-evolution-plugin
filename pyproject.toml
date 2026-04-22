@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-self-evolution-plugin"
-version = "0.6.0"
+version = "0.7.0"
 description = "Self-evolution loop for OpenAI Codex: Stop-hook reviewer + scheduled per-repo memory/recall/skill compilation, zero runtime dependencies."
 readme = "README.md"
 requires-python = ">=3.11"

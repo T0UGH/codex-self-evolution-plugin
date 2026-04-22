@@ -1,11 +1,11 @@
 """Static TOML template emitted by ``codex-self-evolution config init``.
 
-Kept out of :mod:`config_file` so the template string — which is long and
-prose-heavy — doesn't clutter the loader module. Format is a plain TOML
-file with every section commented and explained; users can uncomment what
-they need and leave the rest.
+Schema 2: profile-first. Multiple named provider presets live side by side
+in ``[profiles.<name>]`` sections; switch between them by flipping
+``active_profile`` at the top (or via ``codex-self-evolution config use
+<name>``). Keys still live in .env.provider; only behavior in config.toml.
 
-Matches the schema in ``docs/design_v2.md`` §3.2.
+Matches ``docs/design_v2.md`` §3.2 (revised 2026-04-22 to profile-based).
 """
 
 from __future__ import annotations
@@ -17,95 +17,82 @@ CONFIG_TEMPLATE: str = """\
 # Single source of truth for plugin behavior. API keys stay in
 # .env.provider (secrets); behavior settings live here.
 #
-# Every field below is optional — if absent, built-in defaults kick in.
-# Environment variables still work as overrides. Run
-# `codex-self-evolution config show` to see the resolved final values.
-#
+# Run `codex-self-evolution config show` to see the resolved final values.
+# Run `codex-self-evolution config use <profile>` to switch active reviewer.
 # See docs/design_v2.md for the full reference.
 
-schema_version = 1
+schema_version = 2
+
+# Which [profiles.<name>] is live. Flip this (or use `config use`) to
+# switch providers without editing each field manually.
+active_profile = "minimax"
 
 
 # ===========================================================================
-# [reviewer] — Stop-hook background reviewer
+# [profiles.*] — named reviewer configurations. Each one is self-contained.
 # ===========================================================================
 
-[reviewer]
-# provider: how the Stop-hook reviewer is dispatched.
-#   minimax           — HTTP POST to MiniMax (Anthropic-style endpoint)
-#   openai-compatible — HTTP POST to any OpenAI-compat endpoint (GLM,
-#                       DeepSeek, Qwen, Kimi, Gemini-OpenAI-mode, etc.)
-#   anthropic-style   — HTTP POST to any Anthropic-style endpoint
-#   codex-cli         — Subprocess: runs the local `codex exec` CLI (uses
-#                       your existing ChatGPT login, no API key needed)
-#   opencode-cli      — Subprocess: runs the local `opencode run` CLI
+# MiniMax (default; Anthropic-style endpoint). Uses $MINIMAX_API_KEY.
+[profiles.minimax]
 provider = "minimax"
-
-# model: provider-specific model name. Empty string → use provider default.
-model = ""
-
-# base_url: HTTP endpoint URL. Empty string → provider default. This is
-# how you switch to different providers without writing new code:
-#
-#   Gemini   → "https://generativelanguage.googleapis.com/v1beta/openai"
-#   DeepSeek → "https://api.deepseek.com/v1"
-#   GLM      → "https://open.bigmodel.cn/api/paas/v4"
-#   Qwen     → "https://dashscope.aliyuncs.com/compatible-mode/v1"
-#   Kimi     → "https://api.moonshot.cn/v1"
-#
-# Paired with provider = "openai-compatible" for all of the above.
-base_url = ""
-
-# HTTP-request budgets. Adjust when your provider is slow or rate-limited.
+model = "MiniMax-M2.7"
 timeout_seconds = 30
 max_tokens = 4096
 max_retries = 2
 retry_backoff = [2.0, 5.0]
 
 
-# Only applies when provider = "codex-cli" / "opencode-cli" / custom.
-[reviewer.subprocess]
-# command: subprocess argv. Empty array → use provider's built-in default.
-# To point at a custom CLI: command = ["my-llm-cli", "--json"]
-command = []
+# GLM via Zhipu's Anthropic-compatible endpoint. Uses $ANTHROPIC_API_KEY
+# (with the Zhipu key as the value — our provider sends `x-api-key` which
+# GLM accepts).
+[profiles.glm]
+provider = "anthropic-style"
+model = "glm-5"
+base_url = "https://open.bigmodel.cn/api/anthropic/v1/messages"
+timeout_seconds = 60
+max_retries = 2
+retry_backoff = [3.0, 8.0]
 
-# payload_mode: how to hand the review snapshot to the child process.
-#   stdin  — JSON piped via stdin (codex-cli default)
-#   file   — JSON written to a tempfile, path attached via argv
-#   inline — JSON appended to the prompt (simpler, but argv size limits bite)
-payload_mode = "stdin"
 
-# response_format: how to parse the child's stdout.
-#   codex-events    — codex exec --json event stream
-#   opencode-events — opencode run --format json event stream
-#   raw-json        — child prints one JSON object directly
-response_format = "codex-events"
+# DeepSeek (cheap, capable) via OpenAI-compat. Uses $OPENAI_API_KEY.
+[profiles.deepseek]
+provider = "openai-compatible"
+model = "deepseek-chat"
+base_url = "https://api.deepseek.com/v1"
 
-timeout_seconds = 90
+
+# Gemini via Google's OpenAI-compat endpoint. Uses $OPENAI_API_KEY.
+[profiles.gemini]
+provider = "openai-compatible"
+model = "gemini-2.5-flash"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+
+
+# Codex CLI — no API key needed. Uses your existing ChatGPT login.
+[profiles.codex]
+provider = "codex-cli"
+# subprocess.command = []   # leave empty for built-in default argv
+
+
+# Opencode CLI — no API key needed. Uses opencode's own auth.
+[profiles.opencode]
+provider = "opencode-cli"
 
 
 # ===========================================================================
-# [compile] — merge reviewer suggestions into MEMORY/USER.md, recall, skills
+# [compile] — merge reviewer suggestions into MEMORY/USER.md + recall + skills
 # ===========================================================================
 
 [compile]
-# backend: pick how compile merges new suggestions.
-#   script         — local dedup; deterministic, sub-second
-#   agent:opencode — LLM agent merges; smarter dedup + skill generation
+# script | agent:opencode
 backend = "agent:opencode"
-
-# When agent backend fails (subprocess crashed, output malformed, etc.)
-# fall back to script. Keep this true in production — without it, a
-# single opencode flake stalls every compile until the user notices.
 allow_fallback = true
 
 
 [compile.opencode]
-# Empty strings → let opencode pick from its own ~/.config/opencode/opencode.json.
+# Empty strings → let opencode pick from ~/.config/opencode/opencode.json.
 model = ""
 agent = ""
-
-# Must stay well under the 30-min compile lock stale threshold.
 timeout_seconds = 900
 
 
@@ -114,13 +101,9 @@ timeout_seconds = 900
 # ===========================================================================
 
 [scheduler]
-# Default backend when the launchd scheduler invokes `scan`. Same values
-# as compile.backend.
 backend = "agent:opencode"
-
-# Documentation-only today — the authoritative interval lives in the
-# launchd plist (~/Library/LaunchAgents/com.codex-self-evolution.preflight.plist).
-# Change this value AND re-run scripts/install-scheduler.sh to take effect.
+# interval_seconds is documentation-only — authoritative value lives in
+# ~/Library/LaunchAgents/com.codex-self-evolution.preflight.plist.
 interval_seconds = 300
 
 

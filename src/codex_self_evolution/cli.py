@@ -152,6 +152,30 @@ def build_parser() -> argparse.ArgumentParser:
     config_migrate.add_argument("--force", action="store_true",
                                  help="Overwrite an existing config.toml.")
 
+    config_use = config_sub.add_parser(
+        "use",
+        help="Switch active_profile by rewriting only that line in config.toml. "
+             "Preserves comments + other settings.",
+    )
+    config_use.add_argument("profile", help="Name of a [profiles.<name>] section defined in config.toml.")
+    config_use.add_argument("--home")
+
+    config_list = config_sub.add_parser(
+        "list-profiles",
+        help="List every [profiles.<name>] defined in config.toml, "
+             "marking the active one.",
+    )
+    config_list.add_argument("--home")
+
+    config_migrate_v2 = config_sub.add_parser(
+        "migrate-to-v2",
+        help="Rewrite a schema_version=1 config.toml so the legacy [reviewer] "
+             "block becomes a [profiles.default] section + active_profile.",
+    )
+    config_migrate_v2.add_argument("--home")
+    config_migrate_v2.add_argument("--force", action="store_true",
+                                    help="Overwrite an existing v2 config.toml.")
+
     migrate_parser = subparsers.add_parser(
         "migrate-worktrees",
         help="Consolidate buckets that belong to git worktrees of the same logical "
@@ -450,6 +474,73 @@ def _handle_config_subcommand(args: argparse.Namespace) -> dict:
             "config_path": str(path),
         }
 
+    if args.config_command == "use":
+        try:
+            loaded = load_config(home=home)
+        except ConfigError as exc:
+            return {"_exit_code": 2, "status": "parse_error", "error": str(exc)}
+        target = args.profile
+        if target not in loaded.config.profile_names:
+            return {
+                "_exit_code": 1,
+                "status": "unknown_profile",
+                "requested": target,
+                "available": loaded.config.profile_names,
+                "error": f"no [profiles.{target}] section found; available: "
+                         f"{loaded.config.profile_names}",
+            }
+        path = loaded.config_path
+        if not path.is_file():
+            return {"_exit_code": 1, "status": "no_config",
+                    "error": "config.toml does not exist; run `config init` first"}
+        _rewrite_active_profile(path, target)
+        return {
+            "_exit_code": 0,
+            "status": "switched",
+            "active_profile": target,
+            "config_path": str(path),
+        }
+
+    if args.config_command == "list-profiles":
+        try:
+            loaded = load_config(home=home)
+        except ConfigError as exc:
+            return {"_exit_code": 2, "status": "parse_error", "error": str(exc)}
+        return {
+            "_exit_code": 0,
+            "active_profile": loaded.config.active_profile,
+            "profiles": loaded.config.profile_names,
+            "config_path": str(loaded.config_path),
+            "config_exists": loaded.config_exists,
+        }
+
+    if args.config_command == "migrate-to-v2":
+        path = get_config_path(home)
+        if not path.is_file():
+            return {"_exit_code": 1, "status": "no_config",
+                    "error": "config.toml does not exist; nothing to migrate"}
+        try:
+            loaded = load_config(home=home)
+        except ConfigError as exc:
+            return {"_exit_code": 2, "status": "parse_error", "error": str(exc)}
+        # Nothing to do if already schema 2 with profiles.
+        if loaded.config.schema_version >= 2 and loaded.config.profile_names \
+                and not any("deprecated" in w for w in loaded.warnings):
+            return {"_exit_code": 0, "status": "already_v2",
+                    "config_path": str(path)}
+        new_text = _render_v2_from_loaded(loaded)
+        # Write atomically via temp + rename so a failed migration doesn't
+        # leave the user with a half-written config.
+        tmp_path = path.with_suffix(".toml.tmp")
+        tmp_path.write_text(new_text, encoding="utf-8")
+        tmp_path.replace(path)
+        return {
+            "_exit_code": 0,
+            "status": "migrated",
+            "config_path": str(path),
+            "active_profile": "default",
+        }
+
     if args.config_command == "migrate-from-env":
         # Pull env-driven values into a persisted config.toml so behavior
         # is explicit rather than implicit. Only writes the fields whose
@@ -536,6 +627,97 @@ def _env_provider_api_key_summary(home: Path | None) -> dict:
         "keys_unset": data["keys_unset"],
         "other_keys_set": data["other_keys_set"],
     }
+
+
+def _rewrite_active_profile(path: Path, new_value: str) -> None:
+    """Update ``active_profile = "X"`` inline, preserving comments + layout.
+
+    Three cases to handle:
+
+    1. ``active_profile = ...`` already exists: replace the RHS only.
+    2. It doesn't exist but ``schema_version = ...`` does: insert the new
+       line right after schema_version so the two version/selection lines
+       travel together.
+    3. Neither exists: prepend a schema + active line block.
+
+    Uses text-level edits instead of round-tripping TOML because tomllib
+    is read-only and hand-rolling a full TOML writer drops user comments.
+    """
+    import re
+
+    text = path.read_text(encoding="utf-8")
+    active_re = re.compile(r'^(\s*active_profile\s*=\s*)(?:"[^"]*"|\S+)\s*$', re.MULTILINE)
+    if active_re.search(text):
+        new_text = active_re.sub(rf'\g<1>"{new_value}"', text)
+    else:
+        schema_re = re.compile(r'^(\s*schema_version\s*=\s*\d+)\s*$', re.MULTILINE)
+        if schema_re.search(text):
+            new_text = schema_re.sub(
+                rf'\g<1>\nactive_profile = "{new_value}"',
+                text,
+                count=1,
+            )
+        else:
+            new_text = f'schema_version = 2\nactive_profile = "{new_value}"\n\n' + text
+    path.write_text(new_text, encoding="utf-8")
+
+
+def _render_v2_from_loaded(loaded: LoadResult) -> str:
+    """Produce a schema-2 config.toml from a loaded schema-1 state.
+
+    Writes the legacy [reviewer] block's values as a [profiles.default]
+    section and sets ``active_profile = "default"``. Non-reviewer sections
+    (compile, scheduler, log) carry over verbatim.
+    """
+    cfg = loaded.config
+    lines = [
+        "# Migrated from schema_version = 1 by `config migrate-to-v2`.",
+        "# The previous top-level [reviewer] block is now [profiles.default].",
+        "",
+        "schema_version = 2",
+        f'active_profile = "default"',
+        "",
+        "[profiles.default]",
+    ]
+    for attr in ("provider", "model", "base_url"):
+        value = getattr(cfg.reviewer, attr)
+        if value:
+            lines.append(f'{attr} = "{_toml_escape(str(value))}"')
+    lines.append(f"timeout_seconds = {cfg.reviewer.timeout_seconds}")
+    lines.append(f"max_tokens = {cfg.reviewer.max_tokens}")
+    lines.append(f"max_retries = {cfg.reviewer.max_retries}")
+    if cfg.reviewer.retry_backoff:
+        formatted = ", ".join(str(v) for v in cfg.reviewer.retry_backoff)
+        lines.append(f"retry_backoff = [{formatted}]")
+
+    # compile section
+    lines.extend([
+        "",
+        "[compile]",
+        f'backend = "{_toml_escape(cfg.compile.backend)}"',
+        f'allow_fallback = {"true" if cfg.compile.allow_fallback else "false"}',
+    ])
+    if cfg.compile.opencode.model or cfg.compile.opencode.agent or cfg.compile.opencode.timeout_seconds != 900.0:
+        lines.append("")
+        lines.append("[compile.opencode]")
+        if cfg.compile.opencode.model:
+            lines.append(f'model = "{_toml_escape(cfg.compile.opencode.model)}"')
+        if cfg.compile.opencode.agent:
+            lines.append(f'agent = "{_toml_escape(cfg.compile.opencode.agent)}"')
+        lines.append(f"timeout_seconds = {cfg.compile.opencode.timeout_seconds}")
+
+    lines.extend([
+        "",
+        "[scheduler]",
+        f'backend = "{_toml_escape(cfg.scheduler.backend)}"',
+        f"interval_seconds = {cfg.scheduler.interval_seconds}",
+    ])
+    lines.extend([
+        "",
+        "[log]",
+        f"retention_days = {cfg.log.retention_days}",
+    ])
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _render_migrated_toml(loaded: LoadResult) -> str:

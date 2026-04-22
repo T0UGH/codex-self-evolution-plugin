@@ -52,9 +52,11 @@ def test_config_init_creates_template_file(
     config_path = tmp_path / "config.toml"
     assert config_path.is_file()
     content = config_path.read_text(encoding="utf-8")
-    # Template includes the schema_version and at least one section.
-    assert "schema_version" in content
-    assert "[reviewer]" in content
+    # Template includes the schema + at least one profile + compile section.
+    assert "schema_version = 2" in content
+    assert "active_profile" in content
+    assert "[profiles.minimax]" in content
+    assert "[profiles.glm]" in content
 
 
 def test_config_init_refuses_overwrite_without_force(
@@ -150,7 +152,13 @@ def test_config_validate_exits_zero_for_clean_config(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    (tmp_path / "config.toml").write_text("[reviewer]\nprovider = \"minimax\"\n", encoding="utf-8")
+    # Clean = schema 2 with a profile, no legacy [reviewer] block (that would
+    # trigger a deprecation warning).
+    (tmp_path / "config.toml").write_text(
+        "schema_version = 2\nactive_profile = \"default\"\n"
+        "[profiles.default]\nprovider = \"minimax\"\n",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path))
     code, result = _invoke(["config", "validate"], capsys)
     assert code == 0
@@ -240,6 +248,112 @@ def test_config_migrate_with_no_env_vars_still_writes_scaffold(
     content = (tmp_path / "config.toml").read_text(encoding="utf-8")
     assert "schema_version = 1" in content
     assert "No legacy env-driven overrides found" in content
+
+
+def test_config_list_profiles_returns_sorted_list_and_marks_active(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "config.toml").write_text("""
+schema_version = 2
+active_profile = "glm"
+
+[profiles.glm]
+provider = "anthropic-style"
+
+[profiles.minimax]
+provider = "minimax"
+
+[profiles.deepseek]
+provider = "openai-compatible"
+""", encoding="utf-8")
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path))
+    code, result = _invoke(["config", "list-profiles"], capsys)
+    assert code == 0
+    assert result["active_profile"] == "glm"
+    assert sorted(result["profiles"]) == ["deepseek", "glm", "minimax"]
+
+
+def test_config_use_switches_active_profile_inline(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Critical: ``config use`` must preserve comments + other fields."""
+    original = """# my notes
+schema_version = 2
+active_profile = "minimax"
+
+# GLM preset — switch to this when testing
+[profiles.glm]
+provider = "anthropic-style"
+model = "glm-5"
+
+[profiles.minimax]
+provider = "minimax"
+"""
+    (tmp_path / "config.toml").write_text(original, encoding="utf-8")
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path))
+    code, result = _invoke(["config", "use", "glm"], capsys)
+    assert code == 0
+    assert result["status"] == "switched"
+    assert result["active_profile"] == "glm"
+
+    updated = (tmp_path / "config.toml").read_text(encoding="utf-8")
+    # Exact line rewrite, no reformatting.
+    assert 'active_profile = "glm"' in updated
+    assert 'active_profile = "minimax"' not in updated
+    # Comments and other sections survive.
+    assert "# my notes" in updated
+    assert "# GLM preset" in updated
+    assert "[profiles.minimax]" in updated
+
+
+def test_config_use_rejects_unknown_profile(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "config.toml").write_text("""
+schema_version = 2
+active_profile = "glm"
+
+[profiles.glm]
+provider = "anthropic-style"
+""", encoding="utf-8")
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path))
+    code, result = _invoke(["config", "use", "no-such-profile"], capsys)
+    assert code == 1
+    assert result["status"] == "unknown_profile"
+    assert "glm" in result["available"]
+
+
+def test_config_migrate_to_v2_converts_legacy_reviewer(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "config.toml").write_text("""
+schema_version = 1
+
+[reviewer]
+provider = "anthropic-style"
+model = "glm-5"
+base_url = "https://open.bigmodel.cn/api/anthropic/v1/messages"
+timeout_seconds = 60
+""", encoding="utf-8")
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path))
+    code, result = _invoke(["config", "migrate-to-v2"], capsys)
+    assert code == 0
+    assert result["status"] == "migrated"
+    migrated = (tmp_path / "config.toml").read_text(encoding="utf-8")
+    assert "schema_version = 2" in migrated
+    assert 'active_profile = "default"' in migrated
+    assert "[profiles.default]" in migrated
+    assert "glm-5" in migrated
+    # No more [reviewer] top-level section.
+    assert "\n[reviewer]" not in migrated
 
 
 def test_config_show_surfaces_toml_warnings(

@@ -80,8 +80,15 @@ class LogConfig:
 
 @dataclass
 class PluginConfig:
-    schema_version: int = 1
+    schema_version: int = 2
+    # Which ``[profiles.X]`` is currently active. Empty string = no profiles
+    # defined (fresh install; use ReviewerConfig defaults).
+    active_profile: str = ""
+    # Resolved reviewer config for the active profile (merged with env).
     reviewer: ReviewerConfig = field(default_factory=ReviewerConfig)
+    # The full set of profile names defined in config.toml, so `config
+    # list-profiles` can show them without re-reading the file.
+    profile_names: list[str] = field(default_factory=list)
     compile: CompileConfig = field(default_factory=CompileConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     log: LogConfig = field(default_factory=LogConfig)
@@ -110,7 +117,13 @@ class LoadResult:
 # ---- Constants ----------------------------------------------------------
 
 
-SUPPORTED_SCHEMA_VERSION = 1
+SUPPORTED_SCHEMA_VERSION = 2
+
+# The loader still accepts schema_version = 1 (0.6.0 format with [reviewer]
+# at the top level) by silently lifting it into a single "default" profile.
+# Schema 1 itself is deprecated — users see a warning pointing at
+# ``config migrate-to-v2``.
+MIN_SUPPORTED_SCHEMA_VERSION = 1
 
 ALLOWED_PROVIDERS = {
     "minimax",
@@ -205,10 +218,19 @@ def load_config(
             raise ConfigError(f"failed to read {config_path}: {exc}") from exc
 
     schema_version = raw_toml.get("schema_version", SUPPORTED_SCHEMA_VERSION)
-    if not isinstance(schema_version, int) or schema_version > SUPPORTED_SCHEMA_VERSION:
+    if not isinstance(schema_version, int):
         raise ConfigError(
-            f"{config_path}: schema_version={schema_version!r} is newer than "
+            f"{config_path}: schema_version must be an integer, got {schema_version!r}"
+        )
+    if schema_version > SUPPORTED_SCHEMA_VERSION:
+        raise ConfigError(
+            f"{config_path}: schema_version={schema_version} is newer than "
             f"this plugin understands ({SUPPORTED_SCHEMA_VERSION}). Upgrade the plugin."
+        )
+    if schema_version < MIN_SUPPORTED_SCHEMA_VERSION:
+        raise ConfigError(
+            f"{config_path}: schema_version={schema_version} is too old "
+            f"(min supported: {MIN_SUPPORTED_SCHEMA_VERSION})."
         )
 
     # Detect API-key-lookalike fields in TOML and warn (don't block).
@@ -223,8 +245,71 @@ def load_config(
     config.schema_version = int(schema_version) if config_exists and "schema_version" in raw_toml else SUPPORTED_SCHEMA_VERSION
     sources["schema_version"] = "config.toml" if ("schema_version" in raw_toml) else "default"
 
-    # --- reviewer ---
-    reviewer_toml = raw_toml.get("reviewer", {}) or {}
+    # --- profile resolution ---
+    # Schema 2 is profile-first: [profiles.X] sections + active_profile at top.
+    # Schema 1 (legacy, 0.6.0) had [reviewer] at top level; we silently lift
+    # it into a synthetic ``default`` profile so existing installs keep
+    # loading. Users get a deprecation warning pointing to ``config
+    # migrate-to-v2``.
+    profiles_tree = raw_toml.get("profiles", {}) or {}
+    if not isinstance(profiles_tree, dict):
+        warnings.append("[profiles] must be a table of profile sections; ignored")
+        profiles_tree = {}
+    # Snapshot explicitly-declared profile names before we lift legacy
+    # [reviewer] into a synthetic ``default`` profile — source labelling
+    # uses this to distinguish "real profile" from "legacy fallback".
+    explicit_profile_names = set(profiles_tree.keys())
+
+    legacy_reviewer = raw_toml.get("reviewer", {}) or {}
+    if legacy_reviewer and isinstance(legacy_reviewer, dict):
+        if schema_version >= 2:
+            warnings.append(
+                "[reviewer] at top level is deprecated in schema_version=2; "
+                "move fields into [profiles.<name>] and set active_profile"
+            )
+        else:
+            warnings.append(
+                "schema_version=1 is deprecated; run `config migrate-to-v2` to "
+                "convert the [reviewer] block into a [profiles.default] section"
+            )
+        # If we didn't already have a "default" profile defined, create one
+        # from [reviewer] so the rest of the loader has a profile to use.
+        if "default" not in profiles_tree:
+            profiles_tree = {"default": legacy_reviewer, **profiles_tree}
+
+    active_profile = raw_toml.get("active_profile")
+    if active_profile is not None and not isinstance(active_profile, str):
+        warnings.append(
+            f"active_profile must be a string, got {type(active_profile).__name__}; ignored"
+        )
+        active_profile = None
+    active_profile = (active_profile or "").strip()
+
+    # Auto-pick an active profile when none was declared:
+    # - Exactly one profile defined → use it
+    # - Otherwise, prefer "default" if present
+    # - Else leave empty (fall back to dataclass defaults)
+    if not active_profile:
+        if len(profiles_tree) == 1:
+            active_profile = next(iter(profiles_tree))
+        elif "default" in profiles_tree:
+            active_profile = "default"
+
+    if active_profile and active_profile not in profiles_tree:
+        warnings.append(
+            f"active_profile='{active_profile}' does not match any [profiles.*] "
+            "section; falling back to built-in defaults"
+        )
+        active_profile = ""
+
+    config.active_profile = active_profile
+    config.profile_names = sorted(profiles_tree.keys())
+    sources["active_profile"] = (
+        "config.toml" if "active_profile" in raw_toml else
+        ("config.toml (auto)" if active_profile else "default")
+    )
+
+    reviewer_toml = profiles_tree.get(active_profile, {}) if active_profile else {}
     provider, provider_source = _resolve(
         field_path="reviewer.provider",
         new_env=_NEW_ENV_MAP.get("CODEX_SELF_EVOLUTION_REVIEWER_PROVIDER"),
@@ -409,6 +494,17 @@ def load_config(
         cast=int,
     )
 
+    # Source label rewrite: when the active profile was *explicitly* declared
+    # in config.toml (i.e. not the synthetic "default" we lift from legacy
+    # [reviewer]), rewrite source labels from "config.toml" → "profile:<name>"
+    # so ``config show`` shows the user exactly which profile a value came
+    # from. Synthesized defaults keep the "config.toml" label because the
+    # user's file doesn't actually have a [profiles.default] section.
+    if active_profile and active_profile in explicit_profile_names:
+        for key, value in list(sources.items()):
+            if key.startswith("reviewer.") and value == "config.toml":
+                sources[key] = f"profile:{active_profile}"
+
     return LoadResult(
         config=config,
         sources=sources,
@@ -521,10 +617,14 @@ def _lint_no_keys_in_config(toml_tree: dict[str, Any]) -> list[str]:
     return warnings
 
 
-# Leaf keys (last segment of a dotted path) that the loader understands.
-# Used to warn about typos like ``[reviewer] modle = "..."``.
+# Top-level paths the loader understands. Schema 1 kept [reviewer] here;
+# schema 2 also accepts [profiles.*]. ``profiles`` itself is recognized but
+# its children are validated via ``_RECOGNIZED_PROFILE_FIELDS``.
 _RECOGNIZED_PATHS: frozenset[str] = frozenset([
     "schema_version",
+    "active_profile",
+    "profiles",
+    # Legacy 0.6.0 top-level [reviewer] block, still accepted with a warning.
     "reviewer", "reviewer.provider", "reviewer.model", "reviewer.base_url",
     "reviewer.timeout_seconds", "reviewer.max_tokens", "reviewer.max_retries",
     "reviewer.retry_backoff",
@@ -538,19 +638,61 @@ _RECOGNIZED_PATHS: frozenset[str] = frozenset([
     "log", "log.retention_days",
 ])
 
+# Fields allowed inside [profiles.<name>]. Mirrors ReviewerConfig shape —
+# the resolver uses this same schema regardless of which profile is active.
+_RECOGNIZED_PROFILE_FIELDS: frozenset[str] = frozenset([
+    "provider", "model", "base_url", "timeout_seconds", "max_tokens",
+    "max_retries", "retry_backoff",
+    "subprocess",
+    "subprocess.command", "subprocess.payload_mode",
+    "subprocess.response_format", "subprocess.timeout_seconds",
+])
+
 
 def _lint_unknown_keys(toml_tree: dict[str, Any]) -> list[str]:
-    """Warn on TOML paths we don't recognize — catches typos early."""
+    """Warn on TOML paths we don't recognize — catches typos early.
+
+    Profiles need a special rule: ``[profiles.anything]`` is legal because
+    profile names are user-chosen, but the fields *inside* each profile
+    must still match the reviewer schema.
+    """
     warnings: list[str] = []
+
+    def walk_profile_children(profile_name: str, node: Any) -> None:
+        if not isinstance(node, dict):
+            warnings.append(
+                f"config.toml[profiles.{profile_name}]: expected table, got {type(node).__name__}"
+            )
+            return
+        for key, value in node.items():
+            if key not in _RECOGNIZED_PROFILE_FIELDS and key != "subprocess":
+                warnings.append(
+                    f"config.toml[profiles.{profile_name}.{key}]: unknown field (typo?)"
+                )
+                continue
+            if key == "subprocess" and isinstance(value, dict):
+                for sub_key in value.keys():
+                    full_sub = f"subprocess.{sub_key}"
+                    if full_sub not in _RECOGNIZED_PROFILE_FIELDS:
+                        warnings.append(
+                            f"config.toml[profiles.{profile_name}.subprocess.{sub_key}]: "
+                            "unknown field (typo?)"
+                        )
 
     def walk(node: Any, path: str) -> None:
         if not isinstance(node, dict):
             return
         for key, value in node.items():
             full = f"{path}.{key}" if path else str(key)
+            if path == "" and key == "profiles":
+                # Children are profile names (user-chosen); validate their
+                # grandchildren against the reviewer schema.
+                if isinstance(value, dict):
+                    for profile_name, profile_body in value.items():
+                        walk_profile_children(str(profile_name), profile_body)
+                continue
             if full not in _RECOGNIZED_PATHS:
                 warnings.append(f"config.toml[{full}]: unknown key (typo?)")
-                # Don't descend into unknown keys — they could be anything.
                 continue
             walk(value, full)
 
