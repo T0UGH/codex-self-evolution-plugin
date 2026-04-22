@@ -42,8 +42,17 @@ WELL_KNOWN_API_KEYS = (
 )
 
 
-def collect_status(home: str | Path | None = None) -> dict[str, Any]:
-    """Assemble the full diagnostic snapshot. Raises nothing."""
+def collect_status(
+    home: str | Path | None = None,
+    recent_window_hours: float = 24.0,
+) -> dict[str, Any]:
+    """Assemble the full diagnostic snapshot. Raises nothing.
+
+    ``recent_window_hours`` bounds the plugin.log scan — only entries newer
+    than ``now - window`` contribute to the recent-activity aggregate. 24h
+    is the default because the log rotates daily, so a full active-day view
+    fits in exactly one file without the scanner stitching across rotations.
+    """
     home_dir = Path(home).expanduser().resolve() if home else get_home_dir()
     return {
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -53,6 +62,7 @@ def collect_status(home: str | Path | None = None) -> dict[str, Any]:
         "env_provider": _check_env_provider(home_dir),
         "tools": _check_tools(),
         "buckets": _list_buckets(home_dir),
+        "recent_activity": _recent_activity(home_dir, window_hours=recent_window_hours),
     }
 
 
@@ -282,4 +292,163 @@ def _read_last_receipt(receipt_path: Path) -> dict[str, Any] | None:
         "fallback_backend": data.get("fallback_backend"),
         "processed_count": data.get("processed_count"),
         "skip_reason": data.get("skip_reason"),
+        "memory_action_stats": data.get("memory_action_stats") or {},
     }
+
+
+# ---------- recent activity from plugin.log -----------------------------
+
+# Fields we actually care about when rolling up the log. Anything outside
+# this set is ignored so new log shapes don't silently distort the metrics.
+_LOG_KINDS = {"stop-review", "scan", "compile", "migrate-worktrees", "session-start", "status"}
+
+
+def _recent_activity(home_dir: Path, window_hours: float = 24.0) -> dict[str, Any]:
+    """Roll up the tail of ``plugin.log`` into a health snapshot.
+
+    Returns a dict shape every status consumer can depend on, even when
+    the log is missing / unreadable / empty. Individual malformed lines
+    are skipped so one bad JSON payload never breaks the whole summary.
+
+    The keys surfaced here are the same ones emitted by
+    :func:`cli._observability_extras` so the dashboard reads back what
+    the invocation path writes — stop-review families, scan aggregate,
+    retry counts.
+    """
+    log_path = home_dir / "logs" / "plugin.log"
+    empty = {
+        "log_path": str(log_path),
+        "window_hours": window_hours,
+        "log_available": False,
+        "stop_review": {"total": 0, "succeeded": 0, "failed": 0,
+                        "suggestions_emitted": 0,
+                        "families": {"memory_updates": 0, "recall_candidate": 0, "skill_action": 0},
+                        "skipped": 0, "by_error_type": {}},
+        "scan": {"total": 0, "with_processed_buckets": 0, "with_fallback": 0,
+                 "memory_actions": {"add": 0, "replace": 0, "remove": 0},
+                 "scopes": {"user": 0, "global": 0},
+                 "suggestions": 0, "discarded": 0},
+        "retries": {"total": 0, "by_reason": {}},
+    }
+    if not log_path.is_file():
+        return empty
+    try:
+        raw = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return empty
+
+    cutoff = datetime.now(timezone.utc).timestamp() - (window_hours * 3600)
+    summary = {
+        **empty,
+        "log_available": True,
+    }
+    # Reset nested dicts so we don't mutate the shared empty template.
+    summary["stop_review"] = {**empty["stop_review"],
+                              "families": dict(empty["stop_review"]["families"]),
+                              "by_error_type": {}}
+    summary["scan"] = {**empty["scan"],
+                       "memory_actions": dict(empty["scan"]["memory_actions"]),
+                       "scopes": dict(empty["scan"]["scopes"])}
+    summary["retries"] = {**empty["retries"], "by_reason": {}}
+
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        ts = event.get("ts")
+        if isinstance(ts, str):
+            try:
+                # ``plugin.log`` writes ``YYYY-MM-DDTHH:MM:SS.ffffffZ``; the
+                # 'Z' isn't parsed by fromisoformat pre-3.11 so swap it.
+                event_time = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                continue
+            if event_time < cutoff:
+                continue
+
+        msg = str(event.get("msg") or "")
+        # Retry signals are INFO log lines from the provider, identified by
+        # their message prefix — not by a `kind` field.
+        if "retrying after" in msg:
+            summary["retries"]["total"] += 1
+            reason = _classify_retry_reason(msg)
+            summary["retries"]["by_reason"][reason] = summary["retries"]["by_reason"].get(reason, 0) + 1
+            continue
+
+        kind = event.get("kind")
+        if kind == "stop-review":
+            _merge_stop_review(summary["stop_review"], event)
+        elif kind == "scan":
+            _merge_scan(summary["scan"], event)
+
+    return summary
+
+
+def _classify_retry_reason(msg: str) -> str:
+    """Turn the free-form retry message into a short categorical label."""
+    lower = msg.lower()
+    match = re.search(r"http (\d+)", lower)
+    if match:
+        return f"HTTP {match.group(1)}"
+    if "timeout" in lower:
+        return "timeout"
+    return "other"
+
+
+def _merge_stop_review(acc: dict[str, Any], event: dict[str, Any]) -> None:
+    """Fold one stop-review log entry into the running aggregate.
+
+    Skips foreground ``mode=from_stdin`` entries — those are just the
+    parent-hook acknowledgements (always success, no reviewer call). The
+    background entry (the second one per session) is what carries the
+    actual reviewer result.
+    """
+    if event.get("mode") == "from_stdin":
+        return
+    acc["total"] += 1
+    if event.get("exit_code") == 0:
+        acc["succeeded"] += 1
+    else:
+        acc["failed"] += 1
+        err_type = str(event.get("error_type") or "unknown")
+        acc["by_error_type"][err_type] = acc["by_error_type"].get(err_type, 0) + 1
+
+    count = event.get("suggestion_count")
+    if isinstance(count, int):
+        acc["suggestions_emitted"] += count
+    skipped = event.get("skipped_suggestion_count")
+    if isinstance(skipped, int):
+        acc["skipped"] += skipped
+    families = event.get("suggestion_families")
+    if isinstance(families, dict):
+        for key, value in families.items():
+            if key in acc["families"] and isinstance(value, int):
+                acc["families"][key] += value
+
+
+def _merge_scan(acc: dict[str, Any], event: dict[str, Any]) -> None:
+    """Fold one scan log entry into the running aggregate. Only scans with
+    an ``aggregate`` extra (i.e. they actually processed buckets) contribute
+    — skip_empty scans are still counted as total but don't pollute the
+    action/scope breakdowns."""
+    acc["total"] += 1
+    aggregate = event.get("aggregate")
+    if not isinstance(aggregate, dict):
+        return
+    acc["with_processed_buckets"] += 1
+    if int(aggregate.get("buckets_with_fallback", 0) or 0) > 0:
+        acc["with_fallback"] += 1
+    acc["suggestions"] += int(aggregate.get("total_memory_suggestions", 0) or 0)
+    acc["discarded"] += int(aggregate.get("total_discarded", 0) or 0)
+    actions = aggregate.get("actions") or {}
+    for key, value in actions.items():
+        if key in acc["memory_actions"] and isinstance(value, int):
+            acc["memory_actions"][key] += value
+    scopes = aggregate.get("scopes") or {}
+    for key, value in scopes.items():
+        if key in acc["scopes"] and isinstance(value, int):
+            acc["scopes"][key] += value
