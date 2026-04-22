@@ -96,6 +96,42 @@ def test_extract_assistant_text_tolerates_garbled_lines():
     assert _extract_assistant_text(stream) == '{"ok":true}'
 
 
+def test_extract_assistant_text_raises_on_error_event_without_text():
+    """Regression for the launchd-env 401 bug (2026-04-22):
+
+    opencode emits ``{"type":"error","error":{"name":"APIError","data":{
+    "message":"login fail ...","statusCode":401}}}`` when its API key is
+    missing, exits 0, and the old extractor just returned '' — so every
+    receipt said "opencode produced no assistant text" with an empty stderr,
+    hiding the real cause (MiniMax 401). We now raise with the upstream
+    message inline so the fallback receipt carries an actionable diagnostic.
+    """
+    stream = "\n".join(
+        [
+            '{"type":"step_start","timestamp":1,"part":{"type":"step-start"}}',
+            '{"type":"error","timestamp":2,"error":{"name":"APIError","data":{"message":"login fail: missing Authorization","statusCode":401}}}',
+        ]
+    )
+    with pytest.raises(RuntimeError) as exc:
+        _extract_assistant_text(stream)
+    assert "401" in str(exc.value)
+    assert "login fail" in str(exc.value)
+
+
+def test_extract_assistant_text_returns_text_when_error_also_present():
+    """If opencode surfaces an error event AND valid text (partial success
+    scenario — some streams can have a transient error followed by a retry
+    that does produce text), return the text. The error is informative but
+    not authoritative when real text made it through."""
+    stream = "\n".join(
+        [
+            '{"type":"error","error":{"name":"TransientError","data":{"message":"retrying"}}}',
+            '{"type":"text","part":{"text":"{\\"ok\\":true}"}}',
+        ]
+    )
+    assert _extract_assistant_text(stream) == '{"ok":true}'
+
+
 def test_cleanup_agent_text_strips_code_fence():
     raw = "```json\n{\"hello\":\"world\"}\n```"
     assert _cleanup_agent_text(raw) == '{"hello":"world"}'

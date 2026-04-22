@@ -328,10 +328,18 @@ def _extract_assistant_text(stdout: str) -> str:
       {"type":"step_start",...}
       {"type":"text","part":{"type":"text","text":"..."}}
       {"type":"step_finish",...}
+      {"type":"error","error":{"name":"APIError","data":{"message":"..."}}}
     Trailing non-JSON noise (e.g. "Shell cwd was reset to ...") is silently
     skipped.
+
+    When the stream contains no text events but does contain one or more
+    ``type:"error"`` events we raise with the first error surfaced inline —
+    otherwise a failed auth / quota / rate-limit silently shows up upstream
+    as the misleading "opencode produced no assistant text" diagnostic.
+    This is how we discovered the launchd-env 401 bug on 2026-04-22.
     """
     chunks: list[str] = []
+    error_events: list[dict] = []
     for line in stdout.splitlines():
         line = line.strip()
         if not line or not line.startswith("{"):
@@ -340,13 +348,32 @@ def _extract_assistant_text(stdout: str) -> str:
             event = json.loads(line)
         except ValueError:
             continue
-        if event.get("type") != "text":
+        event_type = event.get("type")
+        if event_type == "error":
+            err = event.get("error")
+            if isinstance(err, dict):
+                error_events.append(err)
+            continue
+        if event_type != "text":
             continue
         part = event.get("part") or {}
         text = part.get("text")
         if isinstance(text, str) and text:
             chunks.append(text)
-    return "".join(chunks).strip()
+    text = "".join(chunks).strip()
+    if not text and error_events:
+        first = error_events[0]
+        data = first.get("data") if isinstance(first.get("data"), dict) else {}
+        message = (
+            data.get("message")
+            or first.get("message")
+            or first.get("name")
+            or "opencode returned only error events"
+        )
+        status = data.get("statusCode")
+        summary = f"{message} (HTTP {status})" if status else str(message)
+        raise RuntimeError(f"opencode error event: {summary}")
+    return text
 
 
 def _cleanup_agent_text(text: str) -> str:

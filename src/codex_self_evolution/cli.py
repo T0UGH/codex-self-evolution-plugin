@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .compiler.engine import preflight_compile, run_compile, scan_all_projects
 from .diagnostics import collect_status
+from .env_loader import hydrate_env_for_subprocesses
 from .hooks.codex_bridge import map_codex_stop_payload
 from .hooks.session_start import format_session_start_for_codex, session_start
 from .hooks.stop_review import stop_review
@@ -273,6 +274,19 @@ def main(argv: list[str] | None = None) -> int:
     # test isolation tight — configure() also acts as a reset.
     configure_logging()
     logger = get_logger()
+
+    # Hydrate ~/.codex-self-evolution/.env.provider into os.environ so that
+    # subprocesses (opencode for compile, urllib for the MiniMax reviewer)
+    # can find their API keys even when we're launched by launchd with a
+    # minimal PATH+HOME-only environment. Without this, every launchd scan
+    # fired opencode with no MINIMAX_API_KEY, MiniMax returned 401, opencode
+    # emitted a type:"error" event that the old extractor silently discarded,
+    # and every receipt fell back to script backend — observed 2026-04-22.
+    hydrated = hydrate_env_for_subprocesses()
+    if hydrated:
+        # Values are NEVER logged; only the key names that just entered scope.
+        logger.info("env provider hydrated", extra={"kind": "env_hydrate", "keys": sorted(hydrated)})
+
     started = time.monotonic()
 
     try:
