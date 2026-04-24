@@ -4,26 +4,120 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![python: 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
+> A self-evolving collaboration layer for Codex  
+> Inspired by Hermes
+
 > Language: **English** | [中文](README_zh.md)
 >
-> First time here? Jump to the step-by-step quickstart: [docs/getting-started.md](docs/getting-started.md) (中文 only, for now).
->
-> Already set up? One-shot install of the Codex Stop hook:
-> `./scripts/install-codex-hook.sh` (and `uninstall-codex-hook.sh` to remove).
+> Early-stage, but already useful for Codex-heavy workflows.
 
-A local Codex plugin that runs a staged self-evolution loop:
+Codex can solve today’s task. It usually does not carry today’s learning into tomorrow’s session.
 
-- **`SessionStart`** — creates runtime state and injects stable background from `USER.md` + `MEMORY.md`, plus the recall policy and session-recall skill.
-- **`Stop`** — builds a normalized review snapshot, runs a provider-backed reviewer, and persists a structured `SuggestionEnvelope` (memory updates, recall candidates, skill actions).
-- **`compile-preflight`** — cheap scheduler wake/check step. Returns `skip_empty`, `skip_locked`, or `run`.
-- **`compile`** — writer-owned batch promotion step. Reads existing memory / recall as context, then runs a pluggable backend (`script` or `agent:opencode`) and writes final artifacts atomically.
-- **`recall` / `recall-trigger`** — focused recall during a live turn.
+Codex Self-Evolution Plugin is an early-stage attempt to fix that. It gives Codex durable memory, contextual recall, and reusable skills, so completed work can become better input for future sessions instead of disappearing into chat history.
 
-The compiler is the only component that writes final assets (memory, recall, managed skills, receipt); backends only produce structured artifacts.
+Under the hood, it runs a self-evolution loop: SessionStart injects stable background, Stop review extracts durable insights, and the compiler promotes them into managed artifacts for the next session.
+
+## How the loop works
+
+### Runtime loop
+
+`SessionStart → Work → Stop Review → Compile / Promote → Next Session`
+
+### Promoted artifacts
+
+`USER.md / MEMORY.md / recall index / managed skills / receipts`
+
+```text
+SessionStart
+    ↓
+Live work in Codex
+    ↓
+Stop review
+    ↓
+Compile / promote durable artifacts
+    ↓
+Next session starts with better context
+```
+
+## 30-second quickstart
+
+```bash
+brew install uv
+
+curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/scripts/install-codex-hook.sh \
+  -o /tmp/install-codex-hook.sh
+curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/scripts/install-scheduler.sh \
+  -o /tmp/install-scheduler.sh
+chmod +x /tmp/install-codex-hook.sh /tmp/install-scheduler.sh
+
+mkdir -p ~/.codex-self-evolution
+curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/.env.provider.example \
+  -o ~/.codex-self-evolution/.env.provider
+
+# fill in your provider key, then install hooks + scheduler
+/tmp/install-codex-hook.sh
+/tmp/install-scheduler.sh
+
+uvx --from codex-self-evolution-plugin codex-self-evolution status
+```
+
+For full setup, provider options, and troubleshooting, see [Installation](#installation).
+
+## Who this is for
+
+This project is built for:
+
+- **Codex-heavy users** who are tired of re-explaining the same context across sessions
+- **Claude Code / Cursor users** who want a Hermes-style long-term collaboration layer in Codex
+- **Agent workflow builders** who care about memory, recall, review, and promotion as system primitives
+
+## Core capabilities
+
+### Memory
+
+Persist durable facts about the user, environment, and collaboration style.
+
+### Recall
+
+Bring back contextual experience from past sessions when it is useful again.
+
+### Skills
+
+Promote repeatable ways of working into reusable procedural knowledge.
+
+### Background review & promotion
+
+Review finished work and decide what deserves to become future capability.
+
+## Why Hermes-style self-evolution?
+
+This is not just a memory capture tool for Codex.
+
+The model behind it comes from Hermes-style self-evolution: durable facts go to memory, situational experience goes to recall, reusable methods become skills, and post-task review decides what is worth promoting into future sessions.
+
+That is the key idea: not just storing more history, but turning completed work into better future collaboration.
+
+Today this project is **Codex-first**. Over time, the same model is intended to extend to **Claude Code** and **Cursor** as well.
+
+## Architecture
+
+At a high level, the system is built from four parts:
+
+- **Hooks** — SessionStart / Stop-time integration with Codex
+- **Reviewer** — extracts structured suggestions from completed work
+- **Compiler** — promotes approved suggestions into managed artifacts
+- **Storage** — persists memory, recall, skills, receipts, and runtime state
+
+Current implementation also includes:
+
+- provider-backed review
+- pluggable compile backends
+- scheduler-driven background promotion
+- named profiles for different providers / models
 
 ---
 
-## Install
+## Installation
 
 > Codex CLI currently does **not** read plugin-manifest hooks
 > ([gap analysis](docs/2026-04-21-ready-for-others-gap-analysis.md)), so the
@@ -372,6 +466,30 @@ make test           # pytest
 make e2e-local      # scripts/docker-e2e.sh without Docker
 make preflight      # one compile-preflight call against data/
 ```
+
+---
+
+## Current scope
+
+This project is still early-stage.
+
+What already works today:
+
+- Codex-first hooks for `SessionStart` and `Stop`
+- per-repo runtime buckets under `~/.codex-self-evolution/projects/`
+- durable promotion into memory, recall, managed skills, and receipts
+- scheduler-driven background compilation
+- multiple reviewer/provider profiles
+
+What is still evolving:
+
+- installation UX and first-run onboarding
+- promotion quality and review heuristics
+- cross-platform support beyond Codex
+- broader hardening for real multi-user / team setups
+
+If you want a polished end-user product today, this repo is still too early.
+If you want a working Codex-first self-evolution loop that is moving quickly, it is already usable.
 
 ---
 
