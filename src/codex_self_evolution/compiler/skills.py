@@ -8,6 +8,9 @@ from ..config import PLUGIN_OWNER
 from ..schemas import SkillManifestEntry, Suggestion
 
 
+SKILL_CANDIDATE_FAMILIES = {"memory_updates", "recall_candidate"}
+
+
 def _normalize_skill_id(raw: str) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", raw.lower()).strip("-")
 
@@ -16,21 +19,33 @@ def _timestamp() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _extract_skill_candidate(item: Suggestion) -> dict | None:
+    if item.family == "skill_action":
+        return item.details
+    if item.family not in SKILL_CANDIDATE_FAMILIES:
+        return None
+    candidate = item.details.get("skill_candidate")
+    if not isinstance(candidate, dict):
+        return None
+    return {**candidate, "action": candidate.get("action", "create")}
+
+
 def compile_skills(suggestions: list[Suggestion], existing_entries: list[SkillManifestEntry] | None = None) -> tuple[list[dict], list[dict]]:
     compiled: dict[str, dict] = {}
     discarded: list[dict] = []
     existing_map = {entry.skill_id: entry for entry in existing_entries or []}
     for item in suggestions:
-        if item.family != "skill_action":
+        candidate = _extract_skill_candidate(item)
+        if candidate is None:
             continue
-        action = str(item.details.get("action", "")).strip().lower()
+        action = str(candidate.get("action", "")).strip().lower()
         if action not in {"create", "patch", "edit", "retire"}:
             discarded.append({"summary": item.summary, "reason": "unsupported_action"})
             continue
-        content = str(item.details.get("content", "")).strip()
-        title = str(item.details.get("title", item.summary)).strip()
-        description = str(item.details.get("description", "")).strip()
-        skill_id = _normalize_skill_id(str(item.details.get("skill_id", title)))
+        content = str(candidate.get("content", "")).strip()
+        title = str(candidate.get("title", item.summary)).strip()
+        description = str(candidate.get("description", "")).strip()
+        skill_id = _normalize_skill_id(str(candidate.get("skill_id", title)))
         existing = existing_map.get(skill_id)
         if action in {"patch", "edit", "retire"}:
             if existing is None:
@@ -41,6 +56,9 @@ def compile_skills(suggestions: list[Suggestion], existing_entries: list[SkillMa
                 continue
         if action in {"create", "patch", "edit"} and not description:
             discarded.append({"skill_id": skill_id, "reason": "missing_description"})
+            continue
+        if action in {"create", "patch", "edit"} and not content:
+            discarded.append({"skill_id": skill_id, "reason": "missing_content"})
             continue
         if action in {"create", "patch", "edit"} and len(content.split()) < 3:
             discarded.append({"skill_id": skill_id, "reason": "low_signal"})

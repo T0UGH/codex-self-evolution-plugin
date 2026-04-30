@@ -90,3 +90,106 @@ def test_compile_skills_discards_missing_description_for_publishable_actions():
 
     assert compiled == []
     assert discarded[0]["reason"] == "missing_description"
+
+
+def test_compile_skills_accepts_skill_candidate_from_memory_update():
+    suggestions = [
+        Suggestion(
+            family="memory_updates",
+            summary="remember generated skill",
+            details={
+                "content": "Remember to turn repeated workflows into generated skills.",
+                "skill_candidate": {
+                    "skill_id": "Generated Memory Skill",
+                    "title": "Generated Memory Skill",
+                    "description": "This skill should be used when memory reveals a repeated workflow.",
+                    "content": "Promote repeated memory patterns into focused managed skills.",
+                },
+            },
+        )
+    ]
+
+    compiled, discarded = compile_skills(suggestions)
+
+    assert discarded == []
+    assert compiled == [
+        {
+            "skill_id": "generated-memory-skill",
+            "title": "Generated Memory Skill",
+            "description": "This skill should be used when memory reveals a repeated workflow.",
+            "content": "Promote repeated memory patterns into focused managed skills.",
+            "action": "create",
+        }
+    ]
+
+
+def test_compile_skills_accepts_skill_candidate_from_recall_candidate():
+    suggestions = [
+        Suggestion(
+            family="recall_candidate",
+            summary="recall generated skill",
+            details={
+                "content": "Recall this workflow when similar repo tasks return.",
+                "skill_candidate": {
+                    "action": "create",
+                    "skill_id": "Generated Recall Skill",
+                    "title": "Generated Recall Skill",
+                    "description": "This skill should be used when recall reveals a repeated workflow.",
+                    "content": "Promote repeated recall patterns into focused managed skills.",
+                },
+            },
+        )
+    ]
+
+    compiled, discarded = compile_skills(suggestions)
+
+    assert discarded == []
+    assert len(compiled) == 1
+    assert compiled[0]["skill_id"] == "generated-recall-skill"
+    assert compiled[0]["action"] == "create"
+
+
+def test_compile_skills_ignores_memory_and_recall_without_skill_candidate():
+    suggestions = [
+        Suggestion(
+            family="memory_updates",
+            summary="memory only",
+            details={"content": "Remember focused pytest commands for this repo."},
+        ),
+        Suggestion(
+            family="recall_candidate",
+            summary="recall only",
+            details={"content": "Recall focused pytest commands for this repo."},
+        ),
+    ]
+
+    compiled, discarded = compile_skills(suggestions)
+
+    assert compiled == []
+    assert discarded == []
+
+
+def test_compile_skills_ignores_malformed_skill_candidate_without_raising():
+    suggestions = [
+        Suggestion(
+            family="memory_updates",
+            summary="bad memory skill candidate",
+            details={
+                "content": "Remember focused pytest commands for this repo.",
+                "skill_candidate": "not a mapping",
+            },
+        ),
+        Suggestion(
+            family="recall_candidate",
+            summary="bad recall skill candidate",
+            details={
+                "content": "Recall focused pytest commands for this repo.",
+                "skill_candidate": ["not", "a", "mapping"],
+            },
+        ),
+    ]
+
+    compiled, discarded = compile_skills(suggestions)
+
+    assert compiled == []
+    assert discarded == []
