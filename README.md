@@ -208,6 +208,8 @@ codex-self-evolution scan --backend agent:opencode
 | Receipts | compiler 执行记录，用于审计和排查。 |
 | Review snapshots | Stop 阶段的标准化输入快照，用于复盘 reviewer 质量。 |
 
+![Supported artifacts and file roles](docs/assets/readme-supported-artifacts.png)
+
 ## 支持的 Reviewer Provider
 
 | Provider | 环境变量 | 说明 |
