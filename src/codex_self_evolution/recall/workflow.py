@@ -33,6 +33,61 @@ def build_focused_recall(query: str, cwd: str | Path, state_dir: str | Path | No
     }
 
 
+def render_focused_recall_markdown(payload: dict[str, Any]) -> str:
+    """Render recall output for direct model consumption.
+
+    JSON remains the machine-readable interface. This markdown form is the
+    short command's default because Codex can read it directly and continue
+    when recall has no match.
+    """
+    query = str(payload.get("query") or "").strip()
+    triggered = payload.get("triggered")
+    count = int(payload.get("count") or 0)
+    status = "matched" if count else "no_match"
+    if triggered is False:
+        status = "not_triggered"
+    if payload.get("error"):
+        status = "error"
+
+    lines = ["## Focused Recall", "", f"Status: {status}"]
+    if query:
+        lines.append(f"Query: {query}")
+    lines.append(f"Results: {count}")
+
+    if status == "not_triggered":
+        lines.extend([
+            "",
+            "Recall was not triggered by the current policy. Continue with the current repo and conversation context.",
+        ])
+        return "\n".join(lines).rstrip() + "\n"
+
+    if status == "error":
+        lines.extend([
+            "",
+            f"Recall failed softly: {payload.get('error')}",
+            "Continue with the current repo and conversation context. Do not invent prior context.",
+        ])
+        return "\n".join(lines).rstrip() + "\n"
+
+    results = payload.get("results") or []
+    if not results:
+        lines.extend([
+            "",
+            "No matching recall was found. Continue with the current repo and conversation context. Do not invent prior context.",
+        ])
+        return "\n".join(lines).rstrip() + "\n"
+
+    for index, item in enumerate(results, start=1):
+        summary = str(item.get("summary") or item.get("id") or f"Recall {index}").strip()
+        content = str(item.get("content") or "").strip()
+        source_paths = item.get("source_paths") or []
+        provenance = ", ".join(str(path) for path in source_paths if str(path).strip())
+        lines.extend(["", f"### {index}. {summary}", "", content])
+        if provenance:
+            lines.extend(["", f"Provenance: {provenance}"])
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def evaluate_session_recall(
     query: str,
     cwd: str | Path,

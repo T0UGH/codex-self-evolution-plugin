@@ -1,11 +1,29 @@
 # Session Recall Skill
 
-Use recall only when the current turn signals a need for prior context.
+Use recall as a model-initiated self-check, not as an external rule router.
 
-## Trigger cues
-- The user references previous work, decisions, or workflows.
-- The query contains markers like `remember`, `previous`, `again`, `before`.
-- The turn needs repo-specific historical context to continue correctly.
+## Recall Contract
+
+Before answering, you MUST run focused recall when the task is repo/workspace related, non-trivial, and could depend on prior local context, repeated workflow guidance, or previously promoted patterns.
+
+Hard-skip recall for clearly self-contained turns only:
+
+- simple arithmetic
+- one-sentence translation or rewrite
+- trivial formatting
+- a pure current-file edit where the user supplied all needed context
+
+## Command
+
+Generate one focused query that says what prior context you need, then run:
+
+`csep recall "<focused query>"`
+
+If `csep` is not on PATH, fall back to:
+
+`uvx --from codex-self-evolution-plugin csep recall "<focused query>"`
+
+Use the user's wording plus the current repo/task shape to form the focused query. Do not pass vague phrases like "continue this" when you can name the concrete topic.
 
 ## Retrieval order
 1. same-repo results first
@@ -14,6 +32,7 @@ Use recall only when the current turn signals a need for prior context.
 
 ## Behavior
 - Do not preload large recall material at session start.
-- Trigger recall in-turn when cues are present.
-- Return focused recall, not full history dumps.
+- If recall returns matches that affect the answer, use them naturally.
+- If recall returns no matches or fails, continue with the current repo and conversation context. Do not invent prior context.
+- Do not announce empty recall separately unless the user asks.
 - Preserve provenance in results.

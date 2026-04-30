@@ -46,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/m
   -o ~/.codex-self-evolution/.env.provider
 # 编辑并填 MINIMAX_API_KEY(或 OPENAI_API_KEY / ANTHROPIC_API_KEY)
 
-# 3. 往 ~/.codex/hooks.json 装 Stop + SessionStart
+# 3. 往 ~/.codex/hooks.json 装 Stop + SessionStart, 同时安装 ~/.local/bin/csep
 /tmp/install-codex-hook.sh
 
 # 4. launchd scheduler(每 5 分钟跑 scan --backend agent:opencode)
@@ -54,10 +54,12 @@ curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/m
 
 # 5. 盘点一下
 uvx --from codex-self-evolution-plugin codex-self-evolution status | python3 -m json.tool
+csep recall "focused query" --format json
 ```
 
-后续每次调用(hooks、scheduler、手动 `status`)都走 uvx cached wheel,warm
-启动 ~100ms。发布新 PyPI 版本时下次 hook 触发自动升级。
+后续每次调用(hooks、scheduler、手动 `status`, 以及模型自触发 recall 用的
+`csep` wrapper)都走 uvx cached wheel,warm 启动 ~100ms。发布新 PyPI 版本时
+下次 hook 或 wrapper 触发自动升级。
 
 **开发者安装**(editable,贡献代码):clone + `pip install -e .`,用
 `.venv/bin/codex-self-evolution` 直接调。
@@ -84,7 +86,8 @@ codex-self-evolution compile --once --state-dir data --backend agent:opencode
 codex-self-evolution scan --backend agent:opencode        # preflight+compile 跨所有 per-project bucket
 codex-self-evolution status                               # 只读诊断快照
 codex-self-evolution recall --query "context" --cwd /path/to/repo
-codex-self-evolution recall-trigger --query "remember previous flow" --cwd /path/to/repo
+codex-self-evolution recall-trigger --query "remember previous flow" --cwd /path/to/repo --format json
+csep recall "focused query for prior repo context"       # 给模型读的 Markdown recall
 ```
 
 等价的模块调用形式：
@@ -103,12 +106,14 @@ python -m codex_self_evolution.cli session-start --cwd /path/to/repo
 
 | Flag / 参数 | 必须 | 默认值 | 用途 |
 | --- | --- | --- | --- |
-| `--cwd` | `session-start`、`recall`、`recall-trigger` 必须 | — | 当前会话操作的 repo。 |
+| `--cwd` | `session-start`、`recall`、`recall-trigger` 必须；`csep recall` 可选 | `csep recall` 默认 `$PWD` | 当前会话操作的 repo。 |
 | `--state-dir` | 可选 | `~/.codex-self-evolution/projects/<mangled-cwd>/` | 持久化运行时状态根目录（suggestions、memory、recall、skills、compiler receipts、review snapshots、scheduler）。每个 repo 自动按绝对路径（`/` → `-`）分配独立 bucket,用户代码仓库保持干净。设 `CODEX_SELF_EVOLUTION_HOME` 可整体迁移根目录。 |
 | `--repo-root` | `compile`、`compile-preflight` 可选 | 当前进程 CWD | 当 `--state-dir` 未指定时用来解析 state-dir 的 repo 根。 |
 | `--once` | `compile` 可选 | 关闭 | 只跑一次 compile，不循环。 |
 | `--backend` | `compile` 可选 | `script` | 取值 `script` 或 `agent:opencode`。默认 scheduler plist 用 `agent:opencode`。 |
 | `--explicit` | `recall-trigger` 可选 | 关闭 | 标记该 recall 触发为用户显式发起。 |
+| `--format` | `recall-trigger` / `csep recall` 可选 | `markdown` | 测试/调试用 `json`；Markdown 面向模型直接阅读。 |
+| `--top-k` | `recall-trigger` / `csep recall` 可选 | `3` | 聚焦召回最多返回几条。 |
 
 `--state-dir` 下的目录布局(默认 `~/.codex-self-evolution/projects/<mangled-cwd>/`):
 
@@ -373,7 +378,7 @@ make preflight      # 对 data/ 跑一次 compile-preflight
 
 - Hook 配置只存在于 `.codex-plugin/plugin.json`。
 - 最终写入归属 `src/codex_self_evolution/compiler/engine.py`（不再是单独的 `writer.py`）。
-- Managed skills 隔离在 `skills/managed/` 下，需要 plugin-owned manifest 条目（owner = `codex-self-evolution-plugin`）。compiler 拒绝改非此 owner 的 skill。
+- Managed skills 的源文件仍在 `skills/managed/` 下，需要 plugin-owned manifest 条目（owner = `codex-self-evolution-plugin`）。可发布的 active skill 会投影到 `~/.codex/skills/csep-managed/csep-*/SKILL.md`；compiler 拒绝改非此 owner 的 skill。
 - review snapshot 被标准化后保存在 `review/snapshots/` 下，便于调试与审计。
-- recall 使用 repo/cwd-first 排序策略，改用 trigger helper，而不是在 session start 预加载大量召回内容。
+- recall 使用 repo/cwd-first 排序策略。`SessionStart` 注入 Recall Contract，要求 Codex 在非平凡 repo/workspace 任务可能依赖历史上下文时自行运行 `csep recall "<focused query>"`；空结果软失败继续。
 - 改动 compile 行为前建议先读 `docs/2026-04-20-compiler-existing-assets-handoff.md`，了解当前 existing-assets 流水线背后的设计依据。

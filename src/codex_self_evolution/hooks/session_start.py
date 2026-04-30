@@ -19,7 +19,7 @@ def session_start(cwd: str | Path | None = None, state_dir: str | Path | None = 
             "# Stable Background",
             "## USER.md\n" + (memory_files["USER.md"] or "_No entries yet._\n"),
             "## MEMORY.md\n" + (memory_files["MEMORY.md"] or "_No entries yet._\n"),
-            session_recall_skill,
+            "## Recall Contract\n\n" + session_recall_skill,
         ]
         if section
     )

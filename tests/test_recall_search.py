@@ -1,7 +1,12 @@
 import json
 
 from codex_self_evolution.recall.search import search_recall
-from codex_self_evolution.recall.workflow import build_focused_recall, evaluate_recall_trigger, evaluate_session_recall
+from codex_self_evolution.recall.workflow import (
+    build_focused_recall,
+    evaluate_recall_trigger,
+    evaluate_session_recall,
+    render_focused_recall_markdown,
+)
 from codex_self_evolution.storage import repo_fingerprint
 
 
@@ -69,6 +74,10 @@ def test_recall_trigger_and_focused_recall_helpers(tmp_path):
     assert trigger["triggered"] is True
     focused = build_focused_recall("pytest workflow", cwd=repo, state_dir=state)
     assert "pytest workflow" in focused["focused_recall"]
+    markdown = render_focused_recall_markdown(focused)
+    assert markdown.startswith("## Focused Recall")
+    assert "Status: matched" in markdown
+    assert "Run focused pytest first" in markdown
 
 
 def test_session_recall_bridge_uses_injected_skill_and_policy(tmp_path):
@@ -112,3 +121,9 @@ def test_session_recall_bridge_uses_injected_skill_and_policy(tmp_path):
     assert result["triggered"] is True
     assert result["skill_id"] == "session_recall"
     assert result["results"][0]["id"] == "same-repo"
+
+
+def test_focused_recall_markdown_soft_fails_on_empty_result():
+    markdown = render_focused_recall_markdown({"query": "missing topic", "count": 0, "results": []})
+    assert "Status: no_match" in markdown
+    assert "Do not invent prior context" in markdown

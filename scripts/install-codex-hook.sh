@@ -18,6 +18,8 @@ CONFIG_TOML="$HOME/.codex/config.toml"
 # parallel to ~/.claude/. Keeps the plugin's source tree out of the user's
 # dotfile concerns and out of every repo they work in.
 PLUGIN_HOME="$HOME/.codex-self-evolution"
+BIN_DIR="${CSEP_BIN_DIR:-$HOME/.local/bin}"
+CSEP_BIN="$BIN_DIR/csep"
 ENV_FILE="$PLUGIN_HOME/.env.provider"
 LEGACY_ENV_FILE="$REPO/.env.provider"
 ENV_EXAMPLE="$REPO/.env.provider.example"
@@ -26,6 +28,7 @@ ENV_EXAMPLE="$REPO/.env.provider.example"
 # pip install, no clone required long-term).
 PYPI_PACKAGE="codex-self-evolution-plugin"
 ENTRY_POINT="codex-self-evolution"
+SHORT_ENTRY_POINT="csep"
 # Embedded in the hook command as a bash no-op (`:` swallows its args), so the
 # uninstall script can grep for it without us needing to introduce a custom
 # JSON field that Codex's schema validator might reject.
@@ -51,6 +54,31 @@ echo "  uvx OK ($UVX_VERSION)"
 command -v codex >/dev/null 2>&1 || warn "codex CLI not found on PATH (hook will still be installed; just won't fire until codex is installed)"
 
 mkdir -p "$PLUGIN_HOME"
+
+# ---------- install the short runtime command ----------
+info "installing csep short command"
+mkdir -p "$BIN_DIR"
+WRAPPER_MARKER="codex-self-evolution-plugin managed csep wrapper"
+if [ -e "$CSEP_BIN" ] && ! grep -q "$WRAPPER_MARKER" "$CSEP_BIN" 2>/dev/null; then
+    warn "$CSEP_BIN already exists and is not managed by this plugin; not overwriting it."
+    warn "  Session recall expects a csep command. Either move the existing file or set CSEP_BIN_DIR to another PATH directory and re-run this installer."
+else
+    cat > "$CSEP_BIN" <<EOF
+#!/usr/bin/env bash
+# $WRAPPER_MARKER
+exec uvx --from "$PYPI_PACKAGE" "$SHORT_ENTRY_POINT" "\$@"
+EOF
+    chmod +x "$CSEP_BIN"
+    echo "  csep wrapper installed at $CSEP_BIN"
+fi
+
+if command -v csep >/dev/null 2>&1; then
+    echo "  csep visible on PATH: $(command -v csep)"
+else
+    warn "csep is not currently visible on PATH."
+    warn "  Add this to your shell profile so Codex can run model-initiated recall:"
+    warn "    export PATH=\"$BIN_DIR:\$PATH\""
+fi
 
 # One-shot migration: if the user had the old repo-root .env.provider from
 # a previous install, move it into the home config dir. We use `mv` (not copy)
@@ -199,6 +227,8 @@ fi
 info "warming uvx cache"
 uvx --from "$PYPI_PACKAGE" "$ENTRY_POINT" --help >/dev/null 2>&1 || \
     warn "  uvx warmup failed — first hook fire may be slower than steady state"
+uvx --from "$PYPI_PACKAGE" "$SHORT_ENTRY_POINT" --help >/dev/null 2>&1 || \
+    warn "  csep uvx warmup failed — first recall call may be slower than steady state"
 
 info "done."
 echo ""

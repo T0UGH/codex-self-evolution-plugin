@@ -19,6 +19,7 @@ def test_end_to_end_loop(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     state = tmp_path / "state"
+    monkeypatch.setenv("CSEP_CODEX_SKILLS_DIR", str(tmp_path / "codex-skills"))
 
     session = session_start(cwd=repo, state_dir=state)
     assert "stable_background" in session
@@ -53,6 +54,7 @@ def test_end_to_end_loop(tmp_path, monkeypatch):
     compile_result = run_compile(repo_root=repo, state_dir=state, backend="agent:opencode")
     assert compile_result["processed_count"] == 1
     assert (state / "skills" / "managed" / "test-skill.md").exists()
+    assert (tmp_path / "codex-skills" / "csep-managed" / "csep-test-skill" / "SKILL.md").exists()
     assert (state / "memory" / "USER.md").exists()
     assert (state / "memory" / "MEMORY.md").exists()
     assert "Prefer concise summaries" in (state / "memory" / "USER.md").read_text(encoding="utf-8")

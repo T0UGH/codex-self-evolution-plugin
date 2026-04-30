@@ -81,11 +81,12 @@ def test_format_includes_user_memory_and_recall_policy(tmp_path):
     assert "Prefer concise." in ac
     assert "Run focused tests first." in ac
     assert "Session Recall Skill" in ac
+    assert "Recall Contract" in ac
     # Recall policy is appended so the model knows recall is on-demand and
     # knows the exact CLI invocation — design doc §4.1 requires both the
     # "stable prefix" and the "recall control layer" to reach the session.
     assert "Recall Policy" in ac
-    assert "recall --query" in ac
+    assert "csep recall" in ac
 
 
 def test_format_handles_empty_session_gracefully():
@@ -135,6 +136,51 @@ def test_from_stdin_reads_cwd_from_codex_payload(monkeypatch, capsys, tmp_path):
     out = json.loads(capsys.readouterr().out.strip())
     assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
     assert "Prefer concise" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_recall_trigger_defaults_to_markdown(monkeypatch, capsys, tmp_path):
+    state = _seed_state(tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
+
+    exit_code = cli.main([
+        "recall-trigger",
+        "--query",
+        "remember previous workflow",
+        "--cwd",
+        str(repo),
+        "--state-dir",
+        str(state),
+    ])
+
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert out.startswith("## Focused Recall")
+    assert "Status: no_match" in out
+
+
+def test_recall_trigger_json_format(monkeypatch, capsys, tmp_path):
+    state = _seed_state(tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
+
+    cli.main([
+        "recall-trigger",
+        "--query",
+        "remember previous workflow",
+        "--cwd",
+        str(repo),
+        "--state-dir",
+        str(state),
+        "--format",
+        "json",
+    ])
+
+    out = json.loads(capsys.readouterr().out)
+    assert out["triggered"] is True
+    assert out["count"] == 0
 
 
 def test_from_stdin_falls_back_to_cli_cwd_when_payload_missing_cwd(monkeypatch, capsys, tmp_path):

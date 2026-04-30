@@ -142,7 +142,7 @@ curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/m
   -o ~/.codex-self-evolution/.env.provider
 # edit the file and set MINIMAX_API_KEY (or OPENAI_API_KEY / ANTHROPIC_API_KEY)
 
-# 3. Stop + SessionStart hooks in ~/.codex/hooks.json
+# 3. Stop + SessionStart hooks in ~/.codex/hooks.json, plus ~/.local/bin/csep
 /tmp/install-codex-hook.sh
 
 # 4. launchd scheduler running `scan --backend agent:opencode` every 5 min
@@ -150,11 +150,12 @@ curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/m
 
 # 5. sanity check
 uvx --from codex-self-evolution-plugin codex-self-evolution status | python3 -m json.tool
+csep recall "focused query" --format json
 ```
 
-Every invocation after that (hooks, scheduler, manual `status`) runs out of
-uvx's cached wheel (~100ms warm). Bumping the PyPI release auto-upgrades
-next time a hook fires.
+Every invocation after that (hooks, scheduler, manual `status`, and the `csep`
+wrapper used by model-initiated recall) runs out of uvx's cached wheel (~100ms
+warm). Bumping the PyPI release auto-upgrades next time a hook or wrapper fires.
 
 **Developer install** (editable, for contributing): clone, `pip install -e .`,
 and use `.venv/bin/codex-self-evolution ...` directly — see
@@ -183,7 +184,8 @@ codex-self-evolution compile --once --state-dir data --backend agent:opencode
 codex-self-evolution scan --backend agent:opencode        # preflight+compile across all per-project buckets
 codex-self-evolution status                               # read-only diagnostic snapshot
 codex-self-evolution recall --query "context" --cwd /path/to/repo
-codex-self-evolution recall-trigger --query "remember previous flow" --cwd /path/to/repo
+codex-self-evolution recall-trigger --query "remember previous flow" --cwd /path/to/repo --format json
+csep recall "focused query for prior repo context"       # model-facing Markdown recall
 ```
 
 The module form is equivalent:
@@ -202,12 +204,14 @@ This section lists everything you can configure. All variables are **optional by
 
 | Flag / arg | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `--cwd` | Required for `session-start`, `recall`, `recall-trigger` | — | Repo the session is operating on. |
+| `--cwd` | Required for `session-start`, `recall`, `recall-trigger`; optional for `csep recall` | `$PWD` for `csep recall` | Repo the session is operating on. |
 | `--state-dir` | Optional | `~/.codex-self-evolution/projects/<mangled-cwd>/` | Root of persistent runtime state (suggestions, memory, recall, skills, compiler receipts, review snapshots, scheduler). Each repo gets an isolated bucket named after its absolute path with `/` → `-`, so user source trees stay clean. Override with `CODEX_SELF_EVOLUTION_HOME` to relocate the whole root. |
 | `--repo-root` | Optional for `compile`, `compile-preflight` | CWD of process | Repo root used to resolve `state-dir` when `--state-dir` is omitted. |
 | `--once` | Optional for `compile` | off | Run a single compile pass instead of looping. |
 | `--backend` | Optional for `compile` | `script` | `script` or `agent:opencode`. The default scheduler plist uses `agent:opencode`. |
 | `--explicit` | Optional for `recall-trigger` | off | Mark the recall trigger as user-explicit. |
+| `--format` | Optional for `recall-trigger` / `csep recall` | `markdown` | Use `json` for tests/debugging; Markdown is intended for model consumption. |
+| `--top-k` | Optional for `recall-trigger` / `csep recall` | `3` | Maximum focused recall results. |
 
 State layout under `--state-dir` (default `~/.codex-self-evolution/projects/<mangled-cwd>/`):
 
@@ -497,7 +501,7 @@ If you want a working Codex-first self-evolution loop that is moving quickly, it
 
 - Hook wiring lives only in `.codex-plugin/plugin.json`.
 - Final writes are owned by `src/codex_self_evolution/compiler/engine.py` (not a separate `writer.py`).
-- Managed skills are isolated under `skills/managed/` and require plugin-owned manifest entries (owner = `codex-self-evolution-plugin`). The compiler refuses to modify skills owned by anything else.
+- Managed skills keep their source of truth under `skills/managed/` and require plugin-owned manifest entries (owner = `codex-self-evolution-plugin`). Active publishable skills are projected into `~/.codex/skills/csep-managed/csep-*/SKILL.md`; the compiler refuses to modify skills owned by anything else.
 - Review snapshots are normalized and persisted under `review/snapshots/` for debugging / auditability.
-- Recall uses repo/cwd-first ranking and exposes a trigger helper instead of preloading large recall material at session start.
+- Recall uses repo/cwd-first ranking. `SessionStart` injects a Recall Contract that tells Codex to self-trigger `csep recall "<focused query>"` for non-trivial repo/workspace tasks that may depend on prior local context; empty recall is a soft failure.
 - When touching compile behaviour, read `docs/2026-04-20-compiler-existing-assets-handoff.md` for the rationale behind the current existing-assets pipeline.

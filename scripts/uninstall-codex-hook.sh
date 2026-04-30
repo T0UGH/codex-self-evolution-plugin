@@ -12,6 +12,8 @@ set -euo pipefail
 
 HOOKS_JSON="$HOME/.codex/hooks.json"
 MARKER="codex-self-evolution-plugin managed"
+CSEP_BIN="${CSEP_BIN_DIR:-$HOME/.local/bin}/csep"
+CSEP_WRAPPER_MARKER="codex-self-evolution-plugin managed csep wrapper"
 
 info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
@@ -80,6 +82,10 @@ else:
 PY
 
 info "done."
+if [ -f "$CSEP_BIN" ] && grep -q "$CSEP_WRAPPER_MARKER" "$CSEP_BIN" 2>/dev/null; then
+    rm -f "$CSEP_BIN"
+    echo "  removed managed csep wrapper: $CSEP_BIN"
+fi
 echo ""
 echo "Note (not auto-removed, edit by hand if you want to fully clean up):"
 echo "  - ~/.bashrc:   export MINIMAX_API_KEY / MINIMAX_REGION"

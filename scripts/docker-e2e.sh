@@ -56,7 +56,7 @@ echo "[docker-e2e] compile"
 python -m codex_self_evolution.cli compile --once --state-dir "$STATE_DIR" --backend agent:opencode >/tmp/compile.json
 
 echo "[docker-e2e] recall-trigger"
-python -m codex_self_evolution.cli recall-trigger --query "remember focused pytest workflow" --cwd "$REPO_DIR" --state-dir "$STATE_DIR" >/tmp/recall-trigger.json
+python -m codex_self_evolution.cli recall-trigger --query "remember focused pytest workflow" --cwd "$REPO_DIR" --state-dir "$STATE_DIR" --format json >/tmp/recall-trigger.json
 
 echo "[docker-e2e] validating artifacts"
 test -f "$STATE_DIR/memory/USER.md"

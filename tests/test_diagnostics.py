@@ -241,6 +241,7 @@ def test_tools_probe_handles_missing_binary(monkeypatch):
     result = _check_tools()
     assert result["codex"]["available"] is False
     assert result["opencode"]["available"] is False
+    assert result["csep"]["available"] is False
 
 
 def test_tools_probe_grabs_first_line_of_version_output(monkeypatch):
@@ -261,6 +262,7 @@ def test_tools_probe_grabs_first_line_of_version_output(monkeypatch):
     # as well as the multi-line opencode banner.
     assert result["codex"]["version"] == "opencode"
     assert result["opencode"]["available"] is True
+    assert result["csep"]["available"] is True
 
 
 # ---------- bucket inspection -------------------------------------------

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -26,7 +27,10 @@ from .hooks.stop_review import stop_review
 from .logging_setup import configure as configure_logging, get_logger
 from .migrate import run_migration
 from .recall.search import search_recall
-from .recall.workflow import build_focused_recall, evaluate_recall_trigger, evaluate_session_recall
+from .recall.workflow import (
+    evaluate_session_recall,
+    render_focused_recall_markdown,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -202,6 +206,8 @@ def build_parser() -> argparse.ArgumentParser:
     trigger_parser.add_argument("--cwd", required=True)
     trigger_parser.add_argument("--state-dir")
     trigger_parser.add_argument("--explicit", action="store_true")
+    trigger_parser.add_argument("--top-k", type=int, default=3)
+    trigger_parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
 
     return parser
 
@@ -411,7 +417,8 @@ def main(argv: list[str] | None = None) -> int:
                              subcommand=args.config_command)
                 return exit_code
         elif args.command == "recall":
-            result = {"query": args.query, "results": search_recall(query=args.query, cwd=args.cwd, state_dir=args.state_dir)}
+            results = search_recall(query=args.query, cwd=args.cwd, state_dir=args.state_dir)
+            result = {"query": args.query, "cwd": str(Path(args.cwd).expanduser().resolve()), "count": len(results), "results": results}
         elif args.command == "recall-trigger":
             session_payload = session_start(cwd=args.cwd, state_dir=args.state_dir)
             result = evaluate_session_recall(
@@ -420,12 +427,17 @@ def main(argv: list[str] | None = None) -> int:
                 state_dir=args.state_dir,
                 session_payload=session_payload,
                 explicit=args.explicit,
+                top_k=max(1, args.top_k),
             )
+            result["cwd"] = str(Path(args.cwd).expanduser().resolve())
         else:
             parser.error(f"unknown command: {args.command}")
             return 2
 
-        print(json.dumps(result, indent=2, sort_keys=True))
+        if args.command == "recall-trigger" and args.format == "markdown":
+            print(render_focused_recall_markdown(result), end="")
+        else:
+            print(json.dumps(result, indent=2, sort_keys=True))
         log_extras = _observability_extras(args.command, result)
         _log_command(logger, args.command, started, exit_code=0, **log_extras)
         return 0
@@ -858,6 +870,21 @@ def _observability_extras(command: str | None, result: object) -> dict:
         families = result.get("suggestion_families")
         if isinstance(families, dict) and families:
             extras["suggestion_families"] = families
+        return extras
+    if command in {"recall", "recall-trigger"}:
+        query = str(result.get("query") or "")
+        extras = {
+            "count": int(result.get("count") or 0),
+            "query_hash": hashlib.sha1(query.encode("utf-8")).hexdigest()[:12],
+        }
+        cwd = result.get("cwd")
+        if cwd:
+            extras["cwd"] = cwd
+        if command == "recall-trigger":
+            extras["triggered"] = bool(result.get("triggered"))
+            reasons = result.get("reasons")
+            if isinstance(reasons, list):
+                extras["reasons"] = [str(item) for item in reasons]
         return extras
     return {}
 

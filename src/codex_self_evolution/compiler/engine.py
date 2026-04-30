@@ -13,6 +13,7 @@ from ..config import (
     is_archived_bucket,
 )
 from ..managed_skills.manifest import dump_manifest, load_manifest
+from ..managed_skills.publish import publish_global_skills
 from ..schemas import CompilerReceipt, SuggestionEnvelope
 from ..storage import (
     CompileLockError,
@@ -103,7 +104,8 @@ def _write_skills(
     compiled_skills: list[dict],
     entries: list,
     existing_entries: list | None = None,
-) -> tuple[list[Path], Path]:
+    publish_global: bool = False,
+) -> tuple[list[Path], Path, dict[str, Any]]:
     managed_dir = skills_dir / "managed"
     existing_map = {entry.skill_id: entry for entry in (existing_entries or load_manifest(skills_dir / "manifest.json"))}
     written: list[Path] = []
@@ -122,7 +124,14 @@ def _write_skills(
         written.append(skill_path)
     manifest_path = skills_dir / "manifest.json"
     atomic_write_json(manifest_path, dump_manifest(entries))
-    return written, manifest_path
+    global_publish = publish_global_skills(compiled_skills, entries) if publish_global else {
+        "namespace": "csep-managed",
+        "skills_root": "",
+        "published": [],
+        "unpublished": [],
+        "skipped": [],
+    }
+    return written, manifest_path, global_publish
 
 
 def write_receipt(compiler_dir: Path, receipt: CompilerReceipt) -> Path:
@@ -140,10 +149,17 @@ def apply_compiler_outputs(
     compiled_skills: list[dict],
     manifest_entries: list,
     existing_entries: list | None = None,
+    publish_global_skills_enabled: bool = False,
 ) -> dict[str, tuple | list]:
     memory_paths = _write_memory(memory_dir, memory_records)
     recall_paths = _write_recall(recall_dir, recall_records)
-    skill_paths = _write_skills(skills_dir, compiled_skills, manifest_entries, existing_entries=existing_entries)
+    skill_paths = _write_skills(
+        skills_dir,
+        compiled_skills,
+        manifest_entries,
+        existing_entries=existing_entries,
+        publish_global=publish_global_skills_enabled,
+    )
     return {
         "memory": memory_paths,
         "recall": recall_paths,
@@ -208,7 +224,7 @@ def run_compile(
             backend_impl = get_backend(backend)
             context = build_compile_context(paths, envelopes)
             artifacts = backend_impl.compile(envelopes, context, {"allow_fallback": allow_fallback})
-            apply_compiler_outputs(
+            output_paths = apply_compiler_outputs(
                 memory_dir=paths.memory_dir,
                 recall_dir=paths.recall_dir,
                 skills_dir=paths.skills_dir,
@@ -217,6 +233,7 @@ def run_compile(
                 compiled_skills=artifacts.compiled_skills,
                 manifest_entries=artifacts.manifest_entries,
                 existing_entries=context["existing_manifest"],
+                publish_global_skills_enabled=True,
             )
             item_receipts = []
             for path, envelope in claimed:
@@ -245,6 +262,7 @@ def run_compile(
                 "fallback_backend": artifacts.fallback_backend,
                 "memory_action_stats": memory_action_stats,
                 "discarded_count": len(artifacts.discarded_items),
+                "global_skill_publish": output_paths["skills"][2],
             }
     except CompileLockError:
         receipt = CompilerReceipt(

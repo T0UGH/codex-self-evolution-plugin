@@ -8,7 +8,7 @@ every piece of state a running install has:
 - Whether the launchd scheduler is loaded and plist on disk
 - Whether ``~/.codex-self-evolution/.env.provider`` has API keys set
   (reports which names are non-empty; NEVER prints values)
-- What the ``codex`` and ``opencode`` CLIs report as their versions
+- What the ``codex``, ``opencode``, and ``csep`` CLIs report as their versions
 - For every per-project bucket: pending/done/failed counts + last
   compile receipt summary
 
@@ -197,6 +197,7 @@ def _check_tools() -> dict[str, Any]:
     return {
         "codex": _probe_version(["codex", "--version"]),
         "opencode": _probe_version(["opencode", "--version"]),
+        "csep": _probe_version(["csep", "--help"]),
     }
 
 
