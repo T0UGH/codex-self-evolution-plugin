@@ -11,42 +11,42 @@
   "commands": [
     {
       "name": "session-start",
-      "command": "uvx --from codex-self-evolution-plugin codex-self-evolution session-start --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
+      "command": "codex-self-evolution session-start --from-stdin"
     },
     {
       "name": "stop-review",
-      "command": "uvx --from codex-self-evolution-plugin codex-self-evolution stop-review --hook-payload \"$CODEX_HOOK_PAYLOAD\" --state-dir \"$CODEX_STATE_DIR\""
+      "command": "codex-self-evolution stop-review --from-stdin"
     },
     {
       "name": "compile-preflight",
-      "command": "uvx --from codex-self-evolution-plugin codex-self-evolution compile-preflight --state-dir \"$CODEX_STATE_DIR\""
+      "command": "codex-self-evolution compile-preflight --state-dir \"$CODEX_STATE_DIR\""
     },
     {
       "name": "compile",
-      "command": "uvx --from codex-self-evolution-plugin codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend agent:opencode"
+      "command": "codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend agent:opencode"
     },
     {
       "name": "scan",
-      "command": "uvx --from codex-self-evolution-plugin codex-self-evolution scan --backend agent:opencode"
+      "command": "codex-self-evolution scan --backend agent:opencode"
     },
     {
       "name": "status",
-      "command": "uvx --from codex-self-evolution-plugin codex-self-evolution status"
+      "command": "codex-self-evolution status"
     },
     {
       "name": "recall",
-      "command": "uvx --from codex-self-evolution-plugin codex-self-evolution recall --query \"$CODEX_RECALL_QUERY\" --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
+      "command": "csep recall \"$CODEX_RECALL_QUERY\" --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
     },
     {
       "name": "recall-trigger",
-      "command": "uvx --from codex-self-evolution-plugin codex-self-evolution recall-trigger --query \"$CODEX_RECALL_QUERY\" --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
+      "command": "codex-self-evolution recall-trigger --query \"$CODEX_RECALL_QUERY\" --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
     }
   ],
   "hooks": "./hooks.json",
   "scheduler": {
     "recommended": "launchd",
-    "scan_command": "uvx --from codex-self-evolution-plugin codex-self-evolution scan --backend agent:opencode",
-    "preflight_command": "uvx --from codex-self-evolution-plugin codex-self-evolution compile-preflight --state-dir \"$CODEX_STATE_DIR\"",
-    "compile_command": "uvx --from codex-self-evolution-plugin codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend agent:opencode"
+    "scan_command": "codex-self-evolution scan --backend agent:opencode",
+    "preflight_command": "codex-self-evolution compile-preflight --state-dir \"$CODEX_STATE_DIR\"",
+    "compile_command": "codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend agent:opencode"
   }
 }
