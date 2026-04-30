@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Codex Self Evolution Runtime Architecture</title>
+  <desc id="desc">Runtime hook architecture showing Codex session events, plugin hooks, local project state, review generation, and compiler scheduling.</desc>
+  <defs>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-amber" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 34px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; rx: 16; }
+      .box-blue { fill: #eff6ff; stroke: #93c5fd; stroke-width: 2; rx: 16; }
+      .box-amber { fill: #fffbeb; stroke: #fbbf24; stroke-width: 2; rx: 16; }
+      .box-green { fill: #ecfdf5; stroke: #6ee7b7; stroke-width: 2; rx: 16; }
+      .box-slate { fill: #f1f5f9; stroke: #94a3b8; stroke-width: 2; rx: 16; }
+      .label { font: 700 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .text { font: 500 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; }
+      .small { font: 500 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748b; }
+      .path { font: 600 14px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; fill: #1e293b; }
+      .arrow-blue { stroke: #2563eb; stroke-width: 3; fill: none; marker-end: url(#arrow-blue); }
+      .arrow-amber { stroke: #d97706; stroke-width: 3; fill: none; marker-end: url(#arrow-amber); }
+      .arrow-green { stroke: #059669; stroke-width: 3; fill: none; marker-end: url(#arrow-green); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="720"/>
+  <text class="title" x="56" y="58">Runtime Architecture</text>
+  <text class="subtitle" x="56" y="88">Codex 原生 hooks 负责触发，插件 CLI 负责归纳、召回与资产落盘</text>
+
+  <rect class="box-blue" x="56" y="122" width="260" height="116"/>
+  <text class="label" x="80" y="158">Codex CLI Session</text>
+  <text class="text" x="80" y="190">用户只看到一次正常</text>
+  <text class="text" x="80" y="213">Codex bash/tool 调用</text>
+
+  <rect class="box" x="374" y="122" width="280" height="116"/>
+  <text class="label" x="398" y="158">Plugin Manifest</text>
+  <text class="path" x="398" y="189">plugin_hooks / hooks.json</text>
+  <text class="small" x="398" y="213">由 Codex 插件机制加载</text>
+
+  <rect class="box" x="712" y="122" width="252" height="116"/>
+  <text class="label" x="736" y="158">Hook Events</text>
+  <text class="text" x="736" y="189">SessionStart</text>
+  <text class="text" x="736" y="213">Stop / Session end</text>
+
+  <rect class="box-blue" x="116" y="316" width="292" height="134"/>
+  <text class="label" x="140" y="352">session-start</text>
+  <text class="path" x="140" y="383">--from-stdin</text>
+  <text class="text" x="140" y="413">读取 runtime bucket</text>
+  <text class="text" x="140" y="436">注入 USER / MEMORY / recall</text>
+
+  <rect class="box-amber" x="492" y="316" width="292" height="134"/>
+  <text class="label" x="516" y="352">stop-review</text>
+  <text class="path" x="516" y="383">--from-stdin</text>
+  <text class="text" x="516" y="413">归一化会话 snapshot</text>
+  <text class="text" x="516" y="436">产出待审核 suggestions</text>
+
+  <rect class="box-green" x="872" y="316" width="292" height="134"/>
+  <text class="label" x="896" y="352">scan / compile</text>
+  <text class="text" x="896" y="383">launchd 或手动触发</text>
+  <text class="text" x="896" y="413">compile-preflight</text>
+  <text class="text" x="896" y="436">晋升稳定资产</text>
+
+  <rect class="box-slate" x="202" y="532" width="876" height="128"/>
+  <text class="label" x="226" y="568">Local Project State Bucket</text>
+  <text class="path" x="226" y="600">~/.codex-self-evolution/projects/&lt;bucket&gt;/</text>
+  <text class="text" x="226" y="632">suggestions/  memory/  recall/  skills/managed/  compiler/last_receipt.json</text>
+
+  <path class="arrow-blue" d="M316 180 L374 180"/>
+  <path class="arrow-blue" d="M654 180 L712 180"/>
+  <path class="arrow-blue" d="M764 238 C740 278 520 274 406 333"/>
+  <path class="arrow-amber" d="M838 238 C828 280 718 286 684 316"/>
+  <path class="arrow-green" d="M964 238 C1052 248 1110 278 1096 316"/>
+
+  <path class="arrow-blue" d="M262 532 C252 496 258 478 262 450"/>
+  <path class="arrow-amber" d="M638 450 C638 486 638 506 638 532"/>
+  <path class="arrow-green" d="M1018 450 C1018 486 1002 508 960 532"/>
+
+  <text class="small" x="326" y="166">Codex loads</text>
+  <text class="small" x="662" y="166">declares</text>
+  <text class="small" x="188" y="498">read and inject</text>
+  <text class="small" x="654" y="500">append pending</text>
+  <text class="small" x="998" y="500">write promoted</text>
+</svg>

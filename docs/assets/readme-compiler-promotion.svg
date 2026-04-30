@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Codex Self Evolution Promotion Pipeline</title>
+  <desc id="desc">Promotion pipeline from pending suggestions and existing assets through compiler context, backend selection, validation, and durable outputs.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 34px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; rx: 16; }
+      .input { fill: #eff6ff; stroke: #93c5fd; stroke-width: 2; rx: 16; }
+      .engine { fill: #f0fdfa; stroke: #5eead4; stroke-width: 2; rx: 18; }
+      .validate { fill: #ecfdf5; stroke: #6ee7b7; stroke-width: 2; rx: 16; }
+      .output { fill: #f8fafc; stroke: #94a3b8; stroke-width: 2; rx: 14; }
+      .label { font: 700 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .text { font: 500 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; }
+      .small { font: 500 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748b; }
+      .path { font: 600 14px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; fill: #1e293b; }
+      .arrow { stroke: #334155; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .arrow-blue { stroke: #2563eb; stroke-width: 3; fill: none; marker-end: url(#arrow-blue); }
+      .arrow-green { stroke: #059669; stroke-width: 3; fill: none; marker-end: url(#arrow-green); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="720"/>
+  <text class="title" x="56" y="58">Promotion Pipeline</text>
+  <text class="subtitle" x="56" y="88">Stop 阶段只产生候选；compile 阶段负责选择、合并、校验和写入稳定资产</text>
+
+  <rect class="input" x="56" y="134" width="270" height="152"/>
+  <text class="label" x="80" y="170">Pending Suggestions</text>
+  <text class="text" x="80" y="204">memory_updates</text>
+  <text class="text" x="80" y="232">recall_candidate</text>
+  <text class="text" x="80" y="260">skill_action</text>
+
+  <rect class="input" x="56" y="354" width="270" height="152"/>
+  <text class="label" x="80" y="390">Existing Assets</text>
+  <text class="text" x="80" y="424">USER.md / MEMORY.md</text>
+  <text class="text" x="80" y="452">recall index</text>
+  <text class="text" x="80" y="480">skill manifest</text>
+
+  <rect class="engine" x="420" y="212" width="274" height="210"/>
+  <text class="label" x="448" y="250">Compiler Context</text>
+  <text class="text" x="448" y="286">读取候选与现有资产</text>
+  <text class="text" x="448" y="316">去重、排序、分桶</text>
+  <text class="text" x="448" y="346">生成可审核 patch plan</text>
+  <text class="path" x="448" y="382">compile-preflight</text>
+
+  <rect class="box" x="778" y="134" width="258" height="152"/>
+  <text class="label" x="806" y="170">Backend Selector</text>
+  <text class="text" x="806" y="204">agent:opencode 优先</text>
+  <text class="text" x="806" y="232">script fallback 保底</text>
+  <text class="small" x="806" y="262">同一套输入契约</text>
+
+  <rect class="validate" x="778" y="354" width="258" height="152"/>
+  <text class="label" x="806" y="390">Validate and Write</text>
+  <text class="text" x="806" y="424">合并 memory</text>
+  <text class="text" x="806" y="452">索引 recall</text>
+  <text class="text" x="806" y="480">校验 skill / receipt</text>
+
+  <rect class="output" x="1090" y="112" width="150" height="104"/>
+  <text class="label" x="1110" y="146">Memory</text>
+  <text class="path" x="1110" y="176">USER.md</text>
+  <text class="path" x="1110" y="198">memory.json</text>
+
+  <rect class="output" x="1090" y="248" width="150" height="104"/>
+  <text class="label" x="1110" y="282">Recall</text>
+  <text class="path" x="1110" y="312">index.json</text>
+  <text class="path" x="1110" y="334">compiled.md</text>
+
+  <rect class="output" x="1090" y="384" width="150" height="104"/>
+  <text class="label" x="1110" y="418">Skills</text>
+  <text class="path" x="1110" y="448">managed/</text>
+  <text class="path" x="1110" y="470">manifest.json</text>
+
+  <rect class="output" x="1090" y="520" width="150" height="104"/>
+  <text class="label" x="1110" y="554">Receipt</text>
+  <text class="path" x="1110" y="584">last_receipt</text>
+  <text class="small" x="1110" y="606">可追溯</text>
+
+  <path class="arrow-blue" d="M326 210 C364 210 374 262 420 280"/>
+  <path class="arrow-blue" d="M326 430 C364 430 374 372 420 352"/>
+  <path class="arrow" d="M694 282 C728 250 744 218 778 210"/>
+  <path class="arrow" d="M907 286 L907 354"/>
+  <path class="arrow-green" d="M1036 430 C1058 430 1062 164 1090 164"/>
+  <path class="arrow-green" d="M1036 430 C1060 430 1060 300 1090 300"/>
+  <path class="arrow-green" d="M1036 430 L1090 436"/>
+  <path class="arrow-green" d="M1036 430 C1060 430 1060 572 1090 572"/>
+
+  <text class="small" x="356" y="244">candidate feed</text>
+  <text class="small" x="354" y="408">state baseline</text>
+  <text class="small" x="718" y="246">choose engine</text>
+  <text class="small" x="928" y="322">normalized plan</text>
+</svg>

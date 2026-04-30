@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Generated Skills Projection</title>
+  <desc id="desc">Generated skills are kept in plugin managed state, validated, projected into the Codex skills directory, and loaded by Codex as native skills.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0f766e"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 34px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; rx: 16; }
+      .source { fill: #eff6ff; stroke: #93c5fd; stroke-width: 2; rx: 16; }
+      .gate { fill: #fffbeb; stroke: #fbbf24; stroke-width: 2; rx: 16; }
+      .projector { fill: #f0fdfa; stroke: #5eead4; stroke-width: 2; rx: 16; }
+      .native { fill: #ecfdf5; stroke: #6ee7b7; stroke-width: 2; rx: 16; }
+      .boundary { fill: none; stroke: #94a3b8; stroke-width: 2; stroke-dasharray: 8 8; rx: 22; }
+      .label { font: 700 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .text { font: 500 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; }
+      .small { font: 500 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748b; }
+      .path { font: 600 14px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; fill: #1e293b; }
+      .arrow { stroke: #0f766e; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="720"/>
+  <text class="title" x="56" y="58">Generated Skills Projection</text>
+  <text class="subtitle" x="56" y="88">插件保留 source of truth，再投影到 Codex 原生 skills 目录，让 Codex 自己按 description 触发</text>
+
+  <rect class="boundary" x="40" y="124" width="1200" height="488"/>
+  <text class="small" x="66" y="154">managed boundary: 只管理 csep-*，不覆盖用户手写 skills</text>
+
+  <rect class="source" x="76" y="222" width="264" height="160"/>
+  <text class="label" x="102" y="260">Source of Truth</text>
+  <text class="path" x="102" y="294">~/.codex-self-evolution/</text>
+  <text class="path" x="102" y="318">projects/&lt;bucket&gt;/</text>
+  <text class="path" x="102" y="342">skills/managed/</text>
+  <text class="small" x="102" y="368">由 compiler 生成和维护</text>
+
+  <rect class="gate" x="410" y="182" width="248" height="240"/>
+  <text class="label" x="436" y="220">Quality Gates</text>
+  <text class="text" x="436" y="256">YAML frontmatter</text>
+  <text class="text" x="436" y="286">description 触发语义</text>
+  <text class="text" x="436" y="316">可执行流程正文</text>
+  <text class="text" x="436" y="346">scope / owner 标记</text>
+  <text class="path" x="436" y="384">owner = csep</text>
+
+  <rect class="projector" x="728" y="222" width="250" height="160"/>
+  <text class="label" x="754" y="260">Projector</text>
+  <text class="text" x="754" y="294">生成 SKILL.md</text>
+  <text class="text" x="754" y="324">写入受管目录</text>
+  <text class="path" x="754" y="354">~/.codex/skills/</text>
+  <text class="path" x="754" y="378">csep-&lt;skill-id&gt;/</text>
+
+  <rect class="native" x="1046" y="182" width="150" height="240"/>
+  <text class="label" x="1066" y="220">Codex</text>
+  <text class="text" x="1066" y="256">原生 skill</text>
+  <text class="text" x="1066" y="284">loader 扫描</text>
+  <text class="text" x="1066" y="326">模型按</text>
+  <text class="text" x="1066" y="354">description</text>
+  <text class="text" x="1066" y="382">自行触发</text>
+
+  <rect class="box" x="410" y="482" width="568" height="82"/>
+  <text class="label" x="436" y="516">Why not hand-copy?</text>
+  <text class="text" x="436" y="546">复制不是工作流；投影让自动生成、质量校验、更新、回滚都可追溯。</text>
+
+  <path class="arrow" d="M340 302 L410 302"/>
+  <path class="arrow" d="M658 302 L728 302"/>
+  <path class="arrow" d="M978 302 L1046 302"/>
+  <path class="arrow" d="M853 382 C852 444 800 482 738 482"/>
+
+  <text class="small" x="358" y="286">candidate skill</text>
+  <text class="small" x="680" y="286">validated</text>
+  <text class="small" x="996" y="286">native path</text>
+  <text class="small" x="782" y="448">receipt records projection</text>
+</svg>
