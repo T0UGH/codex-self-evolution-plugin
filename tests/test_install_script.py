@@ -94,6 +94,21 @@ def test_install_script_uses_uv_tool_and_cleans_only_managed_hooks(tmp_path):
     ]
     assert commands == ["third-party stop"]
 
+    plugin_manifest = (
+        fake_codex
+        / "plugins"
+        / "cache"
+        / "codex-self-evolution"
+        / "codex-self-evolution"
+        / "0.7.1"
+        / ".codex-plugin"
+        / "plugin.json"
+    )
+    assert plugin_manifest.exists()
+    assert json.loads(plugin_manifest.read_text(encoding="utf-8"))["hooks"] == (
+        "./.codex-plugin/hooks.json"
+    )
+
 
 def test_uninstall_codex_hook_filters_managed_hooks_inside_mixed_entry(tmp_path):
     fake_home = tmp_path / "home"

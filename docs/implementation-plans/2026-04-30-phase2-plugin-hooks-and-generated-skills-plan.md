@@ -38,7 +38,7 @@ manually approve every generated skill before it becomes active.
 
 ```text
 Codex plugin enabled
-  -> plugin manifest points to hooks.json
+  -> plugin manifest points to .codex-plugin/hooks.json
   -> SessionStart / Stop hooks run local CLI commands
 
 SessionStart
@@ -70,7 +70,8 @@ Implementation tasks:
 
 1. Move plugin hook definitions into the real plugin bundle layout.
 2. Ensure the manifest `hooks` path points to the bundled `hooks.json` that
-   Codex actually loads.
+   Codex actually loads. Codex resolves manifest paths relative to the plugin
+   root, so the portable path is `./.codex-plugin/hooks.json`.
 3. Replace placeholder hook commands with local CLI calls:
 
    ```bash
@@ -80,14 +81,17 @@ Implementation tasks:
 
 4. Keep the hook commands static and PATH-based.
 5. Update `install.sh` to install or update the local CLI with `uv`.
-6. Update `install.sh` to verify:
+6. Update `install.sh` to refresh the local Codex plugin cache for this
+   plugin without writing feature flags that older Codex binaries may not
+   understand.
+7. Update `install.sh` to verify:
    - `uv` exists
    - `codex-self-evolution --help` works
    - `csep --help` works
    - the uv tool bin directory is on PATH
-7. Remove only old marker-managed user-level hook entries from
+8. Remove only old marker-managed user-level hook entries from
    `~/.codex/hooks.json`.
-8. Update diagnostics so it can report both old user-level hook state and new
+9. Update diagnostics so it can report both old user-level hook state and new
    plugin hook readiness.
 
 ## Generated Skill Promotion

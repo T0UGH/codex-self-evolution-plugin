@@ -115,10 +115,12 @@ Current implementation also includes:
 
 ## Installation
 
-The installer prepares a local CLI runtime with `uv tool install`. It does not
-inject new entries into `~/.codex/hooks.json`; `SessionStart` and `Stop` are
-loaded from the Codex plugin manifest (`.codex-plugin/plugin.json` and
-`.codex-plugin/hooks.json`). Full step-by-step guide:
+The installer prepares a local CLI runtime with `uv tool install` and refreshes
+this plugin under `~/.codex/plugins/cache/`. It does not inject new entries into
+`~/.codex/hooks.json`; `SessionStart` and `Stop` are loaded from the Codex
+plugin manifest (`.codex-plugin/plugin.json` and
+`.codex-plugin/hooks.json`; the manifest path is
+`./.codex-plugin/hooks.json` relative to the plugin root). Full step-by-step guide:
 [docs/getting-started.md](docs/getting-started.md) (中文).
 
 End-to-end happy-path install on macOS. The only prerequisite is

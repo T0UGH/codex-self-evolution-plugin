@@ -195,10 +195,13 @@ ls $STATE/suggestions/done/
 3. 校验 `codex-self-evolution --help` 和 `csep --help` 都可用。
 4. 检查 `uv tool dir --bin` 是否在当前 PATH,不在就打印具体提示。
 5. 创建 `~/.codex-self-evolution/`。
-6. 如果存在旧版 `~/.codex/hooks.json`,先备份到 `~/.codex/hooks.json.bak.<timestamp>`,然后只移除带 `codex-self-evolution-plugin managed` marker 的旧 user-level hook。不会注入新的 hook entry。
-7. 新的 hook 入口由 Codex plugin manifest 加载:
+6. 刷新本地 Codex plugin cache:
+   `~/.codex/plugins/cache/codex-self-evolution/codex-self-evolution/<version>/`。
+7. 如果存在旧版 `~/.codex/hooks.json`,先备份到 `~/.codex/hooks.json.bak.<timestamp>`,然后只移除带 `codex-self-evolution-plugin managed` marker 的旧 user-level hook。不会注入新的 hook entry。
+8. 新的 hook 入口由 Codex plugin manifest 加载:
    - `.codex-plugin/plugin.json`
    - `.codex-plugin/hooks.json`
+   - manifest 中的 hooks 路径是相对 plugin root 的 `./.codex-plugin/hooks.json`
    - `codex-self-evolution session-start --from-stdin`
    - `codex-self-evolution stop-review --from-stdin`
 

@@ -196,7 +196,7 @@ def test_plugin_hook_bundle_scans_all_commands_for_uvx(tmp_path):
     (metadata_dir / "plugin.json").write_text(json.dumps({
         "hooks": "./hooks.json",
     }), encoding="utf-8")
-    (metadata_dir / "hooks.json").write_text(json.dumps({
+    (plugin_root / "hooks.json").write_text(json.dumps({
         "hooks": {
             "SessionStart": [
                 {
@@ -240,7 +240,7 @@ def test_plugin_hook_bundle_tolerates_non_object_hooks_section(tmp_path):
     (metadata_dir / "plugin.json").write_text(json.dumps({
         "hooks": "./hooks.json",
     }), encoding="utf-8")
-    (metadata_dir / "hooks.json").write_text(json.dumps({
+    (plugin_root / "hooks.json").write_text(json.dumps({
         "hooks": "bad",
     }), encoding="utf-8")
 

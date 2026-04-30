@@ -42,7 +42,7 @@
       "command": "codex-self-evolution recall-trigger --query \"$CODEX_RECALL_QUERY\" --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
     }
   ],
-  "hooks": "./hooks.json",
+  "hooks": "./.codex-plugin/hooks.json",
   "scheduler": {
     "recommended": "launchd",
     "scan_command": "codex-self-evolution scan --backend agent:opencode",

@@ -39,7 +39,7 @@ Expected:
 - Modify later: `.codex-plugin/plugin.json`
 - Create later: `.codex-plugin/hooks.json`
 - Modify later: `plugins/codex-self-evolution/.codex-plugin/plugin.json`
-- Modify later: `plugins/codex-self-evolution/hooks.json`
+- Create later: `plugins/codex-self-evolution/.codex-plugin/hooks.json`
 
 **Step 1: Write the failing test**
 
@@ -61,8 +61,8 @@ def test_root_plugin_manifest_points_to_existing_hooks_file():
     manifest_path = ROOT / ".codex-plugin" / "plugin.json"
     manifest = _load_json(manifest_path)
 
-    assert manifest["hooks"] == "./hooks.json"
-    hooks_path = manifest_path.parent / "hooks.json"
+    assert manifest["hooks"] == "./.codex-plugin/hooks.json"
+    hooks_path = ROOT / ".codex-plugin" / "hooks.json"
     assert hooks_path.exists()
 
 
@@ -162,7 +162,10 @@ Use local CLI for the other commands too:
 "codex-self-evolution recall-trigger --query \"$CODEX_RECALL_QUERY\" --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
 ```
 
-Copy `.codex-plugin/hooks.json` to `plugins/codex-self-evolution/hooks.json`.
+Keep the Codex-loaded hook file at
+`plugins/codex-self-evolution/.codex-plugin/hooks.json`; Codex resolves the
+manifest `hooks` path relative to the plugin root, so the manifest value should
+be `./.codex-plugin/hooks.json`.
 
 **Step 4: Run test to verify it passes**
 
@@ -179,7 +182,7 @@ Expected:
 **Step 5: Commit**
 
 ```bash
-/usr/bin/git add tests/test_plugin_bundle_hooks.py .codex-plugin/plugin.json .codex-plugin/hooks.json plugins/codex-self-evolution/.codex-plugin/plugin.json plugins/codex-self-evolution/hooks.json
+/usr/bin/git add tests/test_plugin_bundle_hooks.py .codex-plugin/plugin.json .codex-plugin/hooks.json plugins/codex-self-evolution/.codex-plugin/plugin.json plugins/codex-self-evolution/.codex-plugin/hooks.json
 /usr/bin/git commit -m "feat: use plugin-bundled hooks"
 ```
 

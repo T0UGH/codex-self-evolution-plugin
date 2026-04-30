@@ -5,6 +5,8 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLUGIN_HOME="${CODEX_SELF_EVOLUTION_HOME:-$HOME/.codex-self-evolution}"
 HOOKS_JSON="$HOME/.codex/hooks.json"
 INSTALL_SOURCE="${CSEP_INSTALL_SOURCE:-$REPO}"
+CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
+PLUGIN_SOURCE="$REPO/plugins/codex-self-evolution"
 MARKER="codex-self-evolution-plugin managed"
 
 info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -30,6 +32,28 @@ codex-self-evolution --help >/dev/null
 csep --help >/dev/null
 
 mkdir -p "$PLUGIN_HOME"
+
+info "refreshing local Codex plugin cache"
+PLUGIN_VERSION="$(python3 - "$PLUGIN_SOURCE/.codex-plugin/plugin.json" <<'PY'
+import json
+import pathlib
+import sys
+
+manifest = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+version = manifest.get("version") or "local"
+if not isinstance(version, str) or not version:
+    version = "local"
+print(version)
+PY
+)"
+PLUGIN_CACHE_BASE="$CODEX_HOME_DIR/plugins/cache/codex-self-evolution/codex-self-evolution"
+PLUGIN_CACHE_TARGET="$PLUGIN_CACHE_BASE/$PLUGIN_VERSION"
+PLUGIN_CACHE_TMP="$PLUGIN_CACHE_TARGET.tmp.$$"
+rm -rf "$PLUGIN_CACHE_TMP"
+mkdir -p "$PLUGIN_CACHE_BASE"
+cp -R "$PLUGIN_SOURCE" "$PLUGIN_CACHE_TMP"
+rm -rf "$PLUGIN_CACHE_TARGET"
+mv "$PLUGIN_CACHE_TMP" "$PLUGIN_CACHE_TARGET"
 
 if [ -f "$HOOKS_JSON" ]; then
     BACKUP="$HOOKS_JSON.bak.$(date +%s)"

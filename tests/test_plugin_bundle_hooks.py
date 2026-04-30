@@ -16,8 +16,8 @@ def test_root_plugin_manifest_points_to_existing_hooks_file():
     manifest_path = ROOT / ".codex-plugin" / "plugin.json"
     manifest = _load_json(manifest_path)
 
-    assert manifest["hooks"] == "./hooks.json"
-    hooks_path = manifest_path.parent / "hooks.json"
+    assert manifest["hooks"] == "./.codex-plugin/hooks.json"
+    hooks_path = ROOT / ".codex-plugin" / "hooks.json"
     assert hooks_path.exists()
 
 
@@ -81,7 +81,9 @@ def test_packaged_plugin_copy_matches_root_hook_bundle():
         ROOT / "plugins" / "codex-self-evolution" / ".codex-plugin" / "plugin.json"
     )
     root_hooks = _load_json(ROOT / ".codex-plugin" / "hooks.json")
-    packaged_hooks = _load_json(ROOT / "plugins" / "codex-self-evolution" / "hooks.json")
+    packaged_hooks = _load_json(
+        ROOT / "plugins" / "codex-self-evolution" / ".codex-plugin" / "hooks.json"
+    )
 
     assert packaged_manifest == root_manifest
     assert packaged_hooks == root_hooks
@@ -92,7 +94,7 @@ def test_default_plugin_root_falls_back_to_package_bundle(tmp_path, monkeypatch)
     metadata_dir = package_dir / "plugin_bundle" / ".codex-plugin"
     metadata_dir.mkdir(parents=True)
     (metadata_dir / "plugin.json").write_text(json.dumps({
-        "hooks": "./hooks.json",
+        "hooks": "./.codex-plugin/hooks.json",
     }), encoding="utf-8")
     (metadata_dir / "hooks.json").write_text(json.dumps({
         "hooks": {

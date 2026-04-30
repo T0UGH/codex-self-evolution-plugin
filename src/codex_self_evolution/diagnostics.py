@@ -143,7 +143,7 @@ def _check_plugin_hook_bundle(plugin_root: Path | None = None) -> dict[str, Any]
 
     hooks_path = Path(hooks_value)
     if not hooks_path.is_absolute():
-        hooks_path = manifest_path.parent / hooks_path
+        hooks_path = root / hooks_path
     result["hooks_path"] = str(hooks_path)
     result["hooks_file_exists"] = hooks_path.exists()
     if not hooks_path.exists():
