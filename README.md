@@ -6,7 +6,7 @@
 
 Codex 自我进化插件 | Memory / Recall / Skills 自动沉淀 | 面向重度 Codex 工作流
 
-![Codex Self Evolution runtime architecture](docs/assets/readme-runtime-architecture.svg)
+![Codex Self Evolution runtime architecture](docs/assets/readme-runtime-architecture.png)
 
 ## 概述
 
@@ -178,7 +178,7 @@ codex-self-evolution scan --backend agent:opencode
 | Compile | 批量归纳并晋升建议 | memory、recall、managed skills、receipt |
 | Next Session | 下次会话自动读取有效资产 | 更准的背景、更少重复解释 |
 
-![Codex Self Evolution promotion pipeline](docs/assets/readme-compiler-promotion.svg)
+![Codex Self Evolution promotion pipeline](docs/assets/readme-compiler-promotion.png)
 
 默认状态目录：
 
@@ -237,7 +237,7 @@ MINIMAX_REVIEW_MODEL=MiniMax-M2.7
 
 Phase 2 之后，生成好的 skill 不需要手动搬运。
 
-![Generated skills projection](docs/assets/readme-skill-projection.svg)
+![Generated skills projection](docs/assets/readme-skill-projection.png)
 
 Compiler 会维护两份内容：
 
