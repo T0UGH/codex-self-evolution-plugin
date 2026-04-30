@@ -1,8 +1,40 @@
 import json
+import os
+import subprocess
 
 from codex_self_evolution.compiler.engine import preflight_compile, run_compile
 from codex_self_evolution.config import build_paths
 from codex_self_evolution.storage import atomic_write_json, compiler_lock_path, utc_now
+
+
+def _write_executable(path, text):
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def test_scheduler_plist_uses_local_cli_not_uvx(tmp_path, monkeypatch):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(fake_bin / "codex-self-evolution", "#!/usr/bin/env bash\nexit 0\n")
+    _write_executable(fake_bin / "uvx", "#!/usr/bin/env bash\nexit 0\n")
+    _write_executable(fake_bin / "opencode", "#!/usr/bin/env bash\nexit 0\n")
+    _write_executable(fake_bin / "launchctl", "#!/usr/bin/env bash\nexit 0\n")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    subprocess.run(["bash", "scripts/install-scheduler.sh"], check=True)
+
+    plist_text = (
+        tmp_path
+        / "Library"
+        / "LaunchAgents"
+        / "com.codex-self-evolution.preflight.plist"
+    ).read_text(encoding="utf-8")
+    assert "codex-self-evolution" in plist_text
+    assert "scan" in plist_text
+    assert "agent:opencode" in plist_text
+    assert "uvx" not in plist_text
 
 
 
