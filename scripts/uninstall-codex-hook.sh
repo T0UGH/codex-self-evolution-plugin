@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Remove the codex-self-evolution-plugin Stop hook entries installed by
-# ./scripts/install-codex-hook.sh. Identifies our entries by the marker
-# string embedded in the hook command, so this script cannot accidentally
-# delete hooks installed by other tools or the user.
+# Remove legacy codex-self-evolution-plugin hook entries. New installs declare
+# hooks in the plugin bundle; this script only cleans old managed entries marked
+# with the embedded marker string.
 #
 # Intentionally does NOT touch:
 #   - ~/.bashrc (MINIMAX_* exports are the user's shell config)
@@ -18,18 +17,14 @@ CSEP_WRAPPER_MARKER="codex-self-evolution-plugin managed csep wrapper"
 info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
 
-if [ ! -f "$HOOKS_JSON" ]; then
-    info "no $HOOKS_JSON — nothing to uninstall"
-    exit 0
-fi
+if [ -f "$HOOKS_JSON" ]; then
+    command -v python3 >/dev/null 2>&1 || { warn "python3 not found; cannot edit hooks.json safely"; exit 1; }
 
-command -v python3 >/dev/null 2>&1 || { warn "python3 not found; cannot edit hooks.json safely"; exit 1; }
+    BACKUP="$HOOKS_JSON.bak.$(date +%s)"
+    cp "$HOOKS_JSON" "$BACKUP"
+    info "backed up $HOOKS_JSON -> $BACKUP"
 
-BACKUP="$HOOKS_JSON.bak.$(date +%s)"
-cp "$HOOKS_JSON" "$BACKUP"
-info "backed up $HOOKS_JSON → $BACKUP"
-
-python3 - "$HOOKS_JSON" "$MARKER" <<'PY'
+    python3 - "$HOOKS_JSON" "$MARKER" <<'PY'
 import json
 import pathlib
 import sys
@@ -44,21 +39,30 @@ except json.JSONDecodeError as exc:
     sys.exit(1)
 
 hooks = data.get("hooks", {})
-removed_total = 0
 touched_events = []
 
 for event, entries in list(hooks.items()):
+    if not isinstance(entries, list):
+        continue
+
     kept = []
     removed_here = 0
     for entry in entries:
-        matched = False
-        for h in entry.get("hooks", []):
-            if marker in h.get("command", ""):
-                matched = True
-                break
-        if matched:
-            removed_here += 1
+        entry_hooks = entry.get("hooks", [])
+        if not isinstance(entry_hooks, list):
+            kept.append(entry)
             continue
+
+        filtered_hooks = [
+            h
+            for h in entry_hooks
+            if not (isinstance(h, dict) and marker in h.get("command", ""))
+        ]
+        removed_here += len(entry_hooks) - len(filtered_hooks)
+        if not filtered_hooks:
+            continue
+
+        entry["hooks"] = filtered_hooks
         kept.append(entry)
     if removed_here:
         touched_events.append((event, removed_here))
@@ -80,12 +84,15 @@ else:
         print(f"  removed {n} managed entry from {event}")
     print(f"  {removed_total} total")
 PY
+else
+    info "no $HOOKS_JSON — no legacy hook entries to remove"
+fi
 
-info "done."
 if [ -f "$CSEP_BIN" ] && grep -q "$CSEP_WRAPPER_MARKER" "$CSEP_BIN" 2>/dev/null; then
     rm -f "$CSEP_BIN"
     echo "  removed managed csep wrapper: $CSEP_BIN"
 fi
+info "done."
 echo ""
 echo "Note (not auto-removed, edit by hand if you want to fully clean up):"
 echo "  - ~/.bashrc:   export MINIMAX_API_KEY / MINIMAX_REGION"
