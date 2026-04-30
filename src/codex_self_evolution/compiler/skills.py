@@ -29,6 +29,7 @@ def compile_skills(suggestions: list[Suggestion], existing_entries: list[SkillMa
             continue
         content = str(item.details.get("content", "")).strip()
         title = str(item.details.get("title", item.summary)).strip()
+        description = str(item.details.get("description", "")).strip()
         skill_id = _normalize_skill_id(str(item.details.get("skill_id", title)))
         existing = existing_map.get(skill_id)
         if action in {"patch", "edit", "retire"}:
@@ -38,12 +39,16 @@ def compile_skills(suggestions: list[Suggestion], existing_entries: list[SkillMa
             if not existing.managed or existing.owner != PLUGIN_OWNER:
                 discarded.append({"skill_id": skill_id, "reason": "ownership_violation"})
                 continue
+        if action in {"create", "patch", "edit"} and not description:
+            discarded.append({"skill_id": skill_id, "reason": "missing_description"})
+            continue
         if action in {"create", "patch", "edit"} and len(content.split()) < 3:
             discarded.append({"skill_id": skill_id, "reason": "low_signal"})
             continue
         compiled[skill_id] = {
             "skill_id": skill_id,
             "title": title,
+            "description": description,
             "content": content,
             "action": action,
         }

@@ -41,7 +41,18 @@ def test_end_to_end_loop(tmp_path, monkeypatch):
                         {"summary": "Keep pytest focused", "details": {"content": "Run focused pytest before full suite", "scope": "global"}},
                     ],
                     "recall_candidate": [{"summary": "Focused pytest", "details": {"content": "Run focused pytest before full suite", "source_paths": ["tests/test_end_to_end.py"]}}],
-                    "skill_action": [{"summary": "Add test skill", "details": {"action": "create", "skill_id": "test-skill", "title": "Test Skill", "content": "Run focused tests before a broader regression pass."}}],
+                    "skill_action": [
+                        {
+                            "summary": "Add test skill",
+                            "details": {
+                                "action": "create",
+                                "skill_id": "test-skill",
+                                "title": "Test Skill",
+                                "description": "This skill should be used when running focused tests before a broader regression pass.",
+                                "content": "## Workflow\n\n1. Run the smallest focused test first.\n2. Expand to the relevant suite.\n3. Report exact commands and results.",
+                            },
+                        }
+                    ],
                 },
             }
         ),
@@ -54,7 +65,11 @@ def test_end_to_end_loop(tmp_path, monkeypatch):
     compile_result = run_compile(repo_root=repo, state_dir=state, backend="agent:opencode")
     assert compile_result["processed_count"] == 1
     assert (state / "skills" / "managed" / "test-skill.md").exists()
-    assert (tmp_path / "codex-skills" / "csep-managed" / "csep-test-skill" / "SKILL.md").exists()
+    skill_doc = tmp_path / "codex-skills" / "csep-test-skill" / "SKILL.md"
+    assert skill_doc.exists()
+    skill_doc_content = skill_doc.read_text(encoding="utf-8")
+    assert skill_doc_content.startswith("---\n")
+    assert "description:" in skill_doc_content
     assert (state / "memory" / "USER.md").exists()
     assert (state / "memory" / "MEMORY.md").exists()
     assert "Prefer concise summaries" in (state / "memory" / "USER.md").read_text(encoding="utf-8")

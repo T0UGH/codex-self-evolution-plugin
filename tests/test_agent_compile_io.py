@@ -134,7 +134,13 @@ def test_parse_agent_compile_response_happy_path():
                 }
             ],
             "compiled_skills": [
-                {"skill_id": "alpha", "title": "Alpha", "content": "body", "action": "create"}
+                {
+                    "skill_id": "alpha",
+                    "title": "Alpha",
+                    "description": "This skill should be used when compiling alpha workflows.",
+                    "content": "body",
+                    "action": "create",
+                }
             ],
             "manifest_entries": [_manifest_entry().to_dict()],
             "discarded_items": [{"reason": "noop"}],
@@ -147,6 +153,10 @@ def test_parse_agent_compile_response_happy_path():
     assert result["memory_records"]["user"][0]["scope"] == "user"
     assert isinstance(result["recall_records"][0], RecallRecord)
     assert result["compiled_skills"][0]["action"] == "create"
+    assert (
+        result["compiled_skills"][0]["description"]
+        == "This skill should be used when compiling alpha workflows."
+    )
     assert isinstance(result["manifest_entries"][0], SkillManifestEntry)
     assert result["discarded_items"][0]["reason"] == "noop"
 
@@ -176,6 +186,34 @@ def test_parse_agent_compile_response_rejects_bad_skill_action():
     )
     with pytest.raises(AgentResponseError):
         parse_agent_compile_response(raw)
+
+
+@pytest.mark.parametrize("action", ["create", "patch", "edit"])
+def test_parse_agent_compile_response_rejects_publishable_skill_without_description(action):
+    raw = json.dumps(
+        {
+            "compiled_skills": [
+                {"skill_id": "x", "title": "X", "content": "c", "action": action}
+            ]
+        }
+    )
+    with pytest.raises(AgentResponseError):
+        parse_agent_compile_response(raw)
+
+
+def test_parse_agent_compile_response_allows_retire_without_description():
+    raw = json.dumps(
+        {
+            "compiled_skills": [
+                {"skill_id": "x", "title": "X", "content": "", "action": "retire"}
+            ]
+        }
+    )
+
+    result = parse_agent_compile_response(raw)
+
+    assert result["compiled_skills"][0]["description"] == ""
+    assert result["compiled_skills"][0]["action"] == "retire"
 
 
 def test_parse_agent_compile_response_rejects_missing_memory_fields():

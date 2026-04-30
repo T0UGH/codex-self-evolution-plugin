@@ -90,6 +90,7 @@ For `skill_action`, `details` must additionally include:
 - `action`: one of `"create" | "patch" | "edit" | "retire"`
 - `skill_id`: short kebab-case id
 - `title`: non-empty string
+- `description`: concrete trigger description, preferably `This skill should be used when ...`
 - `content`: non-empty string
 
 ## Handling of non-conforming items

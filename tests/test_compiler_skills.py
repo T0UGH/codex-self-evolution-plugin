@@ -9,16 +9,29 @@ def test_compile_skills_filters_low_signal_and_builds_manifest():
         Suggestion(
             family="skill_action",
             summary="create good skill",
-            details={"action": "create", "skill_id": "Useful Skill", "title": "Useful Skill", "content": "Do this when repeated repo tasks appear."},
+            details={
+                "action": "create",
+                "skill_id": "Useful Skill",
+                "title": "Useful Skill",
+                "description": "This skill should be used when repeated repo tasks appear.",
+                "content": "Do this when repeated repo tasks appear.",
+            },
         ),
         Suggestion(
             family="skill_action",
             summary="ignore noise",
-            details={"action": "create", "skill_id": "noise", "title": "Noise", "content": "too short"},
+            details={
+                "action": "create",
+                "skill_id": "noise",
+                "title": "Noise",
+                "description": "This skill should be used when checking noisy skill suggestions.",
+                "content": "too short",
+            },
         ),
     ]
     compiled, discarded = compile_skills(suggestions)
     assert len(compiled) == 1
+    assert compiled[0]["description"] == "This skill should be used when repeated repo tasks appear."
     assert discarded[0]["reason"] == "low_signal"
     entries = build_manifest_entries(compiled, "skills")
     assert entries[0].skill_id == "useful-skill"
@@ -32,7 +45,13 @@ def test_compile_skills_enforces_managed_ownership_for_patch_and_edit():
         Suggestion(
             family="skill_action",
             summary="patch skill",
-            details={"action": "patch", "skill_id": "Useful Skill", "title": "Useful Skill", "content": "Patch the managed workflow when repeated gaps appear."},
+            details={
+                "action": "patch",
+                "skill_id": "Useful Skill",
+                "title": "Useful Skill",
+                "description": "This skill should be used when patching repeated managed workflow gaps.",
+                "content": "Patch the managed workflow when repeated gaps appear.",
+            },
         )
     ]
     unmanaged = [
@@ -51,3 +70,23 @@ def test_compile_skills_enforces_managed_ownership_for_patch_and_edit():
     compiled, discarded = compile_skills(suggestions, existing_entries=unmanaged)
     assert compiled == []
     assert discarded[0]["reason"] == "ownership_violation"
+
+
+def test_compile_skills_discards_missing_description_for_publishable_actions():
+    suggestions = [
+        Suggestion(
+            family="skill_action",
+            summary="create missing description",
+            details={
+                "action": "create",
+                "skill_id": "Missing Description",
+                "title": "Missing Description",
+                "content": "Run focused checks when repeated repo tasks appear.",
+            },
+        )
+    ]
+
+    compiled, discarded = compile_skills(suggestions)
+
+    assert compiled == []
+    assert discarded[0]["reason"] == "missing_description"

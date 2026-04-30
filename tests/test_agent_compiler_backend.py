@@ -75,7 +75,13 @@ def test_agent_backend_returns_parsed_artifacts_on_success():
             }
         ],
         "compiled_skills": [
-            {"skill_id": "alpha", "title": "Alpha", "content": "body", "action": "create"}
+            {
+                "skill_id": "alpha",
+                "title": "Alpha",
+                "description": "This skill should be used when compiling alpha workflows.",
+                "content": "body",
+                "action": "create",
+            }
         ],
         "manifest_entries": [_manifest_dict()],
         "discarded_items": [{"reason": "dedupe"}],
@@ -93,6 +99,10 @@ def test_agent_backend_returns_parsed_artifacts_on_success():
     assert artifacts.fallback_backend is None
     assert artifacts.memory_records["user"][0]["content"] == "merged user"
     assert artifacts.compiled_skills[0]["skill_id"] == "alpha"
+    assert (
+        artifacts.compiled_skills[0]["description"]
+        == "This skill should be used when compiling alpha workflows."
+    )
     assert artifacts.manifest_entries[0].skill_id == "alpha"
     assert artifacts.discarded_items == [{"reason": "dedupe"}]
 

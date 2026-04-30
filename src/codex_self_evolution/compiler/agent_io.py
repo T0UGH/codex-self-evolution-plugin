@@ -29,7 +29,10 @@ COMPILE_CONTRACT = {
             "global": "list[MemoryRecord]",
         },
         "recall_records": "list[RecallRecord]",
-        "compiled_skills": "list[CompiledSkill]",
+        "compiled_skills": (
+            "list[{skill_id: str, title: str, description: str, "
+            "content: str, action: create|patch|edit|retire}]"
+        ),
         "manifest_entries": "list[SkillManifestEntry]",
         "discarded_items": "list[{reason: str, ...}]",
     },
@@ -180,10 +183,16 @@ def _parse_compiled_skills(value: Any) -> list[dict[str, Any]]:
         title = str(item.get("title", "")).strip()
         if not skill_id or not title:
             raise AgentResponseError("compiled_skills entries require skill_id and title")
+        description = str(item.get("description", "")).strip()
+        if action != "retire" and not description:
+            raise AgentResponseError(
+                "compiled_skills create/patch/edit entries require description"
+            )
         out.append(
             {
                 "skill_id": skill_id,
                 "title": title,
+                "description": description,
                 "content": str(item.get("content", "")),
                 "action": action,
             }

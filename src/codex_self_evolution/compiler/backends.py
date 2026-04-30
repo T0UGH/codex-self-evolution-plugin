@@ -307,7 +307,7 @@ def _build_compile_prompt(payload_path: str) -> str:
         '    {"id": str, "summary": str, "content": str, "source_paths": [str], "repo_fingerprint": str, "cwd": str, "thread_id": str, "turn_id": str, "source_updated_at": str}\n'
         "  ],\n"
         '  "compiled_skills": [\n'
-        '    {"skill_id": str, "title": str, "content": str, "action": "create"|"patch"|"edit"|"retire"}\n'
+        '    {"skill_id": str, "title": str, "description": str, "content": str, "action": "create"|"patch"|"edit"|"retire"}\n'
         "  ],\n"
         '  "manifest_entries": [\n'
         '    {"skill_id": str, "action": str, "title": str, "path": str, "status": str, "owner": str, "managed": bool, "created_by": str, "updated_at": str, "retired_at": str|null}\n'
@@ -317,7 +317,9 @@ def _build_compile_prompt(payload_path: str) -> str:
         "Required string fields (summary, content, id, etc.) must be "
         "non-empty. If a list has nothing to emit, return [] — do not fabricate "
         "entries just to fill it. Emit empty objects "
-        '({"user": [], "global": []}) for memory_records when nothing merges.'
+        '({"user": [], "global": []}) for memory_records when nothing merges. '
+        "compiled_skills.description is required for create, patch, and edit; "
+        "retire may use an empty description."
     )
 
 
