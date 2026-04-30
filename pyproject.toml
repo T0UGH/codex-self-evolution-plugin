@@ -66,6 +66,8 @@ codex_self_evolution = [
     "review/prompt.md",
     "recall/policy.md",
     "recall/session_recall.md",
+    "plugin_bundle/.codex-plugin/plugin.json",
+    "plugin_bundle/.codex-plugin/hooks.json",
 ]
 
 [tool.setuptools.packages.find]

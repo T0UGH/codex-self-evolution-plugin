@@ -54,10 +54,16 @@ def collect_status(
     fits in exactly one file without the scanner stitching across rotations.
     """
     home_dir = Path(home).expanduser().resolve() if home else get_home_dir()
+    legacy_hooks = _check_hooks()
     return {
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "home": str(home_dir),
-        "hooks": _check_hooks(),
+        # Backwards-compatible alias for one release. New consumers should use
+        # legacy_user_hooks for ~/.codex/hooks.json and plugin_hooks for the
+        # bundled plugin metadata path.
+        "hooks": legacy_hooks,
+        "legacy_user_hooks": legacy_hooks,
+        "plugin_hooks": _check_plugin_hook_bundle(),
         "scheduler": _check_scheduler(),
         "env_provider": _check_env_provider(home_dir),
         "tools": _check_tools(),
@@ -99,6 +105,109 @@ def _check_hooks() -> dict[str, Any]:
                 elif event == "SessionStart":
                     result["session_start_installed"] = True
     return result
+
+
+def _check_plugin_hook_bundle(plugin_root: Path | None = None) -> dict[str, Any]:
+    root = plugin_root or _default_plugin_root()
+    manifest_path = root / ".codex-plugin" / "plugin.json"
+    result: dict[str, Any] = {
+        "plugin_root": str(root),
+        "manifest_path": str(manifest_path),
+        "manifest_exists": manifest_path.exists(),
+        "hooks_path": None,
+        "hooks_file_exists": False,
+        "session_start_declared": False,
+        "stop_declared": False,
+        "session_start_command": None,
+        "stop_command": None,
+        "uses_local_cli": False,
+        "uses_uvx": False,
+        "error": None,
+    }
+    if not manifest_path.exists():
+        return result
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        result["error"] = f"failed to parse plugin manifest: {exc}"
+        return result
+    if not isinstance(manifest, dict):
+        result["error"] = "plugin manifest is not a JSON object"
+        return result
+
+    hooks_value = manifest.get("hooks")
+    if not isinstance(hooks_value, str) or not hooks_value:
+        result["error"] = "plugin manifest does not declare a hooks file"
+        return result
+
+    hooks_path = Path(hooks_value)
+    if not hooks_path.is_absolute():
+        hooks_path = manifest_path.parent / hooks_path
+    result["hooks_path"] = str(hooks_path)
+    result["hooks_file_exists"] = hooks_path.exists()
+    if not hooks_path.exists():
+        return result
+
+    try:
+        hook_data = json.loads(hooks_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        result["error"] = f"failed to parse plugin hooks file: {exc}"
+        return result
+    hooks = hook_data.get("hooks") if isinstance(hook_data, dict) else None
+    if hooks is None:
+        hooks = {}
+    if not isinstance(hooks, dict):
+        result["error"] = "plugin hooks file has non-object hooks section"
+        return result
+
+    all_commands: list[str] = []
+    for event_name, result_key, command_key in (
+        ("SessionStart", "session_start_declared", "session_start_command"),
+        ("Stop", "stop_declared", "stop_command"),
+    ):
+        event_commands = _commands_for_hook_event(hooks.get(event_name))
+        all_commands.extend(event_commands)
+        if event_commands:
+            result[result_key] = True
+            result[command_key] = event_commands[0]
+
+    result["uses_local_cli"] = any(
+        command.startswith("codex-self-evolution ") for command in all_commands
+    )
+    result["uses_uvx"] = any("uvx" in command for command in all_commands)
+    return result
+
+
+def _default_plugin_root() -> Path:
+    override = os.environ.get("CSEP_PLUGIN_ROOT")
+    if override:
+        return Path(override).expanduser()
+    repo_root = Path(__file__).resolve().parents[2]
+    source_tree_root = repo_root / "plugins" / "codex-self-evolution"
+    if (source_tree_root / ".codex-plugin" / "plugin.json").exists():
+        return source_tree_root
+    return Path(__file__).resolve().parent / "plugin_bundle"
+
+
+def _commands_for_hook_event(entries: Any) -> list[str]:
+    if not isinstance(entries, list):
+        return []
+
+    commands: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        hooks = entry.get("hooks")
+        if not isinstance(hooks, list):
+            continue
+        for hook in hooks:
+            if not isinstance(hook, dict):
+                continue
+            command = hook.get("command")
+            if isinstance(command, str) and command:
+                commands.append(command)
+    return commands
 
 
 # ---------- launchd scheduler -------------------------------------------

@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-self-evolution session-start --from-stdin",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-self-evolution stop-review --from-stdin",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

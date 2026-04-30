@@ -165,6 +165,94 @@ def test_hooks_probe_ignores_unmarked_entries(tmp_path, monkeypatch):
     assert result["stop_installed"] is False
 
 
+def test_status_reports_plugin_hook_bundle_readiness():
+    result = diagnostics._check_plugin_hook_bundle(
+        Path("plugins/codex-self-evolution")
+    )
+
+    assert result["manifest_exists"] is True
+    assert result["hooks_file_exists"] is True
+    assert result["session_start_declared"] is True
+    assert result["stop_declared"] is True
+    assert result["uses_local_cli"] is True
+    assert result["uses_uvx"] is False
+
+
+def test_plugin_hook_bundle_default_root_is_not_cwd_relative(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    result = diagnostics._check_plugin_hook_bundle()
+
+    assert result["manifest_exists"] is True
+    assert result["hooks_file_exists"] is True
+    assert result["session_start_declared"] is True
+    assert result["stop_declared"] is True
+
+
+def test_plugin_hook_bundle_scans_all_commands_for_uvx(tmp_path):
+    plugin_root = tmp_path / "plugin"
+    metadata_dir = plugin_root / ".codex-plugin"
+    metadata_dir.mkdir(parents=True)
+    (metadata_dir / "plugin.json").write_text(json.dumps({
+        "hooks": "./hooks.json",
+    }), encoding="utf-8")
+    (metadata_dir / "hooks.json").write_text(json.dumps({
+        "hooks": {
+            "SessionStart": [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "codex-self-evolution session-start --from-stdin",
+                        },
+                        {
+                            "type": "command",
+                            "command": "uvx codex-self-evolution-plugin session-start",
+                        },
+                    ],
+                },
+            ],
+            "Stop": [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "codex-self-evolution stop-review --from-stdin",
+                        },
+                    ],
+                },
+            ],
+        },
+    }), encoding="utf-8")
+
+    result = diagnostics._check_plugin_hook_bundle(plugin_root)
+
+    assert result["session_start_command"] == (
+        "codex-self-evolution session-start --from-stdin"
+    )
+    assert result["uses_uvx"] is True
+
+
+def test_plugin_hook_bundle_tolerates_non_object_hooks_section(tmp_path):
+    plugin_root = tmp_path / "plugin"
+    metadata_dir = plugin_root / ".codex-plugin"
+    metadata_dir.mkdir(parents=True)
+    (metadata_dir / "plugin.json").write_text(json.dumps({
+        "hooks": "./hooks.json",
+    }), encoding="utf-8")
+    (metadata_dir / "hooks.json").write_text(json.dumps({
+        "hooks": "bad",
+    }), encoding="utf-8")
+
+    result = diagnostics._check_plugin_hook_bundle(plugin_root)
+
+    assert result["error"] is not None
+    assert result["session_start_declared"] is False
+    assert result["stop_declared"] is False
+    assert result["uses_local_cli"] is False
+    assert result["uses_uvx"] is False
+
+
 # ---------- scheduler probe (launchctl isolation) -----------------------
 
 
@@ -329,6 +417,8 @@ def test_collect_status_runs_cleanly_with_no_home(monkeypatch, tmp_path):
     json.dumps(result)
     assert result["buckets"] == []
     assert result["hooks"]["exists"] is False
+    assert "plugin_hooks" in result
+    assert "legacy_user_hooks" in result
     assert result["env_provider"]["exists"] is False
 
 
@@ -344,5 +434,8 @@ def test_cli_status_outputs_valid_json(tmp_path, capsys, monkeypatch):
     parsed = json.loads(out)
     # Required top-level sections — if someone renames/removes one, status
     # consumers (future monitoring scripts / install-verify CI) break silently.
-    for section in ("timestamp", "home", "hooks", "scheduler", "env_provider", "tools", "buckets"):
+    for section in (
+        "timestamp", "home", "hooks", "legacy_user_hooks", "plugin_hooks",
+        "scheduler", "env_provider", "tools", "buckets",
+    ):
         assert section in parsed
