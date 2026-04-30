@@ -37,7 +37,9 @@ fail()  { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 info "preflight checks"
 command -v "$ENTRY_POINT" >/dev/null 2>&1 || \
     fail "$ENTRY_POINT not found on PATH. Run scripts/install.sh first."
-echo "  $ENTRY_POINT OK at $(command -v "$ENTRY_POINT")"
+ENTRY_POINT_BIN="$(command -v "$ENTRY_POINT")"
+ENTRY_POINT_DIR="$(dirname "$ENTRY_POINT_BIN")"
+echo "  $ENTRY_POINT OK at $ENTRY_POINT_BIN"
 
 mkdir -p "$LAUNCH_AGENTS_DIR" "$LOG_DIR"
 
@@ -58,7 +60,7 @@ fi
 # Silicon) and /usr/local/bin (Intel) even if opencode wasn't found today —
 # user may install it later without re-running this script.
 PLIST_PATH_ENV="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-for dir in "$OPENCODE_DIR"; do
+for dir in "$ENTRY_POINT_DIR" "$OPENCODE_DIR"; do
     [ -z "$dir" ] && continue
     case ":$PLIST_PATH_ENV:" in
         *":$dir:"*) ;;  # already present
@@ -86,7 +88,7 @@ cat > "$PLIST_PATH" <<PLIST
 
     <key>ProgramArguments</key>
     <array>
-        <string>$ENTRY_POINT</string>
+        <string>$ENTRY_POINT_BIN</string>
         <string>${SCAN_ARGS[0]}</string>
         <string>${SCAN_ARGS[1]}</string>
         <string>${SCAN_ARGS[2]}</string>
@@ -129,7 +131,7 @@ echo ""
 echo "Scheduler installed:"
 echo "  label:    $LABEL"
 echo "  interval: ${INTERVAL_SECONDS}s (override via CSEP_SCHEDULER_INTERVAL)"
-echo "  command:  $ENTRY_POINT ${SCAN_ARGS[*]}"
+echo "  command:  $ENTRY_POINT_BIN ${SCAN_ARGS[*]}"
 echo "  plist:    $PLIST_PATH"
 echo "  logs:     $LOG_DIR/launchd.{stdout,stderr}.log"
 echo ""
