@@ -6,6 +6,8 @@
 
 Codex 自我进化插件 | Memory / Recall / Skills 自动沉淀 | 面向重度 Codex 工作流
 
+![Codex self-evolution loop](docs/assets/readme-self-evolution-loop.png)
+
 ## 概述
 
 Codex Self-Evolution Plugin 是一个本地优先的 Codex 自我进化层。
@@ -176,6 +178,8 @@ codex-self-evolution scan --backend agent:opencode
 | Compile | 批量归纳并晋升建议 | memory、recall、managed skills、receipt |
 | Next Session | 下次会话自动读取有效资产 | 更准的背景、更少重复解释 |
 
+![Artifact promotion pipeline](docs/assets/readme-artifact-promotion.png)
+
 默认状态目录：
 
 ```text
@@ -232,6 +236,8 @@ MINIMAX_REVIEW_MODEL=MiniMax-M2.7
 ## Generated Skills
 
 Phase 2 之后，生成好的 skill 不需要手动搬运。
+
+![Generated skills become native Codex skills](docs/assets/readme-generated-skills.png)
 
 Compiler 会维护两份内容：
 
