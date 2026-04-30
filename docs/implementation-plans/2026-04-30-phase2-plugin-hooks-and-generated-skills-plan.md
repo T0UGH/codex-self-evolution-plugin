@@ -27,8 +27,9 @@ manually approve every generated skill before it becomes active.
   entries it previously owned.
 - Generated skills are promoted automatically, with strict quality gates.
 - Generated skills are globally visible by default.
-- If `~/.codex/skills/csep-managed/csep-*/SKILL.md` is not loaded reliably by
-  Codex, change projection to `~/.codex/skills/csep-*/SKILL.md`.
+- Generated skills project directly to
+  `~/.codex/skills/csep-<skill-id>/SKILL.md`, which Codex loads like any
+  normal skill directory.
 - Stable skill ids update in place. A changed `skill_id` is a new skill.
 - Phase 2 validation includes project tests, local Codex loader smoke, and a
   real Codex CLI manual smoke checklist.
@@ -84,7 +85,7 @@ Implementation tasks:
    - `codex-self-evolution --help` works
    - `csep --help` works
    - the uv tool bin directory is on PATH
-7. Remove only old csep-managed user-level hook entries from
+7. Remove only old marker-managed user-level hook entries from
    `~/.codex/hooks.json`.
 8. Update diagnostics so it can report both old user-level hook state and new
    plugin hook readiness.

@@ -178,33 +178,31 @@ ls $STATE/suggestions/done/
 
 ---
 
-## 阶段 3:挂 Codex 原生 Stop hook(一键脚本,1 分钟)
+## 阶段 3:安装本地 CLI + 启用 Codex plugin hooks(1 分钟)
 
-**目的**:让 Codex 每次对话结束自动触发 stop-review,不再需要手工构造 payload。完成这一步后,你正常用 `codex` / `codex exec` 就自动产出 pending suggestion。
+**目的**:让 Codex 通过 plugin manifest 加载 `SessionStart` / `Stop` hooks,并让 hooks 调用本地 `codex-self-evolution` CLI。完成这一步后,你正常用 `codex` / `codex exec` 就自动产出 pending suggestion。
 
 ### 3.1 运行安装脚本
 
 ```bash
-./scripts/install-codex-hook.sh
+./scripts/install.sh
 ```
 
 脚本行为:
 
-1. 前置检查:`uvx` 在 PATH、`~/.codex-self-evolution/.env.provider`、`codex` CLI(**不再要求 venv**)
-2. 如果检测到 repo 根有老的 `.env.provider`,**自动 `mv` 到 `~/.codex-self-evolution/.env.provider`**(单一来源,避免两处配置漂移)
-3. 备份现有 `~/.codex/hooks.json` 到 `~/.codex/hooks.json.bak.<timestamp>`
-4. 在 `Stop` event 下**幂等**追加一条带标识(`codex-self-evolution-plugin managed`)的 hook entry:
-   - `bash -c 'set -a; . ~/.codex-self-evolution/.env.provider; set +a; exec uvx --from codex-self-evolution-plugin codex-self-evolution stop-review --from-stdin'`
-   - 自 source `~/.codex-self-evolution/.env.provider` 保证进程能拿到 `MINIMAX_API_KEY`
-   - 超时 20 秒(主进程只耗 ~100ms 读 stdin + spawn 后台 reviewer;uvx warm cache 下几乎瞬时,冷启动 1-2s 仍在预算内)
-5. 在 `SessionStart` event 下同样幂等追加一条 entry:
-   - `bash -c 'exec uvx --from codex-self-evolution-plugin codex-self-evolution session-start --from-stdin'`
-   - **不需要 source `.env.provider`**(不调 LLM,只读 memory/recall 本地文件组 additionalContext)
-   - 超时 15 秒(warm ~150ms,预留冷启动余量)
-   - 输出 Codex 原生协议 JSON `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext": combined_prefix}}`,Codex 把它注入为 DeveloperInstructions → 模型每个 session 自动拿到 `USER.md + MEMORY.md + session_recall skill + recall policy`
-6. 识别 legacy 手工装过的 entry(命令指向同一个 CLI 但没 marker),**升级而非重复追加**
-7. 检查 `~/.codex/config.toml` 是否有 `[shell_environment_policy] inherit = "all"`,没有给提示(建议加,防止 Codex 剥掉 env)
-8. 预热 uvx cache(`uvx --from codex-self-evolution-plugin codex-self-evolution --help`),第一次 hook 触发就不用吃 wheel 下载的延迟
+1. 前置检查:`uv` 在 PATH。
+2. 用 `uv tool install --force <当前 repo>` 安装/更新本地 CLI。
+3. 校验 `codex-self-evolution --help` 和 `csep --help` 都可用。
+4. 检查 `uv tool dir --bin` 是否在当前 PATH,不在就打印具体提示。
+5. 创建 `~/.codex-self-evolution/`。
+6. 如果存在旧版 `~/.codex/hooks.json`,先备份到 `~/.codex/hooks.json.bak.<timestamp>`,然后只移除带 `codex-self-evolution-plugin managed` marker 的旧 user-level hook。不会注入新的 hook entry。
+7. 新的 hook 入口由 Codex plugin manifest 加载:
+   - `.codex-plugin/plugin.json`
+   - `.codex-plugin/hooks.json`
+   - `codex-self-evolution session-start --from-stdin`
+   - `codex-self-evolution stop-review --from-stdin`
+
+需要在 Codex 配置中启用 plugin / hook 相关 feature,并启用本地 plugin。不同 Codex 版本的 plugin 安装方式可能不同,以你当前 `codex --help` / plugin 文档为准。
 
 ### 3.2 验证
 
@@ -256,9 +254,10 @@ JSON 丢弃(不会报错,就是"悄悄没效果")。如果模型答不出 XANADU
 ./scripts/uninstall-codex-hook.sh
 ```
 
+- 这是 legacy compatibility cleanup,只用于清理旧版 user-level hook。
 - 只删带 marker 的条目,**不会误删** vibe-island / luna 等其他工具的 hook
 - 备份一份到 `~/.codex/hooks.json.bak.<timestamp>`
-- 不自动清理:`.bashrc` 的 `export MINIMAX_*`、`config.toml` 的 `shell_environment_policy`、`~/.codex-self-evolution/` 下的数据和 `.env.provider`——卸载只动 hook,数据你自己决定保留还是删
+- 不自动清理:`~/.codex-self-evolution/` 下的数据和 `.env.provider`——卸载只动旧 hook,数据你自己决定保留还是删
 
 ---
 
@@ -274,13 +273,12 @@ JSON 丢弃(不会报错,就是"悄悄没效果")。如果模型答不出 XANADU
 
 脚本行为:
 
-1. 前置检查:`uvx` 在 PATH(**不再要求 venv**)
-2. 自动探测 `uvx` + `opencode` 路径,两个 dir 都写进 plist `EnvironmentVariables.PATH`(launchd 默认 PATH 不含 Homebrew/usr/local/~/.local/bin,**不做这步 scheduler 要么起不来,要么永远 fallback 到 script backend**)
+1. 前置检查:`codex-self-evolution` 在 PATH。若找不到,先运行 `./scripts/install.sh`。
+2. 自动探测本地 CLI + `opencode` 路径,相关 dir 都写进 plist `EnvironmentVariables.PATH`(launchd 默认 PATH 不含 Homebrew/usr/local/~/.local/bin,**不做这步 scheduler 要么起不来,要么永远 fallback 到 script backend**)
 3. 写 `~/Library/LaunchAgents/com.codex-self-evolution.preflight.plist`,`ProgramArguments` 是
-   `[$UVX_BIN, --from, codex-self-evolution-plugin, codex-self-evolution, scan, --backend, agent:opencode]`(`ProgramArguments[0]` launchd 要求绝对路径,install 时探测)
+   `[<absolute codex-self-evolution>, scan, --backend, agent:opencode]`(`ProgramArguments[0]` launchd 要求绝对路径,install 时探测)
 4. `launchctl bootout`(清老的,容错)→ `bootstrap`(新 API)加载
 5. 幂等:再跑一次会 bootout 后重装,仍然只有一条 job
-6. 预热 uvx cache,避免第一次 tick 吃 wheel 下载时间
 
 可用 env 变量覆盖默认:
 
@@ -324,14 +322,15 @@ cat $BUCKET/compiler/last_receipt.json
 装完阶段 3 + 4 后用 `status` 一键盘点所有组件:
 
 ```bash
-.venv/bin/python -m codex_self_evolution.cli status | python3 -m json.tool
+codex-self-evolution status | python3 -m json.tool
 ```
 
 输出纯只读 JSON,包含:
 
 | 段 | 看什么 |
 | --- | --- |
-| `hooks.stop_installed` / `session_start_installed` | 两个都是 `true` 说明 install-codex-hook.sh 装成功 |
+| `plugin_hooks.session_start_declared` / `stop_declared` | 两个都是 `true` 说明 plugin bundle 声明了 SessionStart / Stop hook |
+| `legacy_user_hooks.stop_installed` / `session_start_installed` | 旧版 user-level hook 诊断；Phase 2 正常不需要它们为 `true` |
 | `scheduler.loaded` / `plist_exists` | 两个都是 `true` 说明 install-scheduler.sh 装成功 + launchd 已注册 |
 | `env_provider.keys_set` | 至少 `["MINIMAX_API_KEY"]`(或其它你用的 provider)。**永远不打印 key 值**,只报 set/unset |
 | `tools.codex.version` / `opencode.version` | 两个 CLI 版本。opencode 没装 → scheduler 会 fallback 到 script backend |

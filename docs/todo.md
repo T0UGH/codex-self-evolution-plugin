@@ -4,26 +4,30 @@
 
 ---
 
-## TODO 2026-04-30 让生成好的 skills 被 Codex 直接使用
+## ✅ 2026-04-30 让生成好的 skills 被 Codex 直接使用(Phase 2 已落地)
 
-**背景**:当前自动归纳出的 managed skills 已经可以写入插件状态目录,第一轮实现也
-把 active skill 投影到 `~/.codex/skills/csep-managed/csep-*/SKILL.md`。下一步
-需要继续讨论并验证 Codex 原生 skill loader 对这类投影的真实加载、触发、命名冲突
-和回滚行为。
+**背景**:自动归纳出的 managed skills 会写入插件状态目录,并把 active skill
+投影成 Codex 原生可加载的 skill:
+
+`~/.codex/skills/csep-<skill-id>/SKILL.md`
+
+投影文件是 managed copy,不要手改。要更新或退役 skill,通过 reviewer/compiler
+产出的 source suggestion 进入 pipeline。
 
 **设计落点**:`docs/implementation-plans/2026-04-30-phase2-plugin-hooks-and-generated-skills-plan.md`
 
-**待讨论问题**:
+**落地决定**:
 
-1. active managed skill 是直接发布为全局 Codex skill,还是通过一个 bridge skill
-   汇总/路由。
-2. `~/.codex/skills/csep-managed/<csep-skill-id>/SKILL.md` 是否足够稳定,
-   是否需要安装后 smoke test 或 `skills ls` 校验。
-3. 生成 skill 的质量门禁: draft -> active 的最小字段、触发条件、命令锚点、
-   provenance、冲突检测。
-4. 旧 skill 的 patch/retire/supersede 行为如何影响全局投影。
-5. 如果 Codex 已支持 plugin manifest hooks,是否可以把 skill 发布和 hook 安装
-   统一收敛到 plugin manifest/installer 机制里。
+1. active managed skill 直接发布为全局 Codex skill,不用 bridge skill。
+2. 投影路径从旧设计 `csep-managed/csep-*` 改为直接 `csep-*`,保证 Codex loader
+   按普通 skill 目录发现。
+3. `SKILL.md` 必须带 YAML frontmatter: `name` + `description`。
+4. 缺 description、弱触发描述、低信号 body 的 skill 不发布;若已有旧投影,
+   validation failure 会清理 stale projection。
+5. `memory_updates` / `recall_candidate` 只有显式携带 `details.skill_candidate`
+   才会提升为 skill,不会从普通 memory/recall 文本里猜。
+6. hook 安装收敛到 plugin manifest;`scripts/install.sh` 只安装本地 CLI 并清理旧
+   marker-managed user-level hook。
 
 ---
 

@@ -44,21 +44,17 @@ Next session starts with better context
 ```bash
 brew install uv
 
-curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/scripts/install-codex-hook.sh \
-  -o /tmp/install-codex-hook.sh
-curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/scripts/install-scheduler.sh \
-  -o /tmp/install-scheduler.sh
-chmod +x /tmp/install-codex-hook.sh /tmp/install-scheduler.sh
+git clone https://github.com/T0UGH/codex-self-evolution-plugin.git
+cd codex-self-evolution-plugin
 
 mkdir -p ~/.codex-self-evolution
-curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/.env.provider.example \
-  -o ~/.codex-self-evolution/.env.provider
+cp .env.provider.example ~/.codex-self-evolution/.env.provider
 
-# fill in your provider key, then install hooks + scheduler
-/tmp/install-codex-hook.sh
-/tmp/install-scheduler.sh
+# fill in your provider key, then install the local CLI + scheduler
+scripts/install.sh
+scripts/install-scheduler.sh
 
-uvx --from codex-self-evolution-plugin codex-self-evolution status
+codex-self-evolution status
 ```
 
 For full setup, provider options, and troubleshooting, see [Installation](#installation).
@@ -119,43 +115,39 @@ Current implementation also includes:
 
 ## Installation
 
-> Codex CLI currently does **not** read plugin-manifest hooks
-> ([gap analysis](docs/2026-04-21-ready-for-others-gap-analysis.md)), so the
-> plugin is installed by writing directly to `~/.codex/hooks.json` via the
-> provided scripts. Hooks and the scheduler both invoke the CLI via
-> `uvx --from codex-self-evolution-plugin ...`, so you don't need a long-lived
-> venv or a repo clone. Full step-by-step guide:
-> [docs/getting-started.md](docs/getting-started.md) (中文).
+The installer prepares a local CLI runtime with `uv tool install`. It does not
+inject new entries into `~/.codex/hooks.json`; `SessionStart` and `Stop` are
+loaded from the Codex plugin manifest (`.codex-plugin/plugin.json` and
+`.codex-plugin/hooks.json`). Full step-by-step guide:
+[docs/getting-started.md](docs/getting-started.md) (中文).
 
 End-to-end happy-path install on macOS. The only prerequisite is
 [`uv`](https://docs.astral.sh/uv/#installation) (`brew install uv`):
 
 ```bash
-# 1. grab the installer scripts (they're small; no pip/venv/clone needed)
-curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/scripts/install-codex-hook.sh -o /tmp/install-codex-hook.sh
-curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/scripts/install-scheduler.sh -o /tmp/install-scheduler.sh
-chmod +x /tmp/install-*.sh
+# 1. clone the plugin repo so Codex can load the local plugin manifest
+git clone https://github.com/T0UGH/codex-self-evolution-plugin.git
+cd codex-self-evolution-plugin
 
 # 2. provider credentials (lives under ~/.codex-self-evolution/)
 mkdir -p ~/.codex-self-evolution
-curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/.env.provider.example \
-  -o ~/.codex-self-evolution/.env.provider
+cp .env.provider.example ~/.codex-self-evolution/.env.provider
 # edit the file and set MINIMAX_API_KEY (or OPENAI_API_KEY / ANTHROPIC_API_KEY)
 
-# 3. Stop + SessionStart hooks in ~/.codex/hooks.json, plus ~/.local/bin/csep
-/tmp/install-codex-hook.sh
+# 3. local CLI install; also removes old marker-managed user-level hooks
+scripts/install.sh
 
 # 4. launchd scheduler running `scan --backend agent:opencode` every 5 min
-/tmp/install-scheduler.sh
+scripts/install-scheduler.sh
 
 # 5. sanity check
-uvx --from codex-self-evolution-plugin codex-self-evolution status | python3 -m json.tool
+codex-self-evolution status | python3 -m json.tool
 csep recall "focused query" --format json
 ```
 
-Every invocation after that (hooks, scheduler, manual `status`, and the `csep`
-wrapper used by model-initiated recall) runs out of uvx's cached wheel (~100ms
-warm). Bumping the PyPI release auto-upgrades next time a hook or wrapper fires.
+Every invocation after that (plugin hooks, scheduler, manual `status`, and the
+`csep` wrapper used by model-initiated recall) runs through the local CLI
+installed by `uv tool`. Re-run `scripts/install.sh` after pulling updates.
 
 **Developer install** (editable, for contributing): clone, `pip install -e .`,
 and use `.venv/bin/codex-self-evolution ...` directly — see
@@ -163,18 +155,17 @@ and use `.venv/bin/codex-self-evolution ...` directly — see
 in the guide for a walkthrough that drives reviewer → compile → memory
 entirely from the CLI without touching Codex / launchd.
 
-Removing everything: `/tmp/install-scheduler.sh` has a peer
-`uninstall-scheduler.sh` in the same repo; same for `install-codex-hook.sh`.
-Both are idempotent and won't touch other tools' hooks or launchd jobs.
+Removing everything: `scripts/uninstall-scheduler.sh` removes the launchd job.
+`scripts/uninstall-codex-hook.sh` remains as a deprecated compatibility cleanup
+for old marker-managed user-level hooks. Both are idempotent and won't touch
+neighboring tools' jobs or hooks.
 
 ---
 
 ## Commands
 
-Every subcommand is invokable via
-`uvx --from codex-self-evolution-plugin codex-self-evolution <subcommand>`
-once `uv` is installed. For readability the examples below drop the
-`uvx --from codex-self-evolution-plugin` prefix.
+Every subcommand is invokable after `scripts/install.sh` installs the local CLI
+with `uv tool install`.
 
 ```bash
 codex-self-evolution session-start --cwd /path/to/repo
@@ -217,7 +208,7 @@ State layout under `--state-dir` (default `~/.codex-self-evolution/projects/<man
 
 ```
 ~/.codex-self-evolution/
-├── .env.provider                 # API keys (created by install-codex-hook.sh)
+├── .env.provider                 # API keys (copied from .env.provider.example)
 └── projects/
     └── -Users-alice-code-myrepo/ # one bucket per repo; / → -
         ├── suggestions/{pending,processing,done,failed,discarded}/
@@ -380,10 +371,12 @@ codex-self-evolution compile --once --state-dir data --backend agent:opencode
 mkdir -p ~/.codex-self-evolution
 cp .env.provider.example ~/.codex-self-evolution/.env.provider
 # fill the keys you need — both make provider-smoke-* and the installed
-# Stop hook read from this single location.
+# plugin Stop hook read from this single location.
 ```
 
-`scripts/install-codex-hook.sh` will auto-migrate a legacy `<repo>/.env.provider` into `~/.codex-self-evolution/.env.provider` on its first run.
+Use `scripts/install.sh` for the current local CLI install. The older
+`scripts/install-codex-hook.sh` is kept only as a deprecated cleanup/migration
+path for legacy user-level hook installs.
 
 ---
 
@@ -499,9 +492,9 @@ If you want a working Codex-first self-evolution loop that is moving quickly, it
 
 ## Development Notes
 
-- Hook wiring lives only in `.codex-plugin/plugin.json`.
+- Hook wiring lives in `.codex-plugin/plugin.json` and `.codex-plugin/hooks.json`.
 - Final writes are owned by `src/codex_self_evolution/compiler/engine.py` (not a separate `writer.py`).
-- Managed skills keep their source of truth under `skills/managed/` and require plugin-owned manifest entries (owner = `codex-self-evolution-plugin`). Active publishable skills are projected into `~/.codex/skills/csep-managed/csep-*/SKILL.md`; the compiler refuses to modify skills owned by anything else.
+- Managed skills keep their source of truth under `skills/managed/` and require plugin-owned manifest entries (owner = `codex-self-evolution-plugin`). Active publishable skills are projected into `~/.codex/skills/csep-<skill-id>/SKILL.md`; the compiler refuses to modify skills owned by anything else. These are managed copies; edit source suggestions or retire the skill through the compiler pipeline instead of editing projected files by hand.
 - Review snapshots are normalized and persisted under `review/snapshots/` for debugging / auditability.
 - Recall uses repo/cwd-first ranking. `SessionStart` injects a Recall Contract that tells Codex to self-trigger `csep recall "<focused query>"` for non-trivial repo/workspace tasks that may depend on prior local context; empty recall is a soft failure.
 - When touching compile behaviour, read `docs/2026-04-20-compiler-existing-assets-handoff.md` for the rationale behind the current existing-assets pipeline.
