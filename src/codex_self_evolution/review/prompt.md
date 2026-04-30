@@ -85,6 +85,10 @@ For `memory_updates`, `details` must additionally include:
 - `action`: `"add"` | `"replace"` | `"remove"` (optional, default `"add"`)
 - `old_summary`: required when `action` is `"replace"` or `"remove"`
 
+For `memory_updates` and `recall_candidate`, `details` may additionally include:
+
+- `skill_candidate`: optional object with `skill_id`, `title`, `description`, and `content` when the entry reveals a repeated workflow that should become a managed skill.
+
 For `skill_action`, `details` must additionally include:
 
 - `action`: one of `"create" | "patch" | "edit" | "retire"`
