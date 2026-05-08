@@ -2,12 +2,10 @@
 
 Why this exists: the ``scan`` job runs under launchd, which hands the child a
 near-empty environment (just ``PATH`` + ``HOME`` per our plist). Downstream
-agents — specifically ``opencode`` — read their API keys from env vars
-(``opencode.json`` resolves ``{env:MINIMAX_API_KEY}`` at runtime). Without
-hydration, opencode in the scan path hits MiniMax 401 and exits 0 with an
-``{"type":"error"}`` event that the old extractor silently discarded, giving
-users a misleading "no assistant text" receipt while every scan silently
-fell back to the script backend.
+agents — specifically ``pi`` / ``opencode`` — read their API keys from env
+vars. Without hydration, launchd scan jobs can call the agent without
+``KIMI_API_KEY`` / provider keys and fail with a misleading "no assistant
+text" style receipt.
 
 Security posture:
 
@@ -98,7 +96,7 @@ def hydrate_env_for_subprocesses() -> list[str]:
     """One-shot: load ``.env.provider`` and apply to ``os.environ``.
 
     Intended to be called once at the CLI entry point. Any subprocess we
-    spawn (opencode, the MiniMax HTTP reviewer) then inherits these keys
+    spawn (pi/opencode for compile, the HTTP reviewer) then inherits these keys
     via the default ``os.environ`` copy that :class:`subprocess.Popen`
     performs. Safe to call multiple times.
 

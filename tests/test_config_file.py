@@ -42,7 +42,10 @@ def test_missing_config_returns_defaults(tmp_path: Path) -> None:
     assert loaded.config.profile_names == []
     assert loaded.config.reviewer.provider == "minimax"
     assert loaded.config.reviewer.model == ""
-    assert loaded.config.compile.backend == "agent:opencode"
+    assert loaded.config.compile.backend == "agent:pi"
+    assert loaded.config.compile.pi.provider == "kimi"
+    assert loaded.config.compile.pi.model == "kimi-k2.6"
+    assert loaded.config.compile.pi.mode == "edit"
     assert loaded.sources["reviewer.provider"] == "default"
     assert loaded.warnings == []
 
@@ -76,6 +79,12 @@ allow_fallback = false
 [compile.opencode]
 model = "gpt-5"
 
+[compile.pi]
+provider = "openai"
+model = "gpt-4o-mini"
+timeout_seconds = 120
+mode = "json"
+
 [scheduler]
 backend = "script"
 interval_seconds = 600
@@ -92,6 +101,10 @@ retention_days = 7
     assert c.compile.backend == "script"
     assert c.compile.allow_fallback is False
     assert c.compile.opencode.model == "gpt-5"
+    assert c.compile.pi.provider == "openai"
+    assert c.compile.pi.model == "gpt-4o-mini"
+    assert c.compile.pi.timeout_seconds == 120.0
+    assert c.compile.pi.mode == "json"
     assert c.scheduler.backend == "script"
     assert c.scheduler.interval_seconds == 600
     assert c.log.retention_days == 7
@@ -113,6 +126,27 @@ model = "MiniMax-M2.7"
     loaded = load_config(home=tmp_path, env=env)
     assert loaded.config.reviewer.model == "MiniMax-Text-01"
     assert loaded.sources["reviewer.model"] == "env:CODEX_SELF_EVOLUTION_REVIEWER_MODEL"
+
+
+def test_pi_env_vars_override_toml(tmp_path: Path) -> None:
+    _write_config(tmp_path, """
+[compile.pi]
+provider = "kimi"
+model = "kimi-k2.6"
+mode = "edit"
+""")
+    env = {
+        "CODEX_SELF_EVOLUTION_PI_PROVIDER": "openai",
+        "CODEX_SELF_EVOLUTION_PI_MODEL": "gpt-4o-mini",
+        "CODEX_SELF_EVOLUTION_PI_MODE": "json",
+    }
+    loaded = load_config(home=tmp_path, env=env)
+    assert loaded.config.compile.pi.provider == "openai"
+    assert loaded.config.compile.pi.model == "gpt-4o-mini"
+    assert loaded.config.compile.pi.mode == "json"
+    assert loaded.sources["compile.pi.provider"] == "env:CODEX_SELF_EVOLUTION_PI_PROVIDER"
+    assert loaded.sources["compile.pi.model"] == "env:CODEX_SELF_EVOLUTION_PI_MODEL"
+    assert loaded.sources["compile.pi.mode"] == "env:CODEX_SELF_EVOLUTION_PI_MODE"
 
 
 def test_legacy_provider_scoped_env_var_overrides_toml(tmp_path: Path) -> None:
@@ -307,6 +341,7 @@ def test_config_to_dict_serializes_whole_tree(tmp_path: Path) -> None:
     }
     assert "subprocess" in data["reviewer"]
     assert "opencode" in data["compile"]
+    assert "pi" in data["compile"]
 
 
 # ---- allowed providers list stays in sync ------------------------------

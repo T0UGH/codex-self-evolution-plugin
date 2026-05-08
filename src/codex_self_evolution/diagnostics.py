@@ -39,6 +39,7 @@ WELL_KNOWN_API_KEYS = (
     "MINIMAX_API_KEY",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
+    "KIMI_API_KEY",
 )
 
 
@@ -306,6 +307,7 @@ def _check_tools() -> dict[str, Any]:
     return {
         "codex": _probe_version(["codex", "--version"]),
         "opencode": _probe_version(["opencode", "--version"]),
+        "pi": _probe_version(["pi", "--version"]),
         "csep": _probe_version(["csep", "--help"]),
     }
 

@@ -29,7 +29,6 @@ from typing import Any
 
 
 DEFAULT_PROVIDER_ENV = "CODEX_SELF_EVOLUTION_REVIEWER_PROVIDER"
-DEFAULT_PROVIDER_FALLBACK = "minimax"
 
 # Upper bound on how many transcript characters we hand to the reviewer, so a
 # huge jsonl can't blow past provider limits. Applied at the joined string
@@ -54,13 +53,14 @@ def map_codex_stop_payload(
       user/assistant messages (truncated to ``TRANSCRIPT_MAX_CHARS``). Otherwise
       fall back to ``last_assistant_message``.
     - ``thread_read_output`` left empty (Codex doesn't give us an equivalent).
-    - ``reviewer_provider``: explicit argument > ``CODEX_SELF_EVOLUTION_REVIEWER_PROVIDER``
-      env var > ``minimax`` default.
+    - ``reviewer_provider``: only included for an explicit argument or
+      ``CODEX_SELF_EVOLUTION_REVIEWER_PROVIDER`` env override. When omitted,
+      the reviewer runner falls back to ``config.toml``'s active profile.
     - Extra Codex-only fields (``codex_transcript_path``, ``hook_event_name``,
       ``model``, ``permission_mode``) preserved under passthrough keys so
       downstream debugging has the full context.
     """
-    provider = reviewer_provider or os.environ.get(DEFAULT_PROVIDER_ENV) or DEFAULT_PROVIDER_FALLBACK
+    provider = reviewer_provider or os.environ.get(DEFAULT_PROVIDER_ENV)
 
     cwd = str(codex_payload.get("cwd") or ".")
     transcript_path = codex_payload.get("transcript_path") or ""
@@ -70,19 +70,21 @@ def map_codex_stop_payload(
     if not transcript_text:
         transcript_text = str(codex_payload.get("last_assistant_message") or "")
 
-    return {
+    mapped = {
         "thread_id": str(codex_payload.get("session_id") or "unknown-thread"),
         "turn_id": str(codex_payload.get("turn_id") or ""),
         "cwd": cwd,
         "transcript": transcript_text,
         "thread_read_output": str(codex_payload.get("last_assistant_message") or ""),
-        "reviewer_provider": provider,
         # Passthrough for debugging / audit. stop_review ignores unknown keys.
         "codex_transcript_path": str(transcript_path),
         "codex_hook_event": str(codex_payload.get("hook_event_name") or ""),
         "codex_model": str(codex_payload.get("model") or ""),
         "codex_permission_mode": str(codex_payload.get("permission_mode") or ""),
     }
+    if provider:
+        mapped["reviewer_provider"] = provider
+    return mapped
 
 
 def _read_transcript(path: str, limit: int = TRANSCRIPT_MAX_CHARS) -> str:

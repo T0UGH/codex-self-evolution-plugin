@@ -23,11 +23,11 @@
     },
     {
       "name": "compile",
-      "command": "codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend agent:opencode"
+      "command": "codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend agent:pi"
     },
     {
       "name": "scan",
-      "command": "codex-self-evolution scan --backend agent:opencode"
+      "command": "codex-self-evolution scan --backend agent:pi"
     },
     {
       "name": "status",
@@ -45,8 +45,8 @@
   "hooks": "./.codex-plugin/hooks.json",
   "scheduler": {
     "recommended": "launchd",
-    "scan_command": "codex-self-evolution scan --backend agent:opencode",
+    "scan_command": "codex-self-evolution scan --backend agent:pi",
     "preflight_command": "codex-self-evolution compile-preflight --state-dir \"$CODEX_STATE_DIR\"",
-    "compile_command": "codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend agent:opencode"
+    "compile_command": "codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend agent:pi"
   }
 }

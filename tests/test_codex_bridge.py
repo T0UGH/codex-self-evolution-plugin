@@ -36,7 +36,7 @@ def test_map_codex_stop_payload_uses_last_assistant_when_no_transcript():
     assert result["turn_id"] == "019da-turn"
     assert result["cwd"] == "/tmp/target-repo"
     assert result["transcript"] == "done"
-    assert result["reviewer_provider"] == "minimax"
+    assert "reviewer_provider" not in result
     assert result["codex_hook_event"] == "Stop"
     assert result["codex_model"] == "gpt-5.4"
 
@@ -47,7 +47,7 @@ def test_map_codex_stop_payload_falls_back_to_defaults_when_fields_missing():
     assert result["turn_id"] == ""
     assert result["cwd"] == "."
     assert result["transcript"] == ""
-    assert result["reviewer_provider"] == "minimax"
+    assert "reviewer_provider" not in result
 
 
 def test_map_codex_stop_payload_honors_env_provider_override(monkeypatch):
@@ -179,7 +179,7 @@ def test_cli_from_stdin_spawns_background_reviewer_and_returns_continue(monkeypa
     # Tempfile must contain the mapped payload, not the raw Codex payload.
     written = json.loads(open(captured["payload_path"], encoding="utf-8").read())
     assert written["thread_id"] == "019da-session"
-    assert written["reviewer_provider"] == "minimax"
+    assert "reviewer_provider" not in written
 
 
 def test_cli_from_stdin_forwards_state_dir_to_child(monkeypatch, capsys):

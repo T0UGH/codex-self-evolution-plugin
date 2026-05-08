@@ -32,7 +32,8 @@ SessionStart 注入背景
 | --- | --- | --- |
 | Codex CLI 最新源码版 | 已验证 | 支持 `plugins` / `codex_hooks` / `plugin_hooks` 后可原生加载插件 hooks。 |
 | Codex CLI 0.125.0 | 部分可用 | 可加载生成的 skills；`plugin_hooks` feature 尚不可用，需要升级 Codex。 |
-| OpenCode / opencode | 已接入 | 作为 compiler agent backend，用于更智能地归纳 memory / recall / skills。 |
+| Pi / Kimi | 已接入 | 默认 compiler agent backend，使用 `pi --provider kimi --model kimi-k2.6` 归纳 memory / recall / skills。 |
+| OpenCode / opencode | 可选 | 保留为 `agent:opencode` backend，便于回退或对比。 |
 | 手动 CLI | 已支持 | 不依赖 Codex hooks，可直接跑 reviewer / compile / recall 调试闭环。 |
 
 如果你运行 Codex 时看到 `Unknown feature flag: plugin_hooks`，说明当前 Codex CLI 版本还没包含 plugin hook 支持。此时可以先使用手动 CLI 和 scheduler 路径，或更新 Codex 后再启用 plugin hooks。
@@ -162,10 +163,12 @@ csep recall "focused query" --format json
 ### 4. 手动跑一次 compile
 
 ```bash
-codex-self-evolution scan --backend agent:opencode
+codex-self-evolution scan --backend agent:pi
 ```
 
-如果本机没有 `opencode`，会自动 fallback 到 deterministic `script` backend。
+生产默认使用 `agent:pi`。Pi 默认以 `edit` 模式直接编辑临时 assets workspace，
+再由本地校验与原子写入流程晋升到正式 memory/recall；如需回退旧协议，可把
+`[compile.pi] mode = "json"`。`agent:opencode` 和 deterministic `script` 仍可用于对比或调试。
 
 ## 工作流
 
@@ -264,7 +267,7 @@ Compiler 会维护两份内容：
 | `codex-self-evolution stop-review --from-stdin` | Codex Stop hook 入口。 |
 | `codex-self-evolution compile-preflight` | 检查是否需要 compile，处理空队列 / 锁 / stale lock。 |
 | `codex-self-evolution compile --once` | 单次 compile。 |
-| `codex-self-evolution scan --backend agent:opencode` | 扫描所有项目 bucket 并编译 pending suggestions。 |
+| `codex-self-evolution scan --backend agent:pi` | 扫描所有项目 bucket 并编译 pending suggestions。 |
 | `codex-self-evolution recall-trigger --query "..."` | 触发一次聚焦 recall。 |
 | `codex-self-evolution status` | 输出只读诊断快照。 |
 | `csep recall "..."` | 面向模型使用的 recall wrapper。 |
@@ -273,7 +276,7 @@ Compiler 会维护两份内容：
 
 ```bash
 codex-self-evolution status | python3 -m json.tool
-codex-self-evolution scan --backend agent:opencode
+codex-self-evolution scan --backend agent:pi
 csep recall "这个 repo 的上线检查流程"
 ```
 
@@ -284,7 +287,7 @@ csep recall "这个 repo 的上线检查流程"
 | Provider key | `~/.codex-self-evolution/.env.provider` | 推荐放这里，hook / scheduler / 手动命令共用。 |
 | Runtime home | `CODEX_SELF_EVOLUTION_HOME` | 默认 `~/.codex-self-evolution`。 |
 | Codex plugin | `~/.codex/config.toml` + `~/.codex/plugins/cache/` | Codex 自己读取。 |
-| Compiler backend | `--backend` / `CODEX_SELF_EVOLUTION_OPENCODE_*` | 控制 `script` 或 `agent:opencode`。 |
+| Compiler backend | `--backend` / `CODEX_SELF_EVOLUTION_PI_*` | 控制 `script`、`agent:pi` 或 `agent:opencode`；`CODEX_SELF_EVOLUTION_PI_MODE=json` 可切回旧 JSON 回传。 |
 | Per-command state | `--state-dir` | 调试时可指定临时目录。 |
 
 ## 开发
@@ -337,7 +340,7 @@ uvx twine upload dist/*
 - memory / recall / generated skills 晋升
 - generated skills 自动投影到 `~/.codex/skills/csep-*`
 - launchd scheduler
-- `agent:opencode` compiler backend + `script` fallback
+- `agent:pi` compiler backend，默认 `kimi/kimi-k2.6` + direct-edit workspace
 
 仍在演进：
 

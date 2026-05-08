@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-DEFAULT_BATCH_SIZE = 100
+# Agent compilation quality degrades sharply when many heterogeneous reviewer
+# envelopes are merged in one prompt. Keep unattended batches small; repeated
+# scheduler ticks are cheaper than silently losing durable memory.
+DEFAULT_BATCH_SIZE = 5
 # Hard upper bound for how long a compile lock may live before the next
 # preflight treats it as stale and reclaims it. Set to 30 minutes: a normal
 # compile should finish well under this (typical target 5-10 minutes); exceeding

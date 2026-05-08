@@ -16,7 +16,7 @@ fail() { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 command -v uv >/dev/null 2>&1 || fail "uv not found on PATH. Install with: brew install uv"
 
 info "installing local CLI with uv tool"
-uv tool install --force "$INSTALL_SOURCE"
+uv tool install --force --reinstall --refresh "$INSTALL_SOURCE"
 
 TOOL_BIN="$(uv tool dir --bin 2>/dev/null || true)"
 if [ -n "$TOOL_BIN" ]; then

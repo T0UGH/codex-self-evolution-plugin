@@ -19,7 +19,7 @@ def test_scheduler_plist_uses_local_cli_not_uvx(tmp_path, monkeypatch):
     local_cli = fake_bin / "codex-self-evolution"
     _write_executable(local_cli, "#!/usr/bin/env bash\nexit 0\n")
     _write_executable(fake_bin / "uvx", "#!/usr/bin/env bash\nexit 0\n")
-    _write_executable(fake_bin / "opencode", "#!/usr/bin/env bash\nexit 0\n")
+    _write_executable(fake_bin / "pi", "#!/usr/bin/env bash\nexit 0\n")
     _write_executable(fake_bin / "launchctl", "#!/usr/bin/env bash\nexit 0\n")
 
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -35,7 +35,7 @@ def test_scheduler_plist_uses_local_cli_not_uvx(tmp_path, monkeypatch):
         str(local_cli),
         "scan",
         "--backend",
-        "agent:opencode",
+        "agent:pi",
     ]
     assert str(fake_bin) in plist["EnvironmentVariables"]["PATH"].split(os.pathsep)
     assert "uvx" not in json.dumps(plist)

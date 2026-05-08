@@ -97,9 +97,17 @@ provider = "opencode-cli"
 # ===========================================================================
 
 [compile]
-# script | agent:opencode
-backend = "agent:opencode"
+# script | agent:pi | agent:opencode
+backend = "agent:pi"
 allow_fallback = true
+
+
+[compile.pi]
+provider = "kimi"
+model = "kimi-k2.6"
+# edit = Pi edits a temporary asset workspace; json = legacy full JSON response.
+mode = "edit"
+timeout_seconds = 900
 
 
 [compile.opencode]
@@ -114,7 +122,7 @@ timeout_seconds = 900
 # ===========================================================================
 
 [scheduler]
-backend = "agent:opencode"
+backend = "agent:pi"
 # interval_seconds is documentation-only — authoritative value lives in
 # ~/Library/LaunchAgents/com.codex-self-evolution.preflight.plist.
 interval_seconds = 300

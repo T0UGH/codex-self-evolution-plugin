@@ -9,12 +9,56 @@ from codex_self_evolution.recall.workflow import build_focused_recall, evaluate_
 
 
 def test_end_to_end_loop(tmp_path, monkeypatch):
-    # This test exercises the agent:opencode → script fallback path end to end.
-    # Force `opencode_unavailable` (rather than spinning up a real opencode
-    # subprocess) so the assertions stay deterministic and we keep coverage
-    # of the discarded_items + fallback_backend wiring. To exercise the
-    # happy agent path with a real LLM, see test_agent_opencode_invoker.py.
-    monkeypatch.setattr(backends.shutil, "which", lambda _: None)
+    # Exercise the production agent backend path without spinning up a real
+    # pi subprocess. Script remains available as an explicit backend, but
+    # agent:pi must not silently delegate synthesis to script.
+    monkeypatch.setattr(backends.shutil, "which", lambda _: "/fake/pi")
+
+    def fake_agent(self, payload, options):
+        return json.dumps(
+            {
+                "memory_records": {
+                    "user": [{"summary": "User preference", "content": "Prefer concise summaries"}],
+                    "global": [{"summary": "Keep pytest focused", "content": "Run focused pytest before full suite"}],
+                },
+                "recall_records": [
+                    {
+                        "id": "focused-pytest",
+                        "summary": "Focused pytest",
+                        "content": "Run focused pytest before full suite",
+                        "source_paths": ["tests/test_end_to_end.py"],
+                        "repo_fingerprint": payload["repo"]["repo_fingerprint"],
+                        "cwd": payload["repo"]["cwd"],
+                    }
+                ],
+                "compiled_skills": [
+                    {
+                        "skill_id": "test-skill",
+                        "title": "Test Skill",
+                        "description": "This skill should be used when running focused tests before a broader regression pass.",
+                        "content": "## Workflow\n\n1. Run the smallest focused test first.\n2. Expand to the relevant suite.\n3. Report exact commands and results.",
+                        "action": "create",
+                    }
+                ],
+                "manifest_entries": [
+                    {
+                        "skill_id": "test-skill",
+                        "action": "create",
+                        "title": "Test Skill",
+                        "path": "skills/managed/test-skill.md",
+                        "status": "active",
+                        "owner": "codex-self-evolution-plugin",
+                        "managed": True,
+                        "created_by": "codex-self-evolution-plugin",
+                        "updated_at": "2026-04-20T00:00:00Z",
+                        "retired_at": None,
+                    }
+                ],
+                "discarded_items": [],
+            }
+        )
+
+    monkeypatch.setattr(backends.PiAgentCompilerBackend, "_subprocess_invoker", fake_agent)
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -62,7 +106,12 @@ def test_end_to_end_loop(tmp_path, monkeypatch):
     assert stop["suggestion_count"] == 4
     assert preflight_compile(repo_root=repo, state_dir=state)["status"] == "run"
 
-    compile_result = run_compile(repo_root=repo, state_dir=state, backend="agent:opencode")
+    compile_result = run_compile(
+        repo_root=repo,
+        state_dir=state,
+        backend="agent:pi",
+        compile_options={"pi_mode": "json"},
+    )
     assert compile_result["processed_count"] == 1
     assert (state / "skills" / "managed" / "test-skill.md").exists()
     skill_doc = tmp_path / "codex-skills" / "csep-test-skill" / "SKILL.md"
@@ -75,7 +124,7 @@ def test_end_to_end_loop(tmp_path, monkeypatch):
     assert "Prefer concise summaries" in (state / "memory" / "USER.md").read_text(encoding="utf-8")
     assert "Run focused pytest before full suite" in (state / "memory" / "MEMORY.md").read_text(encoding="utf-8")
     receipt = json.loads((state / "compiler" / "last_receipt.json").read_text(encoding="utf-8"))
-    assert receipt["fallback_backend"] == "script"
+    assert receipt["fallback_backend"] is None
     assert (state / "suggestions" / "done").glob("*.json")
 
     trigger = evaluate_recall_trigger("remember focused pytest workflow")

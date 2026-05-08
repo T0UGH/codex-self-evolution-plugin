@@ -14,15 +14,20 @@ properties that MUST hold for scheduler use:
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
 
 from codex_self_evolution import cli
+from codex_self_evolution.compiler import backends
 from codex_self_evolution.compiler import engine
 from codex_self_evolution.compiler.engine import scan_all_projects
-from codex_self_evolution.config import PROJECTS_SUBDIR
+from codex_self_evolution.config import DEFAULT_LOCK_STALE_SECONDS, PROJECTS_SUBDIR, build_paths
 from codex_self_evolution.hooks.stop_review import stop_review
+from codex_self_evolution.schemas import Suggestion, SuggestionEnvelope
+from codex_self_evolution.storage import atomic_write_json
 
 
 def _seed_bucket_with_pending(home: Path, project_name: str) -> Path:
@@ -198,6 +203,237 @@ def test_scan_isolates_compile_exceptions(tmp_path, monkeypatch):
     assert result["counts"]["run"] == 1
 
 
+def test_run_compile_marks_agent_failure_as_failed_not_processing(tmp_path, monkeypatch):
+    bucket = _seed_bucket_with_pending(tmp_path, "-fake-agent-quality-fail")
+
+    class BadBackend:
+        def compile(self, batch, context, options):
+            raise RuntimeError("agent quality gate failed")
+
+    monkeypatch.setattr(engine, "get_backend", lambda _: BadBackend())
+
+    result = engine.run_compile(state_dir=bucket, backend="agent:opencode")
+
+    assert result["status"] == "error"
+    assert "agent quality gate failed" in result["error"]
+    assert not list((bucket / "suggestions" / "processing").glob("*.json"))
+    failed = list((bucket / "suggestions" / "failed").glob("*.json"))
+    assert len(failed) == 1
+    receipt = json.loads((bucket / "compiler" / "last_receipt.json").read_text(encoding="utf-8"))
+    assert receipt["run_status"] == "error"
+    assert receipt["item_receipts"][0]["state"] == "failed"
+
+
+def test_run_compile_passes_compile_options_to_backend(tmp_path, monkeypatch):
+    bucket = _seed_bucket_with_pending(tmp_path, "-fake-agent-options")
+    seen_options = []
+
+    class OptionsBackend:
+        def compile(self, batch, context, options):
+            seen_options.append(dict(options))
+            return backends.CompileArtifacts(
+                memory_records={"user": [{"summary": "s", "content": "c"}], "global": []},
+                recall_records=[],
+                compiled_skills=[],
+                manifest_entries=[],
+                discarded_items=[],
+                backend_name="agent:pi",
+            )
+
+    monkeypatch.setattr(engine, "get_backend", lambda _: OptionsBackend())
+
+    result = engine.run_compile(
+        state_dir=bucket,
+        backend="agent:pi",
+        compile_options={"pi_mode": "json", "pi_model": "kimi-k2.6"},
+    )
+
+    assert result["status"] == "success"
+    assert seen_options == [{"allow_fallback": True, "pi_mode": "json", "pi_model": "kimi-k2.6"}]
+
+
+def test_run_compile_limits_pi_edit_mode_to_single_envelope(tmp_path, monkeypatch):
+    bucket = _seed_bucket_with_pending(tmp_path, "-fake-pi-edit-single")
+    second_payload = bucket / "test-payload-2.json"
+    second_payload.write_text(
+        json.dumps({
+            "thread_id": "thread-pi-edit-2",
+            "turn_id": "turn-2",
+            "cwd": "/tmp/fake-pi-edit-single",
+            "transcript": "second seeded item",
+            "thread_read_output": "ctx",
+            "reviewer_provider": "dummy",
+            "provider_stub_response": {
+                "memory_updates": [
+                    {"summary": "Second pi edit fact", "details": {"content": "More content.", "scope": "user"}},
+                ],
+            },
+        }),
+        encoding="utf-8",
+    )
+    stop_review(hook_payload=second_payload, state_dir=bucket)
+    seen_batch_sizes = []
+
+    class SingleBackend:
+        def compile(self, batch, context, options):
+            seen_batch_sizes.append(len(batch))
+            suggestion = batch[0].suggestions[0]
+            return backends.CompileArtifacts(
+                memory_records={"user": [{"summary": suggestion.summary, "content": suggestion.details["content"]}], "global": []},
+                recall_records=[],
+                compiled_skills=[],
+                manifest_entries=[],
+                discarded_items=[],
+                backend_name="agent:pi",
+            )
+
+    monkeypatch.setattr(engine, "get_backend", lambda _: SingleBackend())
+
+    result = engine.run_compile(
+        state_dir=bucket,
+        backend="agent:pi",
+        batch_size=5,
+        compile_options={"pi_mode": "edit"},
+    )
+
+    assert result["status"] == "success"
+    assert result["processed_count"] == 1
+    assert seen_batch_sizes == [1]
+    assert len(list((bucket / "suggestions" / "pending").glob("*.json"))) == 1
+
+
+def test_run_compile_splits_failed_agent_batch_and_salvages_items(tmp_path, monkeypatch):
+    bucket = _seed_bucket_with_pending(tmp_path, "-fake-agent-split")
+    second_payload = bucket / "test-payload-2.json"
+    second_payload.write_text(
+        json.dumps({
+            "thread_id": "thread-split-2",
+            "turn_id": "turn-2",
+            "cwd": "/tmp/fake-agent-split",
+            "transcript": "second seeded item",
+            "thread_read_output": "ctx",
+            "reviewer_provider": "dummy",
+            "provider_stub_response": {
+                "memory_updates": [
+                    {"summary": "Second fact", "details": {"content": "More stable content.", "scope": "user"}},
+                ],
+            },
+        }),
+        encoding="utf-8",
+    )
+    stop_review(hook_payload=second_payload, state_dir=bucket)
+
+    class SplitBackend:
+        def compile(self, batch, context, options):
+            if len(batch) > 1:
+                raise RuntimeError("batch collapsed")
+            suggestion = batch[0].suggestions[0]
+            return backends.CompileArtifacts(
+                memory_records={"user": [{"summary": suggestion.summary, "content": suggestion.details["content"]}], "global": []},
+                recall_records=[],
+                compiled_skills=[],
+                manifest_entries=[],
+                discarded_items=[],
+                backend_name="agent:opencode",
+            )
+
+    monkeypatch.setattr(engine, "get_backend", lambda _: SplitBackend())
+
+    result = engine.run_compile(state_dir=bucket, backend="agent:opencode", batch_size=2)
+
+    assert result["status"] == "success"
+    assert result["processed_count"] == 2
+    assert not list((bucket / "suggestions" / "processing").glob("*.json"))
+    assert len(list((bucket / "suggestions" / "done").glob("*.json"))) == 2
+    receipt = json.loads((bucket / "compiler" / "last_receipt.json").read_text(encoding="utf-8"))
+    assert receipt["item_receipts"][0]["state"] == "batch_split"
+    assert all(
+        item.get("split_from_batch")
+        for item in receipt["item_receipts"]
+        if item.get("state") == "done"
+    )
+
+
+def test_run_compile_finalizes_empty_envelope_without_backend(tmp_path, monkeypatch):
+    paths = build_paths(repo_root=tmp_path / "repo", state_dir=tmp_path / "state")
+    envelope = SuggestionEnvelope(
+        schema_version=1,
+        suggestion_id="empty-1",
+        idempotency_key="empty-idem-1",
+        thread_id="thread-empty",
+        cwd=str(tmp_path / "repo"),
+        repo_fingerprint="fp-empty",
+        reviewer_timestamp="2026-05-07T00:00:00Z",
+        suggestions=[],
+        source_authority=[],
+    )
+    atomic_write_json(paths.suggestions_pending_dir / "empty-1.json", envelope.to_dict())
+
+    class ShouldNotRunBackend:
+        def compile(self, batch, context, options):
+            raise AssertionError("empty envelopes should not invoke the agent compiler")
+
+    monkeypatch.setattr(engine, "get_backend", lambda _: ShouldNotRunBackend())
+
+    result = engine.run_compile(state_dir=paths.state_dir, backend="agent:opencode")
+
+    assert result["status"] == "success"
+    assert result["processed_count"] == 1
+    assert not list(paths.suggestions_processing_dir.glob("*.json"))
+    done = list(paths.suggestions_done_dir.glob("*.json"))
+    assert len(done) == 1
+    receipt = json.loads((paths.compiler_dir / "last_receipt.json").read_text(encoding="utf-8"))
+    assert receipt["run_status"] == "success"
+    assert receipt["skip_reason"] == "no_suggestions"
+    assert receipt["item_receipts"] == [
+        {
+            "suggestion_id": "empty-1",
+            "state": "done",
+            "path": str(done[0]),
+            "reason": "no_suggestions",
+        }
+    ]
+
+
+def test_run_compile_reclaims_stale_processing_envelope(tmp_path):
+    paths = build_paths(repo_root=tmp_path / "repo", state_dir=tmp_path / "state")
+    envelope = SuggestionEnvelope(
+        schema_version=1,
+        suggestion_id="stale-1",
+        idempotency_key="stale-idem-1",
+        thread_id="thread-stale",
+        cwd=str(tmp_path / "repo"),
+        repo_fingerprint="fp-stale",
+        reviewer_timestamp="2026-05-07T00:00:00Z",
+        suggestions=[
+            Suggestion(
+                family="memory_updates",
+                summary="stale processing fact",
+                details={"content": "Stable content from reclaimed processing.", "scope": "user"},
+            )
+        ],
+        source_authority=[],
+        state="processing",
+        attempt_count=1,
+    )
+    processing_path = paths.suggestions_processing_dir / "stale-1.json"
+    atomic_write_json(processing_path, envelope.to_dict())
+    stale_time = time.time() - DEFAULT_LOCK_STALE_SECONDS - 5
+    os.utime(processing_path, (stale_time, stale_time))
+
+    preflight = engine.preflight_compile(state_dir=paths.state_dir)
+    result = engine.run_compile(state_dir=paths.state_dir, backend="script")
+
+    assert preflight["status"] == "run"
+    assert preflight["stale_processing"] == 1
+    assert result["status"] == "success"
+    assert result["processed_count"] == 1
+    assert not list(paths.suggestions_processing_dir.glob("*.json"))
+    assert len(list(paths.suggestions_done_dir.glob("*.json"))) == 1
+    done_payload = json.loads(next(paths.suggestions_done_dir.glob("*.json")).read_text(encoding="utf-8"))
+    assert done_payload["transition_log"][-2]["reason"] == "reclaimed_stale"
+
+
 # ---------- CLI wiring ----------
 
 
@@ -216,12 +452,12 @@ def test_cli_scan_subcommand_prints_summary_json(tmp_path, capsys):
     assert out["results"][0]["project"] == "-fake-cli-test"
 
 
-def test_cli_scan_default_backend_is_agent_opencode():
+def test_cli_scan_default_backend_is_agent_pi():
     # Regression guard: if someone "fixes" the default back to script
     # to make CI faster, users who install the scheduler lose the whole
-    # point of agent backend for unattended runs. Agent falls back to
-    # script automatically if opencode missing — the default being
-    # agent:opencode is intentional.
+    # point of the pi agent backend for unattended runs. Agent failures should
+    # stay visible as failed compile attempts, not silently synthesize through
+    # script.
     parser = cli.build_parser()
     args = parser.parse_args(["scan"])
-    assert args.backend == "agent:opencode"
+    assert args.backend == "agent:pi"

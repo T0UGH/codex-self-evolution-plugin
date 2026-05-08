@@ -84,6 +84,19 @@ def list_suggestions(paths: Paths, state: str) -> list[Path]:
     return sorted(_state_dir(paths, state).glob("*.json"))
 
 
+def list_stale_processing(paths: Paths, stale_after_seconds: int = DEFAULT_LOCK_STALE_SECONDS) -> list[Path]:
+    cutoff = utc_now().timestamp() - stale_after_seconds
+    stale: list[Path] = []
+    for path in list_suggestions(paths, "processing"):
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if mtime < cutoff:
+            stale.append(path)
+    return stale
+
+
 def _all_suggestion_paths(paths: Paths) -> list[Path]:
     output: list[Path] = []
     for state in SUGGESTION_STATES:
@@ -124,7 +137,12 @@ def move_suggestion(paths: Paths, source: Path, envelope: SuggestionEnvelope, st
     return destination
 
 
-def claim_suggestions(paths: Paths, batch_size: int, max_attempts: int = 3) -> list[tuple[Path, SuggestionEnvelope]]:
+def claim_suggestions(
+    paths: Paths,
+    batch_size: int,
+    max_attempts: int = 3,
+    stale_after_seconds: int = DEFAULT_LOCK_STALE_SECONDS,
+) -> list[tuple[Path, SuggestionEnvelope]]:
     claimed: list[tuple[Path, SuggestionEnvelope]] = []
     candidates = list_suggestions(paths, "pending")
     retryable_failed = []
@@ -132,13 +150,19 @@ def claim_suggestions(paths: Paths, batch_size: int, max_attempts: int = 3) -> l
         envelope = SuggestionEnvelope.from_dict(load_json(failed_path))
         if envelope.attempt_count < max_attempts:
             retryable_failed.append(failed_path)
-    for source in (candidates + retryable_failed)[:batch_size]:
+    retryable_processing = []
+    for processing_path in list_stale_processing(paths, stale_after_seconds=stale_after_seconds):
+        envelope = SuggestionEnvelope.from_dict(load_json(processing_path))
+        if envelope.attempt_count < max_attempts:
+            retryable_processing.append(processing_path)
+    for source in (candidates + retryable_failed + retryable_processing)[:batch_size]:
         envelope = SuggestionEnvelope.from_dict(load_json(source))
+        reason = "reclaimed_stale" if source.parent == paths.suggestions_processing_dir else "claimed"
         transition = {
             "at": utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "from": envelope.state,
             "to": "processing",
-            "reason": "claimed",
+            "reason": reason,
         }
         updated = replace(
             envelope,
@@ -181,10 +205,15 @@ def load_memory_files(paths: Paths) -> dict[str, str]:
     }
 
 
-def has_pending_work(paths: Paths) -> bool:
+def has_pending_work(paths: Paths, stale_after_seconds: int = DEFAULT_LOCK_STALE_SECONDS) -> bool:
     if list_suggestions(paths, "pending"):
         return True
-    return any(SuggestionEnvelope.from_dict(load_json(path)).attempt_count < 3 for path in list_suggestions(paths, "failed"))
+    if any(SuggestionEnvelope.from_dict(load_json(path)).attempt_count < 3 for path in list_suggestions(paths, "failed")):
+        return True
+    return any(
+        SuggestionEnvelope.from_dict(load_json(path)).attempt_count < 3
+        for path in list_stale_processing(paths, stale_after_seconds=stale_after_seconds)
+    )
 
 
 def compiler_lock_path(paths: Paths, name: str = "compile.lock") -> Path:

@@ -47,6 +47,7 @@ def test_env_provider_reports_key_names_never_values(tmp_path):
         "MINIMAX_API_KEY=sk-real-secret-value-MUST-NOT-APPEAR\n"
         "OPENAI_API_KEY=\n"          # empty → counts as unset
         "ANTHROPIC_API_KEY=some-val\n"
+        "KIMI_API_KEY=kimi-secret\n"
         "MINIMAX_REGION=global\n"    # non-well-known key
         "\n",
         encoding="utf-8",
@@ -55,8 +56,10 @@ def test_env_provider_reports_key_names_never_values(tmp_path):
 
     assert "sk-real-secret-value-MUST-NOT-APPEAR" not in json.dumps(result)
     assert "some-val" not in json.dumps(result)
+    assert "kimi-secret" not in json.dumps(result)
     assert "MINIMAX_API_KEY" in result["keys_set"]
     assert "ANTHROPIC_API_KEY" in result["keys_set"]
+    assert "KIMI_API_KEY" in result["keys_set"]
     assert "OPENAI_API_KEY" in result["keys_unset"]
     assert "MINIMAX_REGION" in result["other_keys_set"]
 
@@ -96,7 +99,7 @@ def test_env_provider_missing_file_is_clean_report(tmp_path):
     # All well-known keys must appear in keys_unset so the user sees what
     # they need to set rather than having to memorize the list.
     assert set(result["keys_unset"]) == {
-        "MINIMAX_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+        "MINIMAX_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "KIMI_API_KEY",
     }
 
 
@@ -329,6 +332,7 @@ def test_tools_probe_handles_missing_binary(monkeypatch):
     result = _check_tools()
     assert result["codex"]["available"] is False
     assert result["opencode"]["available"] is False
+    assert result["pi"]["available"] is False
     assert result["csep"]["available"] is False
 
 
@@ -350,6 +354,7 @@ def test_tools_probe_grabs_first_line_of_version_output(monkeypatch):
     # as well as the multi-line opencode banner.
     assert result["codex"]["version"] == "opencode"
     assert result["opencode"]["available"] is True
+    assert result["pi"]["available"] is True
     assert result["csep"]["available"] is True
 
 

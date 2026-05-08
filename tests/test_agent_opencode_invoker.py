@@ -15,12 +15,17 @@ import pytest
 
 from codex_self_evolution.compiler import backends
 from codex_self_evolution.compiler.backends import (
+    AgentCompileError,
     AgentCompilerBackend,
+    PiAgentCompilerBackend,
     _build_compile_prompt,
     _build_default_opencode_command,
+    _build_default_pi_edit_command,
+    _build_default_pi_command,
     _cleanup_agent_text,
     _extract_assistant_text,
     _extract_first_json_object,
+    _extract_pi_assistant_text,
     _write_payload_tempfile,
 )
 from codex_self_evolution.schemas import Suggestion, SuggestionEnvelope
@@ -132,6 +137,27 @@ def test_extract_assistant_text_returns_text_when_error_also_present():
     assert _extract_assistant_text(stream) == '{"ok":true}'
 
 
+def test_extract_pi_assistant_text_uses_final_assistant_message():
+    stream = "\n".join(
+        [
+            '{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/tmp/payload.json"}}],"stopReason":"toolUse"}}',
+            '{"type":"message_end","message":{"role":"toolResult","content":[{"type":"text","text":"payload"}]}}',
+            '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"{\\"ok\\":true}"}],"stopReason":"stop"}}',
+        ]
+    )
+    assert _extract_pi_assistant_text(stream) == '{"ok":true}'
+
+
+def test_extract_pi_assistant_text_falls_back_to_text_end_event():
+    stream = "\n".join(
+        [
+            '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"{\\"ok"}}',
+            '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"{\\"ok\\":true}"}}',
+        ]
+    )
+    assert _extract_pi_assistant_text(stream) == '{"ok":true}'
+
+
 def test_cleanup_agent_text_strips_code_fence():
     raw = "```json\n{\"hello\":\"world\"}\n```"
     assert _cleanup_agent_text(raw) == '{"hello":"world"}'
@@ -188,6 +214,61 @@ def test_build_default_opencode_command_honors_env_overrides(monkeypatch):
     assert "--agent" in cmd and cmd[cmd.index("--agent") + 1] == "compile-only"
 
 
+def test_build_default_pi_command_uses_kimi_model_and_read_only_tools(monkeypatch):
+    monkeypatch.delenv("CODEX_SELF_EVOLUTION_PI_PROVIDER", raising=False)
+    monkeypatch.delenv("CODEX_SELF_EVOLUTION_PI_MODEL", raising=False)
+
+    cmd = _build_default_pi_command("/tmp/payload.json", options={})
+
+    assert cmd[:5] == ["pi", "-p", "--mode", "json", "--no-session"]
+    assert "--tools" in cmd and cmd[cmd.index("--tools") + 1] == "read"
+    assert "--provider" in cmd and cmd[cmd.index("--provider") + 1] == "kimi"
+    assert "--model" in cmd and cmd[cmd.index("--model") + 1] == "kimi-k2.6"
+    assert "--no-context-files" in cmd
+    assert cmd[-1] == _build_compile_prompt("/tmp/payload.json")
+
+
+def test_build_default_pi_edit_command_enables_file_write_tools(monkeypatch):
+    monkeypatch.delenv("CODEX_SELF_EVOLUTION_PI_PROVIDER", raising=False)
+    monkeypatch.delenv("CODEX_SELF_EVOLUTION_PI_MODEL", raising=False)
+
+    cmd = _build_default_pi_edit_command("/tmp/workspace", "/tmp/workspace/payload.json", options={})
+
+    assert cmd[:5] == ["pi", "-p", "--mode", "json", "--no-session"]
+    assert "--tools" in cmd and cmd[cmd.index("--tools") + 1] == "read,write,edit,ls"
+    assert "--provider" in cmd and cmd[cmd.index("--provider") + 1] == "kimi"
+    assert "--model" in cmd and cmd[cmd.index("--model") + 1] == "kimi-k2.6"
+    assert "/tmp/workspace" in cmd[-1]
+    assert "/tmp/workspace/payload.json" in cmd[-1]
+
+
+def test_pi_edit_invoker_accepts_empty_stdout_after_successful_process(monkeypatch, tmp_path):
+    class FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(backends.subprocess, "run", lambda *args, **kwargs: FakeProc())
+
+    backend = PiAgentCompilerBackend()
+    result = backend._subprocess_edit_invoker(
+        {"workspace_dir": str(tmp_path), "payload_path": str(tmp_path / "payload.json")},
+        {},
+    )
+
+    assert result == ""
+
+
+def test_build_default_pi_command_honors_env_overrides(monkeypatch):
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_PI_PROVIDER", "openai")
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_PI_MODEL", "gpt-4o-mini")
+
+    cmd = _build_default_pi_command("/tmp/p.json", options={})
+
+    assert cmd[cmd.index("--provider") + 1] == "openai"
+    assert cmd[cmd.index("--model") + 1] == "gpt-4o-mini"
+
+
 def test_build_compile_prompt_mentions_schema_keys_and_path():
     prompt = _build_compile_prompt("/tmp/p.json")
     assert "/tmp/p.json" in prompt
@@ -198,6 +279,9 @@ def test_build_compile_prompt_mentions_schema_keys_and_path():
     # prepending "Sure, here's your JSON:" prose. Keep the test sensitive
     # to its removal.
     assert "NOTHING else" in prompt
+    assert "future reusable context" in prompt
+    assert "MR status" in prompt
+    assert "preserve existing" in prompt
 
 
 # --- payload temp-file lifecycle --------------------------------------------
@@ -296,6 +380,70 @@ def test_subprocess_invoker_happy_path_parses_real_event_stream(monkeypatch):
     assert not os.path.exists(payload_path), "temp payload file was not cleaned up"
 
 
+def test_pi_subprocess_invoker_happy_path_parses_real_event_stream(monkeypatch):
+    agent_output = {
+        "memory_records": {
+            "user": [],
+            "global": [{"summary": "s", "content": "from pi"}],
+        },
+        "recall_records": [],
+        "compiled_skills": [],
+        "manifest_entries": [],
+        "discarded_items": [],
+    }
+    raw = json.dumps(agent_output)
+    fake_stdout = "\n".join(
+        [
+            json.dumps({"type": "session", "id": "session-1"}),
+            json.dumps({
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "toolCall", "name": "read", "arguments": {"path": "/tmp/payload.json"}}],
+                    "stopReason": "toolUse",
+                },
+            }),
+            json.dumps({
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": raw}],
+                    "stopReason": "stop",
+                },
+            }),
+        ]
+    )
+
+    captured = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = fake_stdout
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        captured["prompt"] = cmd[-1]
+        return FakeProc()
+
+    monkeypatch.setattr(backends.subprocess, "run", fake_run)
+    monkeypatch.setattr(backends.shutil, "which", lambda _: "/fake/pi")
+
+    backend = PiAgentCompilerBackend()
+    artifacts = backend.compile([_envelope()], _context(), {"allow_fallback": True, "pi_mode": "json"})
+
+    assert artifacts.backend_name == "agent:pi"
+    assert artifacts.fallback_backend is None
+    assert artifacts.memory_records["global"][0]["content"] == "from pi"
+    cmd = captured["cmd"]
+    assert cmd[0] == "pi"
+    assert cmd[cmd.index("--provider") + 1] == "kimi"
+    assert cmd[cmd.index("--model") + 1] == "kimi-k2.6"
+    assert cmd[cmd.index("--tools") + 1] == "read"
+    assert "csep-compile-" in captured["prompt"]
+
+
 def test_subprocess_invoker_cleans_up_tempfile_on_non_zero_exit(monkeypatch):
     class FakeProc:
         returncode = 1
@@ -312,13 +460,9 @@ def test_subprocess_invoker_cleans_up_tempfile_on_non_zero_exit(monkeypatch):
     monkeypatch.setattr(backends.shutil, "which", lambda _: "/fake/opencode")
 
     backend = AgentCompilerBackend()
-    artifacts = backend.compile([_envelope()], _context(), {"allow_fallback": True})
-
-    # Falls back to script (that path is tested elsewhere — just assert it
-    # didn't crash and the RuntimeError message got captured).
-    assert artifacts.fallback_backend == "script"
-    reasons = [item.get("reason") for item in artifacts.discarded_items]
-    assert "agent_invoke_failed" in reasons
+    with pytest.raises(AgentCompileError) as excinfo:
+        backend.compile([_envelope()], _context(), {"allow_fallback": True, "agent_quality_retries": 0})
+    assert excinfo.value.reason == "agent_invoke_failed"
     # Temp file must be cleaned up even on failure, otherwise a flaky opencode
     # could fill /tmp over time.
     assert not os.path.exists(captured_path["path"])
@@ -328,8 +472,8 @@ def test_subprocess_invoker_treats_empty_text_output_as_failure(monkeypatch):
     # opencode sometimes emits only step events (e.g. model refused the
     # request). An empty assistant text is a genuine failure, not "agent
     # said to do nothing" — the latter would be an explicit empty-schema
-    # JSON object. We surface empty text as agent_invoke_failed so fallback
-    # kicks in.
+    # JSON object. We surface empty text as agent_invoke_failed so the
+    # scheduler can mark the envelope failed and retry later.
     class FakeProc:
         returncode = 0
         stdout = json.dumps({"type": "step_finish", "part": {"reason": "stop"}}) + "\n"
@@ -339,13 +483,10 @@ def test_subprocess_invoker_treats_empty_text_output_as_failure(monkeypatch):
     monkeypatch.setattr(backends.shutil, "which", lambda _: "/fake/opencode")
 
     backend = AgentCompilerBackend()
-    artifacts = backend.compile([_envelope()], _context(), {"allow_fallback": True})
-
-    assert artifacts.fallback_backend == "script"
-    reasons = [item.get("reason") for item in artifacts.discarded_items]
-    assert "agent_invoke_failed" in reasons
-    detail = next(item for item in artifacts.discarded_items if item.get("reason") == "agent_invoke_failed")["detail"]
-    assert "no assistant text" in detail
+    with pytest.raises(AgentCompileError) as excinfo:
+        backend.compile([_envelope()], _context(), {"allow_fallback": True, "agent_quality_retries": 0})
+    assert excinfo.value.reason == "agent_invoke_failed"
+    assert "no assistant text" in excinfo.value.detail
 
 
 def test_subprocess_invoker_strips_code_fence_from_opencode_output(monkeypatch):
@@ -354,7 +495,10 @@ def test_subprocess_invoker_strips_code_fence_from_opencode_output(monkeypatch):
     # rejected and we fall back to script unnecessarily.
     wrapped = "```json\n" + json.dumps(
         {
-            "memory_records": {"user": [], "global": []},
+            "memory_records": {
+                "user": [],
+                "global": [{"summary": "s", "content": "c"}],
+            },
             "recall_records": [],
             "compiled_skills": [],
             "manifest_entries": [],
@@ -381,3 +525,4 @@ def test_subprocess_invoker_strips_code_fence_from_opencode_output(monkeypatch):
 
     assert artifacts.fallback_backend is None
     assert artifacts.backend_name == "agent:opencode"
+    assert artifacts.memory_records["global"][0]["summary"] == "s"

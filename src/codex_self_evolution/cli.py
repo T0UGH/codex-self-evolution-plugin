@@ -100,10 +100,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override CODEX_SELF_EVOLUTION_HOME for this invocation (default "
              "~/.codex-self-evolution). Mostly useful in tests.",
     )
-    # Unlike `compile`, scan defaults to agent:opencode since it runs unattended
-    # and users who care about LLM cost will have flipped opencode off anyway.
-    # Fallback to script still kicks in automatically if opencode is unavailable.
-    scan_parser.add_argument("--backend", default="agent:opencode")
+    # Unlike `compile`, scan defaults to the agent backend since it runs
+    # unattended. Pi + Kimi is the production default; script stays available
+    # for deterministic tests and local debugging.
+    scan_parser.add_argument("--backend", default="agent:pi")
 
     config_parser = subparsers.add_parser(
         "config",
@@ -365,12 +365,9 @@ def main(argv: list[str] | None = None) -> int:
     logger = get_logger()
 
     # Hydrate ~/.codex-self-evolution/.env.provider into os.environ so that
-    # subprocesses (opencode for compile, urllib for the MiniMax reviewer)
+    # subprocesses (pi/opencode for compile, urllib for the HTTP reviewer)
     # can find their API keys even when we're launched by launchd with a
-    # minimal PATH+HOME-only environment. Without this, every launchd scan
-    # fired opencode with no MINIMAX_API_KEY, MiniMax returned 401, opencode
-    # emitted a type:"error" event that the old extractor silently discarded,
-    # and every receipt fell back to script backend — observed 2026-04-22.
+    # minimal PATH+HOME-only environment.
     hydrated = hydrate_env_for_subprocesses()
     if hydrated:
         # Values are NEVER logged; only the key names that just entered scope.
@@ -396,11 +393,24 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("stop-review requires --hook-payload or --from-stdin")
             result = _run_stop_review(args)
         elif args.command == "compile":
-            result = run_compile(repo_root=args.repo_root, state_dir=args.state_dir, backend=args.backend)
+            allow_fallback, compile_options = _compile_runtime_options()
+            result = run_compile(
+                repo_root=args.repo_root,
+                state_dir=args.state_dir,
+                backend=args.backend,
+                allow_fallback=allow_fallback,
+                compile_options=compile_options,
+            )
         elif args.command == "compile-preflight":
             result = preflight_compile(repo_root=args.repo_root, state_dir=args.state_dir)
         elif args.command == "scan":
-            result = scan_all_projects(home=args.home, backend=args.backend)
+            allow_fallback, compile_options = _compile_runtime_options(args.home)
+            result = scan_all_projects(
+                home=args.home,
+                backend=args.backend,
+                allow_fallback=allow_fallback,
+                compile_options=compile_options,
+            )
         elif args.command == "status":
             result = collect_status(home=args.home)
         elif args.command == "migrate-worktrees":
@@ -709,6 +719,20 @@ def _render_v2_from_loaded(loaded: LoadResult) -> str:
         f'backend = "{_toml_escape(cfg.compile.backend)}"',
         f'allow_fallback = {"true" if cfg.compile.allow_fallback else "false"}',
     ])
+    if (
+        cfg.compile.pi.provider != "kimi"
+        or cfg.compile.pi.model != "kimi-k2.6"
+        or cfg.compile.pi.mode != "edit"
+        or cfg.compile.pi.timeout_seconds != 900.0
+    ):
+        lines.append("")
+        lines.append("[compile.pi]")
+        if cfg.compile.pi.provider:
+            lines.append(f'provider = "{_toml_escape(cfg.compile.pi.provider)}"')
+        if cfg.compile.pi.model:
+            lines.append(f'model = "{_toml_escape(cfg.compile.pi.model)}"')
+        lines.append(f'mode = "{_toml_escape(cfg.compile.pi.mode)}"')
+        lines.append(f"timeout_seconds = {cfg.compile.pi.timeout_seconds}")
     if cfg.compile.opencode.model or cfg.compile.opencode.agent or cfg.compile.opencode.timeout_seconds != 900.0:
         lines.append("")
         lines.append("[compile.opencode]")
@@ -730,6 +754,25 @@ def _render_v2_from_loaded(loaded: LoadResult) -> str:
         f"retention_days = {cfg.log.retention_days}",
     ])
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _compile_runtime_options(home: str | Path | None = None) -> tuple[bool, dict[str, Any]]:
+    loaded = load_config(home=Path(home).expanduser().resolve() if home else None)
+    cfg = loaded.config
+    options: dict[str, Any] = {
+        "pi_provider": cfg.compile.pi.provider,
+        "pi_model": cfg.compile.pi.model,
+        "pi_mode": cfg.compile.pi.mode,
+        "pi_timeout_seconds": cfg.compile.pi.timeout_seconds,
+        "opencode_model": cfg.compile.opencode.model,
+        "opencode_agent": cfg.compile.opencode.agent,
+        "opencode_timeout_seconds": cfg.compile.opencode.timeout_seconds,
+    }
+    return cfg.compile.allow_fallback, {
+        key: value
+        for key, value in options.items()
+        if value not in ("", None)
+    }
 
 
 def _render_migrated_toml(loaded: LoadResult) -> str:
@@ -800,6 +843,19 @@ def _render_migrated_toml(loaded: LoadResult) -> str:
     if opencode_lines:
         lines.append("[compile.opencode]")
         lines.extend(opencode_lines)
+
+    pi_lines: list[str] = []
+    for attr, field in (
+        ("provider", "compile.pi.provider"),
+        ("model", "compile.pi.model"),
+        ("mode", "compile.pi.mode"),
+    ):
+        if from_env(field):
+            pi_lines.append(emit(attr, getattr(cfg.compile.pi, attr)))
+    if pi_lines:
+        lines.append("")
+        lines.append("[compile.pi]")
+        lines.extend(pi_lines)
         lines.append("")
 
     # If no env-driven values were found, still emit something useful so

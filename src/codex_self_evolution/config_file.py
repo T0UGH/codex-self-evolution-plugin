@@ -67,15 +67,24 @@ class OpencodeCompileConfig:
 
 
 @dataclass
+class PiCompileConfig:
+    provider: str = "kimi"
+    model: str = "kimi-k2.6"
+    mode: str = "edit"
+    timeout_seconds: float = 900.0
+
+
+@dataclass
 class CompileConfig:
-    backend: str = "agent:opencode"
+    backend: str = "agent:pi"
     allow_fallback: bool = True
     opencode: OpencodeCompileConfig = field(default_factory=OpencodeCompileConfig)
+    pi: PiCompileConfig = field(default_factory=PiCompileConfig)
 
 
 @dataclass
 class SchedulerConfig:
-    backend: str = "agent:opencode"
+    backend: str = "agent:pi"
     interval_seconds: int = 300
 
 
@@ -141,7 +150,7 @@ ALLOWED_PROVIDERS = {
 }
 ALLOWED_PAYLOAD_MODES = {"stdin", "file", "inline"}
 ALLOWED_RESPONSE_FORMATS = {"codex-events", "opencode-events", "raw-json"}
-ALLOWED_COMPILE_BACKENDS = {"script", "agent:opencode"}
+ALLOWED_COMPILE_BACKENDS = {"script", "agent:opencode", "agent:pi"}
 
 # Map new-style CODEX_SELF_EVOLUTION_* env vars to dotted config paths.
 _NEW_ENV_MAP: dict[str, str] = {
@@ -152,6 +161,9 @@ _NEW_ENV_MAP: dict[str, str] = {
     "CODEX_SELF_EVOLUTION_COMPILE_BACKEND": "compile.backend",
     "CODEX_SELF_EVOLUTION_OPENCODE_MODEL": "compile.opencode.model",
     "CODEX_SELF_EVOLUTION_OPENCODE_AGENT": "compile.opencode.agent",
+    "CODEX_SELF_EVOLUTION_PI_PROVIDER": "compile.pi.provider",
+    "CODEX_SELF_EVOLUTION_PI_MODEL": "compile.pi.model",
+    "CODEX_SELF_EVOLUTION_PI_MODE": "compile.pi.mode",
 }
 
 # Legacy env vars that only apply when reviewer.provider matches. Preserved
@@ -481,6 +493,37 @@ def load_config(
         default=config.compile.opencode.timeout_seconds,
         cast=float,
     )
+    pi_toml = compile_toml.get("pi", {}) or {}
+    config.compile.pi.provider, sources["compile.pi.provider"] = _resolve(
+        field_path="compile.pi.provider",
+        new_env="CODEX_SELF_EVOLUTION_PI_PROVIDER",
+        env_map=env_map,
+        toml_value=pi_toml.get("provider"),
+        default=config.compile.pi.provider,
+    )
+    config.compile.pi.model, sources["compile.pi.model"] = _resolve(
+        field_path="compile.pi.model",
+        new_env="CODEX_SELF_EVOLUTION_PI_MODEL",
+        env_map=env_map,
+        toml_value=pi_toml.get("model"),
+        default=config.compile.pi.model,
+    )
+    config.compile.pi.mode, sources["compile.pi.mode"] = _resolve(
+        field_path="compile.pi.mode",
+        new_env="CODEX_SELF_EVOLUTION_PI_MODE",
+        env_map=env_map,
+        toml_value=pi_toml.get("mode"),
+        default=config.compile.pi.mode,
+        validator=lambda v: v in {"edit", "json"},
+    )
+    config.compile.pi.timeout_seconds, sources["compile.pi.timeout_seconds"] = _resolve_number(
+        "compile.pi.timeout_seconds",
+        new_env=None,
+        env_map=env_map,
+        toml_value=pi_toml.get("timeout_seconds"),
+        default=config.compile.pi.timeout_seconds,
+        cast=float,
+    )
 
     # --- scheduler ---
     scheduler_toml = raw_toml.get("scheduler", {}) or {}
@@ -652,6 +695,8 @@ _RECOGNIZED_PATHS: frozenset[str] = frozenset([
     "compile", "compile.backend", "compile.allow_fallback",
     "compile.opencode", "compile.opencode.model", "compile.opencode.agent",
     "compile.opencode.timeout_seconds",
+    "compile.pi", "compile.pi.provider", "compile.pi.model", "compile.pi.mode",
+    "compile.pi.timeout_seconds",
     "scheduler", "scheduler.backend", "scheduler.interval_seconds",
     "log", "log.retention_days",
 ])

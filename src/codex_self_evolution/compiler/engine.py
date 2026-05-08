@@ -23,6 +23,7 @@ from ..storage import (
     file_lock,
     finalize_suggestion,
     has_pending_work,
+    list_stale_processing,
     list_suggestions,
     load_json,
     lock_status,
@@ -140,6 +141,19 @@ def write_receipt(compiler_dir: Path, receipt: CompilerReceipt) -> Path:
     return destination
 
 
+def _finalize_noop_envelopes(paths, claimed: list[tuple[Path, SuggestionEnvelope]]) -> list[dict[str, Any]]:
+    item_receipts: list[dict[str, Any]] = []
+    for path, envelope in claimed:
+        destination = finalize_suggestion(paths, path, envelope, "done", reason="no_suggestions")
+        item_receipts.append({
+            "suggestion_id": envelope.suggestion_id,
+            "state": "done",
+            "path": str(destination),
+            "reason": "no_suggestions",
+        })
+    return item_receipts
+
+
 def apply_compiler_outputs(
     memory_dir: Path,
     recall_dir: Path,
@@ -176,9 +190,15 @@ def preflight_compile(
     status = lock_status(paths, stale_after_seconds=stale_after_seconds)
     if status["locked"] and not status["stale"]:
         return {"status": "skip_locked", "lock": status}
-    if not has_pending_work(paths):
+    stale_processing = len(list_stale_processing(paths, stale_after_seconds=stale_after_seconds))
+    if not has_pending_work(paths, stale_after_seconds=stale_after_seconds):
         return {"status": "skip_empty", "pending": 0, "retryable_failed": 0}
-    return {"status": "run", "lock": status, "pending": len(list_suggestions(paths, "pending"))}
+    return {
+        "status": "run",
+        "lock": status,
+        "pending": len(list_suggestions(paths, "pending")),
+        "stale_processing": stale_processing,
+    }
 
 
 def run_compile(
@@ -187,6 +207,7 @@ def run_compile(
     batch_size: int = DEFAULT_BATCH_SIZE,
     backend: str = "script",
     allow_fallback: bool = True,
+    compile_options: dict[str, Any] | None = None,
 ) -> dict:
     paths = build_paths(repo_root=repo_root, state_dir=state_dir)
     preflight = preflight_compile(repo_root=repo_root, state_dir=state_dir)
@@ -205,7 +226,10 @@ def run_compile(
         return {"status": preflight["status"], "processed_count": 0, "receipt_path": str(receipt_path)}
     try:
         with file_lock(paths):
-            claimed = claim_suggestions(paths, batch_size=batch_size)
+            claimed = claim_suggestions(
+                paths,
+                batch_size=_effective_batch_size(backend, batch_size, compile_options),
+            )
             if not claimed:
                 receipt = CompilerReceipt(
                     run_status="skip_empty",
@@ -219,11 +243,86 @@ def run_compile(
                 )
                 receipt_path = write_receipt(paths.compiler_dir, receipt)
                 return {"status": "skip_empty", "processed_count": 0, "receipt_path": str(receipt_path)}
-            envelopes = [SuggestionEnvelope.from_dict(load_json(path)) for path, _ in claimed]
+            claimed_envelopes = [(path, SuggestionEnvelope.from_dict(load_json(path))) for path, _ in claimed]
+            noop_claimed = [(path, envelope) for path, envelope in claimed_envelopes if not envelope.suggestions]
+            active_claimed = [(path, envelope) for path, envelope in claimed_envelopes if envelope.suggestions]
+            noop_item_receipts = _finalize_noop_envelopes(paths, noop_claimed)
+            if not active_claimed:
+                receipt = CompilerReceipt(
+                    run_status="success",
+                    backend=backend,
+                    processed_count=len(noop_claimed),
+                    archived_count=len(noop_claimed),
+                    memory_records=0,
+                    recall_records=0,
+                    managed_skills=0,
+                    item_receipts=noop_item_receipts,
+                    skip_reason="no_suggestions",
+                )
+                receipt_path = write_receipt(paths.compiler_dir, receipt)
+                return {
+                    "status": "success",
+                    "processed_count": len(noop_claimed),
+                    "receipt_path": str(receipt_path),
+                    "backend": backend,
+                    "fallback_backend": None,
+                    "memory_action_stats": {},
+                    "discarded_count": 0,
+                }
+            envelopes = [envelope for _, envelope in active_claimed]
             memory_action_stats = _tally_memory_actions(envelopes)
             backend_impl = get_backend(backend)
             context = build_compile_context(paths, envelopes)
-            artifacts = backend_impl.compile(envelopes, context, {"allow_fallback": allow_fallback})
+            options = {"allow_fallback": allow_fallback, **(compile_options or {})}
+            try:
+                artifacts = backend_impl.compile(envelopes, context, options)
+            except Exception as exc:
+                reason = f"{type(exc).__name__}: {exc}"
+                if len(active_claimed) > 1:
+                    return _compile_claimed_individually(
+                        paths=paths,
+                        claimed=active_claimed,
+                        backend_impl=backend_impl,
+                        backend=backend,
+                        allow_fallback=allow_fallback,
+                        compile_options=compile_options,
+                        memory_action_stats=memory_action_stats,
+                        batch_failure_reason=reason,
+                        initial_item_receipts=noop_item_receipts,
+                        initial_processed_count=len(noop_claimed),
+                    )
+                item_receipts = []
+                item_receipts.extend(noop_item_receipts)
+                for path, envelope in active_claimed:
+                    destination = finalize_suggestion(paths, path, envelope, "failed", reason=reason)
+                    item_receipts.append({
+                        "suggestion_id": envelope.suggestion_id,
+                        "state": "failed",
+                        "path": str(destination),
+                        "reason": reason,
+                    })
+                receipt = CompilerReceipt(
+                    run_status="error",
+                    backend=backend,
+                    processed_count=len(noop_claimed),
+                    archived_count=len(noop_claimed),
+                    memory_records=0,
+                    recall_records=0,
+                    managed_skills=0,
+                    item_receipts=item_receipts,
+                    skip_reason=reason,
+                    memory_action_stats=memory_action_stats,
+                )
+                receipt_path = write_receipt(paths.compiler_dir, receipt)
+                return {
+                    "status": "error",
+                    "processed_count": len(noop_claimed),
+                    "receipt_path": str(receipt_path),
+                    "backend": backend,
+                    "error": reason,
+                    "memory_action_stats": memory_action_stats,
+                    "discarded_count": 0,
+                }
             output_paths = apply_compiler_outputs(
                 memory_dir=paths.memory_dir,
                 recall_dir=paths.recall_dir,
@@ -236,7 +335,8 @@ def run_compile(
                 publish_global_skills_enabled=True,
             )
             item_receipts = []
-            for path, envelope in claimed:
+            item_receipts.extend(noop_item_receipts)
+            for path, envelope in active_claimed:
                 destination = finalize_suggestion(paths, path, envelope, "done")
                 item_receipts.append({"suggestion_id": envelope.suggestion_id, "state": "done", "path": str(destination)})
             for discarded in artifacts.discarded_items:
@@ -244,8 +344,8 @@ def run_compile(
             receipt = CompilerReceipt(
                 run_status="success",
                 backend=artifacts.backend_name,
-                processed_count=len(claimed),
-                archived_count=len(claimed),
+                processed_count=len(claimed_envelopes),
+                archived_count=len(claimed_envelopes),
                 memory_records=sum(len(items) for items in artifacts.memory_records.values()),
                 recall_records=len(artifacts.recall_records),
                 managed_skills=len(artifacts.compiled_skills),
@@ -256,7 +356,7 @@ def run_compile(
             receipt_path = write_receipt(paths.compiler_dir, receipt)
             return {
                 "status": "success",
-                "processed_count": len(claimed),
+                "processed_count": len(claimed_envelopes),
                 "receipt_path": str(receipt_path),
                 "backend": artifacts.backend_name,
                 "fallback_backend": artifacts.fallback_backend,
@@ -279,12 +379,125 @@ def run_compile(
         return {"status": "skip_locked", "processed_count": 0, "receipt_path": str(receipt_path)}
 
 
+def _effective_batch_size(backend: str, batch_size: int, compile_options: dict[str, Any] | None) -> int:
+    pi_mode = str((compile_options or {}).get("pi_mode") or "edit").strip().lower()
+    if backend == "agent:pi" and pi_mode == "edit":
+        return 1
+    return batch_size
+
+
+def _compile_claimed_individually(
+    *,
+    paths,
+    claimed: list[tuple[Path, SuggestionEnvelope]],
+    backend_impl,
+    backend: str,
+    allow_fallback: bool,
+    compile_options: dict[str, Any] | None,
+    memory_action_stats: dict[str, Any],
+    batch_failure_reason: str,
+    initial_item_receipts: list[dict[str, Any]] | None = None,
+    initial_processed_count: int = 0,
+) -> dict:
+    """Retry a failed batch as single-envelope compiles.
+
+    Agent compilers are sensitive to large heterogeneous batches and external
+    file-preview truncation. If the whole batch fails, salvage useful items one
+    by one instead of marking every claimed envelope failed.
+    """
+    item_receipts: list[dict[str, Any]] = list(initial_item_receipts or [])
+    item_receipts.append(
+        {
+            "state": "batch_split",
+            "reason": batch_failure_reason,
+            "suggestion_count": sum(len(envelope.suggestions) for _, envelope in claimed),
+        }
+    )
+    processed_count = initial_processed_count
+    failed_count = 0
+    memory_records = 0
+    recall_records = 0
+    managed_skills = 0
+    last_skill_publish = None
+
+    for path, envelope in claimed:
+        context = build_compile_context(paths, [envelope])
+        options = {"allow_fallback": allow_fallback, **(compile_options or {})}
+        try:
+            artifacts = backend_impl.compile([envelope], context, options)
+        except Exception as exc:  # noqa: BLE001 - split retry is best-effort
+            reason = f"{type(exc).__name__}: {exc}"
+            destination = finalize_suggestion(paths, path, envelope, "failed", reason=reason)
+            item_receipts.append({
+                "suggestion_id": envelope.suggestion_id,
+                "state": "failed",
+                "path": str(destination),
+                "reason": reason,
+                "split_from_batch": True,
+            })
+            failed_count += 1
+            continue
+
+        output_paths = apply_compiler_outputs(
+            memory_dir=paths.memory_dir,
+            recall_dir=paths.recall_dir,
+            skills_dir=paths.skills_dir,
+            memory_records=artifacts.memory_records,
+            recall_records=artifacts.recall_records,
+            compiled_skills=artifacts.compiled_skills,
+            manifest_entries=artifacts.manifest_entries,
+            existing_entries=context["existing_manifest"],
+            publish_global_skills_enabled=True,
+        )
+        last_skill_publish = output_paths["skills"][2]
+        destination = finalize_suggestion(paths, path, envelope, "done")
+        item_receipts.append({
+            "suggestion_id": envelope.suggestion_id,
+            "state": "done",
+            "path": str(destination),
+            "split_from_batch": True,
+        })
+        for discarded in artifacts.discarded_items:
+            item_receipts.append({"state": "discarded", "split_from_batch": True, **discarded})
+        processed_count += 1
+        memory_records += sum(len(items) for items in artifacts.memory_records.values())
+        recall_records += len(artifacts.recall_records)
+        managed_skills += len(artifacts.compiled_skills)
+
+    run_status = "success" if failed_count == 0 else "error"
+    skip_reason = None if failed_count == 0 else f"split_batch_failures={failed_count}; {batch_failure_reason}"
+    receipt = CompilerReceipt(
+        run_status=run_status,
+        backend=backend,
+        processed_count=processed_count,
+        archived_count=processed_count,
+        memory_records=memory_records,
+        recall_records=recall_records,
+        managed_skills=managed_skills,
+        item_receipts=item_receipts,
+        skip_reason=skip_reason,
+        memory_action_stats=memory_action_stats,
+    )
+    receipt_path = write_receipt(paths.compiler_dir, receipt)
+    return {
+        "status": run_status,
+        "processed_count": processed_count,
+        "receipt_path": str(receipt_path),
+        "backend": backend,
+        "error": skip_reason,
+        "memory_action_stats": memory_action_stats,
+        "discarded_count": sum(1 for item in item_receipts if item.get("state") == "discarded"),
+        "global_skill_publish": last_skill_publish,
+    }
+
+
 def scan_all_projects(
     home: str | Path | None = None,
-    backend: str = "agent:opencode",
+    backend: str = "agent:pi",
     batch_size: int = DEFAULT_BATCH_SIZE,
     allow_fallback: bool = True,
     stale_after_seconds: int = DEFAULT_LOCK_STALE_SECONDS,
+    compile_options: dict[str, Any] | None = None,
 ) -> dict:
     """Run preflight + compile on every per-project bucket under ``<home>/projects/``.
 
@@ -298,9 +511,8 @@ def scan_all_projects(
     the scan from processing the others. This matters because the scan runs
     unattended — a single bad bucket should not wedge the whole pipeline.
 
-    The default ``backend="agent:opencode"`` matches where we want production
-    scheduling to land (see docs/2026-04-21-ready-for-others-gap-analysis.md
-    P0-5). Callers that want the deterministic script path (tests / CI) pass
+    The default ``backend="agent:pi"`` matches the production scheduler path.
+    Callers that want the deterministic script path (tests / CI) pass
     ``backend="script"`` explicitly.
 
     Returns a summary:
@@ -316,7 +528,7 @@ def scan_all_projects(
              "preflight_status": "run",
              "compile_status": "success",
              "processed_count": 5,
-             "backend": "agent:opencode",
+             "backend": "agent:pi",
              "receipt_path": "...",
              "error": null},
             ...
@@ -377,6 +589,7 @@ def scan_all_projects(
                     batch_size=batch_size,
                     backend=backend,
                     allow_fallback=allow_fallback,
+                    compile_options=compile_options,
                 )
                 entry["compile_status"] = compile_result["status"]
                 entry["processed_count"] = compile_result.get("processed_count", 0)
@@ -387,6 +600,8 @@ def scan_all_projects(
                 entry["discarded_count"] = compile_result.get("discarded_count", 0)
                 if compile_result["status"] == "success":
                     counts["run"] += 1
+                elif compile_result["status"] == "error":
+                    counts["failed"] += 1
                 else:
                     # Non-success but non-error (e.g. raced another runner and
                     # got skip_locked mid-run) still counts as skipped.

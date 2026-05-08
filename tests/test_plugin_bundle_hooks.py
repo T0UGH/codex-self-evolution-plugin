@@ -46,9 +46,9 @@ def test_plugin_manifest_commands_use_local_cli_not_uvx():
         ),
         "compile": (
             'codex-self-evolution compile --once --state-dir "$CODEX_STATE_DIR" '
-            "--backend agent:opencode"
+            "--backend agent:pi"
         ),
-        "scan": "codex-self-evolution scan --backend agent:opencode",
+        "scan": "codex-self-evolution scan --backend agent:pi",
         "status": "codex-self-evolution status",
         "recall": (
             'csep recall "$CODEX_RECALL_QUERY" --cwd "$CODEX_CWD" '
@@ -62,14 +62,14 @@ def test_plugin_manifest_commands_use_local_cli_not_uvx():
 
     scheduler = manifest["scheduler"]
     assert scheduler["scan_command"] == (
-        "codex-self-evolution scan --backend agent:opencode"
+        "codex-self-evolution scan --backend agent:pi"
     )
     assert scheduler["preflight_command"] == (
         'codex-self-evolution compile-preflight --state-dir "$CODEX_STATE_DIR"'
     )
     assert scheduler["compile_command"] == (
         'codex-self-evolution compile --once --state-dir "$CODEX_STATE_DIR" '
-        "--backend agent:opencode"
+        "--backend agent:pi"
     )
     assert "uvx" not in json.dumps(manifest)
     assert "uvx --from codex-self-evolution-plugin" not in json.dumps(manifest)

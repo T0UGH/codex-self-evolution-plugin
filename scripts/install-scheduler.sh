@@ -9,10 +9,10 @@
 #
 # PATH on launchd user agents is very minimal by default
 # (/usr/bin:/bin:/usr/sbin:/sbin) — it does NOT include Homebrew or /usr/local
-# where `opencode` typically lives. We detect opencode's directory at install
-# time and bake it into EnvironmentVariables.PATH so the agent:opencode
-# backend actually runs. If opencode isn't on PATH, we warn but continue
-# (scan will fall back to script backend automatically).
+# where local agent CLIs typically live. We detect pi's directory at install
+# time and bake it into EnvironmentVariables.PATH so the agent:pi backend
+# actually runs. If pi isn't on PATH, we warn but continue; scan will fail
+# visibly instead of silently falling back to script.
 
 set -euo pipefail
 
@@ -23,7 +23,7 @@ LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 LABEL="com.codex-self-evolution.preflight"
 PLIST_PATH="$LAUNCH_AGENTS_DIR/$LABEL.plist"
 ENTRY_POINT="${CSEP_ENTRY_POINT:-codex-self-evolution}"
-SCAN_ARGS=("scan" "--backend" "agent:opencode")
+SCAN_ARGS=("scan" "--backend" "agent:pi")
 # Default: drain every 5 minutes. Matches the old hand-edited plist and is
 # a reasonable tradeoff — compile itself takes seconds to minutes, and
 # suggestions sitting in pending/ cost nothing until they're compiled.
@@ -43,24 +43,24 @@ echo "  $ENTRY_POINT OK at $ENTRY_POINT_BIN"
 
 mkdir -p "$LAUNCH_AGENTS_DIR" "$LOG_DIR"
 
-# ---------- detect opencode PATH ----------
-# User's shell probably has opencode on PATH; launchd's doesn't. We grab
+# ---------- detect pi PATH ----------
+# User's shell probably has pi on PATH; launchd's doesn't. We grab
 # whatever dir the user's current shell sees and prepend it.
-OPENCODE_BIN="$(command -v opencode 2>/dev/null || true)"
-if [ -n "$OPENCODE_BIN" ]; then
-    OPENCODE_DIR="$(dirname "$OPENCODE_BIN")"
-    echo "  opencode found at $OPENCODE_BIN"
+PI_BIN="$(command -v pi 2>/dev/null || true)"
+if [ -n "$PI_BIN" ]; then
+    PI_DIR="$(dirname "$PI_BIN")"
+    echo "  pi found at $PI_BIN"
 else
-    OPENCODE_DIR=""
-    warn "opencode not on PATH — scheduler will use script backend fallback."
-    warn "  to enable agent:opencode: npm i -g opencode-ai (or brew install opencode),"
+    PI_DIR=""
+    warn "pi not on PATH — scheduler agent:pi will not run."
+    warn "  install pi or adjust PATH,"
     warn "  then re-run this script so the path gets baked into the plist."
 fi
 # launchd default PATH is narrow. Always include /opt/homebrew/bin (Apple
-# Silicon) and /usr/local/bin (Intel) even if opencode wasn't found today —
+# Silicon) and /usr/local/bin (Intel) even if pi wasn't found today —
 # user may install it later without re-running this script.
 PLIST_PATH_ENV="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-for dir in "$ENTRY_POINT_DIR" "$OPENCODE_DIR"; do
+for dir in "$ENTRY_POINT_DIR" "$PI_DIR"; do
     [ -z "$dir" ] && continue
     case ":$PLIST_PATH_ENV:" in
         *":$dir:"*) ;;  # already present
