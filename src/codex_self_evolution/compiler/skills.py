@@ -40,7 +40,7 @@ def compile_skills(suggestions: list[Suggestion], existing_entries: list[SkillMa
             continue
         action = str(candidate.get("action", "")).strip().lower()
         if action not in {"create", "patch", "edit", "retire"}:
-            discarded.append({"summary": item.summary, "reason": "unsupported_action"})
+            discarded.append({"summary": item.summary, "reason": "weak_evidence", "detail": "unsupported_action"})
             continue
         content = str(candidate.get("content", "")).strip()
         title = str(candidate.get("title", item.summary)).strip()
@@ -49,19 +49,19 @@ def compile_skills(suggestions: list[Suggestion], existing_entries: list[SkillMa
         existing = existing_map.get(skill_id)
         if action in {"patch", "edit", "retire"}:
             if existing is None:
-                discarded.append({"skill_id": skill_id, "reason": "missing_managed_skill"})
+                discarded.append({"skill_id": skill_id, "reason": "weak_evidence", "detail": "missing_managed_skill"})
                 continue
             if not existing.managed or existing.owner != PLUGIN_OWNER:
-                discarded.append({"skill_id": skill_id, "reason": "ownership_violation"})
+                discarded.append({"skill_id": skill_id, "reason": "weak_evidence", "detail": "ownership_violation"})
                 continue
         if action in {"create", "patch", "edit"} and not description:
-            discarded.append({"skill_id": skill_id, "reason": "missing_description"})
+            discarded.append({"skill_id": skill_id, "reason": "weak_evidence", "detail": "missing_description"})
             continue
         if action in {"create", "patch", "edit"} and not content:
-            discarded.append({"skill_id": skill_id, "reason": "missing_content"})
+            discarded.append({"skill_id": skill_id, "reason": "weak_evidence", "detail": "missing_content"})
             continue
         if action in {"create", "patch", "edit"} and len(content.split()) < 3:
-            discarded.append({"skill_id": skill_id, "reason": "low_signal"})
+            discarded.append({"skill_id": skill_id, "reason": "weak_evidence", "detail": "low_signal"})
             continue
         compiled[skill_id] = {
             "skill_id": skill_id,

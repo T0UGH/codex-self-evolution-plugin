@@ -278,6 +278,7 @@ def run_compile(
                 artifacts = backend_impl.compile(envelopes, context, options)
             except Exception as exc:
                 reason = f"{type(exc).__name__}: {exc}"
+                compiler_observability = getattr(exc, "compiler_observability", {}) or {}
                 if len(active_claimed) > 1:
                     return _compile_claimed_individually(
                         paths=paths,
@@ -290,6 +291,7 @@ def run_compile(
                         batch_failure_reason=reason,
                         initial_item_receipts=noop_item_receipts,
                         initial_processed_count=len(noop_claimed),
+                        initial_compiler_observability=compiler_observability,
                     )
                 item_receipts = []
                 item_receipts.extend(noop_item_receipts)
@@ -312,6 +314,7 @@ def run_compile(
                     item_receipts=item_receipts,
                     skip_reason=reason,
                     memory_action_stats=memory_action_stats,
+                    compiler_observability=compiler_observability,
                 )
                 receipt_path = write_receipt(paths.compiler_dir, receipt)
                 return {
@@ -322,6 +325,7 @@ def run_compile(
                     "error": reason,
                     "memory_action_stats": memory_action_stats,
                     "discarded_count": 0,
+                    "compiler_observability": compiler_observability,
                 }
             output_paths = apply_compiler_outputs(
                 memory_dir=paths.memory_dir,
@@ -352,6 +356,7 @@ def run_compile(
                 item_receipts=item_receipts,
                 fallback_backend=artifacts.fallback_backend,
                 memory_action_stats=memory_action_stats,
+                compiler_observability=artifacts.compiler_observability,
             )
             receipt_path = write_receipt(paths.compiler_dir, receipt)
             return {
@@ -363,6 +368,7 @@ def run_compile(
                 "memory_action_stats": memory_action_stats,
                 "discarded_count": len(artifacts.discarded_items),
                 "global_skill_publish": output_paths["skills"][2],
+                "compiler_observability": artifacts.compiler_observability,
             }
     except CompileLockError:
         receipt = CompilerReceipt(
@@ -398,6 +404,7 @@ def _compile_claimed_individually(
     batch_failure_reason: str,
     initial_item_receipts: list[dict[str, Any]] | None = None,
     initial_processed_count: int = 0,
+    initial_compiler_observability: dict[str, Any] | None = None,
 ) -> dict:
     """Retry a failed batch as single-envelope compiles.
 
@@ -419,6 +426,7 @@ def _compile_claimed_individually(
     recall_records = 0
     managed_skills = 0
     last_skill_publish = None
+    compiler_observability: dict[str, Any] = dict(initial_compiler_observability or {})
 
     for path, envelope in claimed:
         context = build_compile_context(paths, [envelope])
@@ -427,6 +435,7 @@ def _compile_claimed_individually(
             artifacts = backend_impl.compile([envelope], context, options)
         except Exception as exc:  # noqa: BLE001 - split retry is best-effort
             reason = f"{type(exc).__name__}: {exc}"
+            compiler_observability = getattr(exc, "compiler_observability", {}) or compiler_observability
             destination = finalize_suggestion(paths, path, envelope, "failed", reason=reason)
             item_receipts.append({
                 "suggestion_id": envelope.suggestion_id,
@@ -450,6 +459,7 @@ def _compile_claimed_individually(
             publish_global_skills_enabled=True,
         )
         last_skill_publish = output_paths["skills"][2]
+        compiler_observability = artifacts.compiler_observability or compiler_observability
         destination = finalize_suggestion(paths, path, envelope, "done")
         item_receipts.append({
             "suggestion_id": envelope.suggestion_id,
@@ -477,6 +487,7 @@ def _compile_claimed_individually(
         item_receipts=item_receipts,
         skip_reason=skip_reason,
         memory_action_stats=memory_action_stats,
+        compiler_observability=compiler_observability,
     )
     receipt_path = write_receipt(paths.compiler_dir, receipt)
     return {
@@ -488,6 +499,7 @@ def _compile_claimed_individually(
         "memory_action_stats": memory_action_stats,
         "discarded_count": sum(1 for item in item_receipts if item.get("state") == "discarded"),
         "global_skill_publish": last_skill_publish,
+        "compiler_observability": compiler_observability,
     }
 
 
@@ -598,6 +610,7 @@ def scan_all_projects(
                 entry["fallback_backend"] = compile_result.get("fallback_backend")
                 entry["memory_action_stats"] = compile_result.get("memory_action_stats", {})
                 entry["discarded_count"] = compile_result.get("discarded_count", 0)
+                entry["compiler_observability"] = compile_result.get("compiler_observability", {})
                 if compile_result["status"] == "success":
                     counts["run"] += 1
                 elif compile_result["status"] == "error":
@@ -636,6 +649,8 @@ def _aggregate_scan_stats(results: list[dict]) -> dict[str, Any]:
     buckets_with_fallback = 0
     buckets_processed = 0
     total_discarded = 0
+    total_compile_duration_ms = 0
+    total_agent_attempts = 0
     for entry in results:
         stats = entry.get("memory_action_stats") or {}
         if stats:
@@ -651,6 +666,10 @@ def _aggregate_scan_stats(results: list[dict]) -> dict[str, Any]:
             if entry.get("fallback_backend"):
                 buckets_with_fallback += 1
             total_discarded += int(entry.get("discarded_count", 0) or 0)
+            observability = entry.get("compiler_observability") or {}
+            if isinstance(observability, dict):
+                total_compile_duration_ms += int(observability.get("duration_ms", 0) or 0)
+                total_agent_attempts += int(observability.get("attempts", 0) or 0)
     return {
         "buckets_processed": buckets_processed,
         "buckets_with_fallback": buckets_with_fallback,
@@ -658,4 +677,6 @@ def _aggregate_scan_stats(results: list[dict]) -> dict[str, Any]:
         "actions": actions,
         "scopes": scopes,
         "total_discarded": total_discarded,
+        "total_compile_duration_ms": total_compile_duration_ms,
+        "total_agent_attempts": total_agent_attempts,
     }

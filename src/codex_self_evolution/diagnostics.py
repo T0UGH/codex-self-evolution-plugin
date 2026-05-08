@@ -405,6 +405,7 @@ def _read_last_receipt(receipt_path: Path) -> dict[str, Any] | None:
         "processed_count": data.get("processed_count"),
         "skip_reason": data.get("skip_reason"),
         "memory_action_stats": data.get("memory_action_stats") or {},
+        "compiler_observability": data.get("compiler_observability") or {},
     }
 
 

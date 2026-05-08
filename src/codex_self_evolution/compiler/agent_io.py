@@ -13,6 +13,13 @@ from ..schemas import (
 
 
 AGENT_COMPILE_SCHEMA_VERSION = 1
+ALLOWED_DISCARD_REASONS = {
+    "task_state_noise",
+    "one_off_plan",
+    "duplicate",
+    "weak_evidence",
+    "missing_reuse_trigger",
+}
 
 
 COMPILE_CONTRACT = {
@@ -21,7 +28,7 @@ COMPILE_CONTRACT = {
         "Merge the new suggestion batch with existing memory / recall without discarding stable entries.",
         "Dedupe memory and recall entries by content; preserve provenance when possible.",
         "Only propose skill actions consistent with the existing manifest ownership.",
-        "Emit ONLY the declared response schema; do not write files directly, the writer handles final I/O.",
+        "In JSON mode, emit ONLY the declared response schema; in direct-edit mode, follow the workspace edit prompt.",
     ],
     "response_schema": {
         "memory_records": {
@@ -34,7 +41,10 @@ COMPILE_CONTRACT = {
             "content: str, action: create|patch|edit|retire}]"
         ),
         "manifest_entries": "list[SkillManifestEntry]",
-        "discarded_items": "list[{reason: str, ...}]",
+        "discarded_items": (
+            "list[{reason: task_state_noise|one_off_plan|duplicate|"
+            "weak_evidence|missing_reuse_trigger, ...}]"
+        ),
     },
 }
 
@@ -223,5 +233,12 @@ def _parse_discarded_items(value: Any) -> list[dict[str, Any]]:
     for item in value:
         if not isinstance(item, dict):
             raise AgentResponseError("discarded_items entries must be objects")
-        out.append(dict(item))
+        reason = str(item.get("reason") or "").strip()
+        if reason not in ALLOWED_DISCARD_REASONS:
+            raise AgentResponseError(
+                f"invalid discard reason: {reason!r}; expected one of {sorted(ALLOWED_DISCARD_REASONS)}"
+            )
+        normalized = dict(item)
+        normalized["reason"] = reason
+        out.append(normalized)
     return out

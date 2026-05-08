@@ -268,6 +268,7 @@ Compiler 会维护两份内容：
 | `codex-self-evolution compile-preflight` | 检查是否需要 compile，处理空队列 / 锁 / stale lock。 |
 | `codex-self-evolution compile --once` | 单次 compile。 |
 | `codex-self-evolution scan --backend agent:pi` | 扫描所有项目 bucket 并编译 pending suggestions。 |
+| `codex-self-evolution eval-compiler --fixture tests/fixtures/compiler_replay/commerce_membership_api.json` | 回放编译质量样本，输出 pass/fail 和 memory/recall/discard 指标。 |
 | `codex-self-evolution recall-trigger --query "..."` | 触发一次聚焦 recall。 |
 | `codex-self-evolution status` | 输出只读诊断快照。 |
 | `csep recall "..."` | 面向模型使用的 recall wrapper。 |

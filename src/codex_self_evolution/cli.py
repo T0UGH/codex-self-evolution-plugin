@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from .compiler.engine import preflight_compile, run_compile, scan_all_projects
+from .compiler.replay import evaluate_compiler_fixture
 from .config_file import (
     ConfigError,
     LoadResult,
@@ -208,6 +209,13 @@ def build_parser() -> argparse.ArgumentParser:
     trigger_parser.add_argument("--explicit", action="store_true")
     trigger_parser.add_argument("--top-k", type=int, default=3)
     trigger_parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
+
+    eval_parser = subparsers.add_parser(
+        "eval-compiler",
+        help="Replay a saved compiler-quality fixture and report pass/fail metrics without mutating runtime state.",
+    )
+    eval_parser.add_argument("--fixture", required=True)
+    eval_parser.add_argument("--backend", default="script")
 
     return parser
 
@@ -440,6 +448,13 @@ def main(argv: list[str] | None = None) -> int:
                 top_k=max(1, args.top_k),
             )
             result["cwd"] = str(Path(args.cwd).expanduser().resolve())
+        elif args.command == "eval-compiler":
+            allow_fallback, compile_options = _compile_runtime_options()
+            result = evaluate_compiler_fixture(
+                args.fixture,
+                backend=args.backend,
+                compile_options={"allow_fallback": allow_fallback, **compile_options},
+            )
         else:
             parser.error(f"unknown command: {args.command}")
             return 2
@@ -902,6 +917,9 @@ def _observability_extras(command: str | None, result: object) -> dict:
         discarded = result.get("discarded_count") or 0
         if discarded:
             extras["discarded_count"] = discarded
+        compiler_observability = result.get("compiler_observability")
+        if isinstance(compiler_observability, dict) and compiler_observability:
+            extras["compiler_observability"] = compiler_observability
         return extras
     if command == "scan":
         aggregate = result.get("aggregate") or {}

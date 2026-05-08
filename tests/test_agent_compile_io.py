@@ -4,6 +4,7 @@ import pytest
 
 from codex_self_evolution.compiler.agent_io import (
     AGENT_COMPILE_SCHEMA_VERSION,
+    ALLOWED_DISCARD_REASONS,
     AgentResponseError,
     build_agent_compile_payload,
     parse_agent_compile_response,
@@ -143,7 +144,7 @@ def test_parse_agent_compile_response_happy_path():
                 }
             ],
             "manifest_entries": [_manifest_entry().to_dict()],
-            "discarded_items": [{"reason": "noop"}],
+            "discarded_items": [{"reason": "duplicate", "detail": "same stable memory already exists"}],
         }
     )
 
@@ -158,7 +159,14 @@ def test_parse_agent_compile_response_happy_path():
         == "This skill should be used when compiling alpha workflows."
     )
     assert isinstance(result["manifest_entries"][0], SkillManifestEntry)
-    assert result["discarded_items"][0]["reason"] == "noop"
+    assert result["discarded_items"][0]["reason"] == "duplicate"
+    assert "duplicate" in ALLOWED_DISCARD_REASONS
+
+
+def test_parse_agent_compile_response_rejects_non_standard_discard_reason():
+    raw = json.dumps({"discarded_items": [{"reason": "noop"}]})
+    with pytest.raises(AgentResponseError, match="invalid discard reason"):
+        parse_agent_compile_response(raw)
 
 
 def test_parse_agent_compile_response_rejects_empty_string():

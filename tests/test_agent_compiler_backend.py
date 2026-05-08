@@ -109,7 +109,7 @@ def test_agent_backend_returns_parsed_artifacts_on_success():
             }
         ],
         "manifest_entries": [_manifest_dict()],
-        "discarded_items": [{"reason": "dedupe"}],
+        "discarded_items": [{"reason": "duplicate"}],
     }
     seen_payloads: list[dict] = []
 
@@ -129,7 +129,10 @@ def test_agent_backend_returns_parsed_artifacts_on_success():
         == "This skill should be used when compiling alpha workflows."
     )
     assert artifacts.manifest_entries[0].skill_id == "alpha"
-    assert artifacts.discarded_items == [{"reason": "dedupe"}]
+    assert artifacts.discarded_items == [{"reason": "duplicate"}]
+    assert artifacts.compiler_observability["backend"] == "agent:opencode"
+    assert artifacts.compiler_observability["input"]["suggestions"] == 1
+    assert artifacts.compiler_observability["output"]["discarded_items"] == 1
 
     # Payload must include batch + existing_assets so the agent can merge.
     assert seen_payloads, "invoker should have been called"
@@ -202,6 +205,8 @@ def test_agent_backend_retries_when_output_drops_batch_without_discarding():
     assert artifacts.fallback_backend is None
     assert artifacts.memory_records["global"][0]["summary"] == "s"
     assert seen_payloads[1]["retry_feedback"]["reason"] == "agent_output_empty_unaccounted"
+    assert artifacts.compiler_observability["attempts"] == 2
+    assert artifacts.compiler_observability["retry_feedback"][0]["reason"] == "agent_output_empty_unaccounted"
 
 
 def test_agent_backend_accepts_fully_accounted_discarded_suggestions():
@@ -299,3 +304,11 @@ def test_pi_backend_edit_mode_reads_agent_edited_workspace():
     assert artifacts.memory_records["global"][0]["summary"] == "direct edit memory"
     assert artifacts.memory_records["global"][0]["content"] == "Pi edited the workspace file directly."
     assert artifacts.discarded_items == [{"suggestion_id": "old", "reason": "duplicate"}]
+    assert artifacts.compiler_observability["provider"] == "kimi"
+    assert artifacts.compiler_observability["model"] == "kimi-k2.6"
+    assert artifacts.compiler_observability["mode"] == "edit"
+    assert artifacts.compiler_observability["input"]["families"] == {
+        "memory_updates": 1,
+        "recall_candidate": 0,
+        "skill_action": 0,
+    }

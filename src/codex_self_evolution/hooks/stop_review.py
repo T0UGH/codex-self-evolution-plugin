@@ -48,6 +48,23 @@ def stop_review(hook_payload: str | Path, state_dir: str | Path | None = None) -
         _dump_failed_raw_texts(paths, snapshot_path, exc)
         raise
     timestamp = utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    suggestions = reviewer_output.all_suggestions()
+    families = {"memory_updates": 0, "recall_candidate": 0, "skill_action": 0}
+    for suggestion in suggestions:
+        if suggestion.family in families:
+            families[suggestion.family] += 1
+    if not suggestions:
+        return {
+            "hook": "Stop",
+            "status": "skipped_empty",
+            "pending_suggestion_path": None,
+            "review_snapshot_path": str(snapshot_path),
+            "reviewer_provider": provider_result.provider,
+            "suggestion_count": 0,
+            "suggestion_families": families,
+            "skipped_suggestion_count": len(skipped_suggestions),
+            "skipped_suggestions": skipped_suggestions,
+        }
     idempotency_key = compute_stable_id(
         json.dumps(
             {
@@ -66,18 +83,15 @@ def stop_review(hook_payload: str | Path, state_dir: str | Path | None = None) -
         cwd=str(Path(cwd).resolve()),
         repo_fingerprint=repo_fingerprint(Path(cwd).resolve()),
         reviewer_timestamp=timestamp,
-        suggestions=reviewer_output.all_suggestions(),
+        suggestions=suggestions,
         source_authority=snapshot["source_authority"],
         review_snapshot_path=str(snapshot_path),
         transition_log=[{"at": timestamp, "from": "", "to": "pending", "reason": provider_result.provider}],
     )
     destination = append_pending_suggestion(paths, envelope)
-    families = {"memory_updates": 0, "recall_candidate": 0, "skill_action": 0}
-    for suggestion in envelope.suggestions:
-        if suggestion.family in families:
-            families[suggestion.family] += 1
     return {
         "hook": "Stop",
+        "status": "queued",
         "pending_suggestion_path": str(destination),
         "review_snapshot_path": str(snapshot_path),
         "reviewer_provider": provider_result.provider,

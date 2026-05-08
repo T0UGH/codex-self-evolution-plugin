@@ -32,7 +32,8 @@ def test_compile_skills_filters_low_signal_and_builds_manifest():
     compiled, discarded = compile_skills(suggestions)
     assert len(compiled) == 1
     assert compiled[0]["description"] == "This skill should be used when repeated repo tasks appear."
-    assert discarded[0]["reason"] == "low_signal"
+    assert discarded[0]["reason"] == "weak_evidence"
+    assert discarded[0]["detail"] == "low_signal"
     entries = build_manifest_entries(compiled, "skills")
     assert entries[0].skill_id == "useful-skill"
     assert entries[0].owner == PLUGIN_OWNER
@@ -69,7 +70,8 @@ def test_compile_skills_enforces_managed_ownership_for_patch_and_edit():
     ]
     compiled, discarded = compile_skills(suggestions, existing_entries=unmanaged)
     assert compiled == []
-    assert discarded[0]["reason"] == "ownership_violation"
+    assert discarded[0]["reason"] == "weak_evidence"
+    assert discarded[0]["detail"] == "ownership_violation"
 
 
 def test_compile_skills_discards_missing_description_for_publishable_actions():
@@ -89,7 +91,8 @@ def test_compile_skills_discards_missing_description_for_publishable_actions():
     compiled, discarded = compile_skills(suggestions)
 
     assert compiled == []
-    assert discarded[0]["reason"] == "missing_description"
+    assert discarded[0]["reason"] == "weak_evidence"
+    assert discarded[0]["detail"] == "missing_description"
 
 
 def test_compile_skills_accepts_skill_candidate_from_memory_update():

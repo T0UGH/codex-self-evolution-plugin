@@ -238,6 +238,15 @@ def test_run_compile_passes_compile_options_to_backend(tmp_path, monkeypatch):
                 manifest_entries=[],
                 discarded_items=[],
                 backend_name="agent:pi",
+                compiler_observability={
+                    "backend": "agent:pi",
+                    "provider": "kimi",
+                    "model": "kimi-k2.6",
+                    "mode": "edit",
+                    "duration_ms": 42,
+                    "input": {"envelopes": 1, "suggestions": 1},
+                    "output": {"memory_records": 1, "recall_records": 0, "compiled_skills": 0, "discarded_items": 0},
+                },
             )
 
     monkeypatch.setattr(engine, "get_backend", lambda _: OptionsBackend())
@@ -250,6 +259,9 @@ def test_run_compile_passes_compile_options_to_backend(tmp_path, monkeypatch):
 
     assert result["status"] == "success"
     assert seen_options == [{"allow_fallback": True, "pi_mode": "json", "pi_model": "kimi-k2.6"}]
+    assert result["compiler_observability"]["provider"] == "kimi"
+    receipt = json.loads((bucket / "compiler" / "last_receipt.json").read_text(encoding="utf-8"))
+    assert receipt["compiler_observability"]["model"] == "kimi-k2.6"
 
 
 def test_run_compile_limits_pi_edit_mode_to_single_envelope(tmp_path, monkeypatch):

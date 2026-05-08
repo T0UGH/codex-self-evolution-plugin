@@ -67,7 +67,13 @@ def test_second_compile_preserves_existing_memory_and_recall(tmp_path):
                     {"summary": "New fact", "details": {"content": "Avoid force push", "scope": "global"}}
                 ],
                 "recall_candidate": [
-                    {"summary": "Force push", "details": {"content": "Avoid force push", "source_paths": ["docs/git.md"]}}
+                    {
+                        "summary": "Force push",
+                        "details": {
+                            "content": "When preparing repo branches again, avoid force push.",
+                            "source_paths": ["docs/git.md"],
+                        },
+                    }
                 ],
                 "skill_action": [],
             },
@@ -87,7 +93,7 @@ def test_second_compile_preserves_existing_memory_and_recall(tmp_path):
     assert any(item["content"] == "Run focused pytest" for item in recall_index_second["records"])
     # New entries appended.
     assert "Avoid force push" in global_md_second
-    assert any(item["content"] == "Avoid force push" for item in recall_index_second["records"])
+    assert any(item["content"] == "When preparing repo branches again, avoid force push." for item in recall_index_second["records"])
 
 
 def test_compile_with_disjoint_batch_does_not_drop_prior_recall(tmp_path):
@@ -108,7 +114,13 @@ def test_compile_with_disjoint_batch_does_not_drop_prior_recall(tmp_path):
             "provider_stub_response": {
                 "memory_updates": [],
                 "recall_candidate": [
-                    {"summary": "stable recall", "details": {"content": "stable content", "source_paths": ["a"]}}
+                    {
+                        "summary": "stable recall",
+                        "details": {
+                            "content": "When the stable workflow returns, keep stable content.",
+                            "source_paths": ["a"],
+                        },
+                    }
                 ],
                 "skill_action": [],
             },
@@ -141,4 +153,4 @@ def test_compile_with_disjoint_batch_does_not_drop_prior_recall(tmp_path):
     run_compile(repo_root=repo, state_dir=state, backend="script")
 
     index = json.loads((state / "recall" / "index.json").read_text(encoding="utf-8"))
-    assert any(item["content"] == "stable content" for item in index["records"])
+    assert any(item["content"] == "When the stable workflow returns, keep stable content." for item in index["records"])

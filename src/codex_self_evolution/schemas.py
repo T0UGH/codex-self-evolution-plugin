@@ -308,6 +308,7 @@ class CompilerReceipt:
     # Populated whenever memory_updates suggestions are present; defaults
     # empty so legacy receipts read by older code paths parse cleanly.
     memory_action_stats: dict[str, Any] = field(default_factory=dict)
+    compiler_observability: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

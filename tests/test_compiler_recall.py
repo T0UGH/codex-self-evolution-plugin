@@ -1,4 +1,4 @@
-from codex_self_evolution.compiler.recall import compile_recall
+from codex_self_evolution.compiler.recall import compile_recall, compile_recall_with_discarded
 from codex_self_evolution.schemas import Suggestion
 
 
@@ -53,7 +53,7 @@ def test_compile_recall_dedupes_new_against_existing_content():
         Suggestion(
             family="recall_candidate",
             summary="fresh",
-            details={"content": "brand new recall"},
+            details={"content": "When this workflow returns, use brand new recall.", "source_paths": ["fresh.md"]},
         ),
     ]
     records = compile_recall(
@@ -63,7 +63,7 @@ def test_compile_recall_dedupes_new_against_existing_content():
         existing_records=existing,
     )
     contents = [item.content for item in records]
-    assert contents == ["stable recall", "brand new recall"]
+    assert contents == ["stable recall", "When this workflow returns, use brand new recall."]
     # The existing record keeps its stable id; new entries get a fresh hashed id.
     assert records[0].id == "old1"
     assert records[1].id != "old1"
@@ -73,21 +73,25 @@ def test_compile_recall_uses_details_note_when_content_missing():
     suggestion = Suggestion(
         family="recall_candidate",
         summary="summary text",
-        details={"note": "real recall text from reviewer"},
+        details={"note": "When the reviewer renames content, keep the reusable diagnostic text.", "source_paths": ["review.md"]},
     )
     records = compile_recall([suggestion], repo_fingerprint="r", cwd="/tmp")
     assert len(records) == 1
-    assert records[0].content == "real recall text from reviewer"
+    assert records[0].content == "When the reviewer renames content, keep the reusable diagnostic text."
 
 
 def test_compile_recall_prefers_content_over_note():
     suggestion = Suggestion(
         family="recall_candidate",
         summary="summary text",
-        details={"content": "explicit recall content", "note": "note body"},
+        details={
+            "content": "When this repo returns, prefer explicit recall content.",
+            "note": "note body",
+            "source_paths": ["review.md"],
+        },
     )
     records = compile_recall([suggestion], repo_fingerprint="r", cwd="/tmp")
-    assert records[0].content == "explicit recall content"
+    assert records[0].content == "When this repo returns, prefer explicit recall content."
 
 
 def test_compile_recall_skips_malformed_existing_entries():
@@ -98,3 +102,64 @@ def test_compile_recall_skips_malformed_existing_entries():
     ]
     records = compile_recall([], repo_fingerprint="r", cwd="/tmp", existing_records=existing)
     assert [item.content for item in records] == ["valid one"]
+
+
+def test_compile_recall_skips_process_state_without_future_trigger():
+    suggestions = [
+        Suggestion(
+            family="recall_candidate",
+            summary="MR process state",
+            details={
+                "content": "MR 493 comments were resolved and the branch was pushed yesterday.",
+                "source_paths": ["docs/review.md"],
+            },
+        )
+    ]
+
+    records = compile_recall(suggestions, repo_fingerprint="repo", cwd="/tmp/repo")
+
+    assert records == []
+
+
+def test_compile_recall_reports_discarded_process_state():
+    suggestion = Suggestion(
+        family="recall_candidate",
+        summary="MR process state",
+        details={
+            "content": "MR 493 comments were resolved and the branch was pushed yesterday.",
+            "source_paths": ["docs/review.md"],
+        },
+    )
+
+    records, discarded = compile_recall_with_discarded(
+        [suggestion],
+        repo_fingerprint="repo",
+        cwd="/tmp/repo",
+    )
+
+    assert records == []
+    assert discarded == [
+        {
+            "family": "recall_candidate",
+            "summary": "MR process state",
+            "reason": "missing_reuse_trigger",
+        }
+    ]
+
+
+def test_compile_recall_keeps_future_trigger_with_evidence():
+    suggestions = [
+        Suggestion(
+            family="recall_candidate",
+            summary="Treasure handler/domain layering",
+            details={
+                "content": "When touching Treasure task assembly again, keep handler orchestration separate from domain filtering.",
+                "source_paths": ["handler/treasure.go", "domain/task_filter.go"],
+            },
+        )
+    ]
+
+    records = compile_recall(suggestions, repo_fingerprint="repo", cwd="/tmp/repo")
+
+    assert len(records) == 1
+    assert records[0].summary == "Treasure handler/domain layering"

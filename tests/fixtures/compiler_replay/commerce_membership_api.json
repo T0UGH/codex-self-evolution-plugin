@@ -1,0 +1,118 @@
+{
+  "name": "commerce_membership_api yesterday reviewer-quality sample",
+  "context": {
+    "cwd": "/tmp/commerce_membership_api",
+    "repo_fingerprint": "commerce-membership-api",
+    "skills_dir": "/tmp/csep/skills",
+    "memory_dir": "/tmp/csep/memory",
+    "recall_dir": "/tmp/csep/recall",
+    "existing_manifest": [],
+    "existing_user_memory": "",
+    "existing_global_memory": "",
+    "existing_memory_index": {
+      "user": [],
+      "global": []
+    },
+    "existing_recall_records": [],
+    "existing_recall_markdown": "",
+    "memory_paths": {},
+    "recall_paths": {}
+  },
+  "batch": [
+    {
+      "schema_version": 1,
+      "suggestion_id": "commerce-yesterday-1",
+      "idempotency_key": "commerce-yesterday-1",
+      "thread_id": "thread-commerce",
+      "cwd": "/tmp/commerce_membership_api",
+      "repo_fingerprint": "commerce-membership-api",
+      "reviewer_timestamp": "2026-05-07T00:00:00Z",
+      "suggestions": [
+        {
+          "family": "memory_updates",
+          "summary": "No-login real ack boundary",
+          "details": {
+            "scope": "global",
+            "content": "For commerce_membership_api coin-widget work, keep no-login real ack handling explicit; do not treat no-login synthetic ack paths as equivalent to real ack evidence.",
+            "source_paths": [
+              "handler/coin_widget.go"
+            ]
+          },
+          "confidence": 0.9
+        },
+        {
+          "family": "memory_updates",
+          "summary": "Overpass @latest risk",
+          "details": {
+            "scope": "global",
+            "content": "Avoid refreshing generated Overpass dependencies with @latest during targeted fixes; pin the intended IDL/dependency version so unrelated generated churn does not enter the MR.",
+            "source_paths": [
+              "go.mod"
+            ]
+          },
+          "confidence": 0.85
+        },
+        {
+          "family": "memory_updates",
+          "summary": "Go toolchain and mockey test pitfall",
+          "details": {
+            "scope": "global",
+            "content": "When commerce_membership_api tests fail around mockey/runtime, verify the Go toolchain version and mockey compatibility before rewriting business logic.",
+            "source_paths": [
+              "tests/review.md"
+            ]
+          },
+          "confidence": 0.85
+        },
+        {
+          "family": "recall_candidate",
+          "summary": "Treasure handler/domain layering",
+          "details": {
+            "content": "When touching Treasure task assembly again, keep handler orchestration separate from domain filtering and keep ack/no-login boundaries in the domain layer.",
+            "source_paths": [
+              "handler/treasure.go",
+              "domain/treasure_task.go"
+            ]
+          },
+          "confidence": 0.9
+        },
+        {
+          "family": "recall_candidate",
+          "summary": "MR process state",
+          "details": {
+            "content": "MR comments were addressed yesterday and the feature branch was pushed after the reviewer round.",
+            "source_paths": [
+              "docs/review.md"
+            ]
+          },
+          "confidence": 0.4
+        }
+      ],
+      "source_authority": [
+        "reviewer"
+      ],
+      "state": "pending",
+      "attempt_count": 0,
+      "review_snapshot_path": "review/snapshots/commerce-yesterday.json",
+      "failure_reason": null,
+      "transition_log": []
+    }
+  ],
+  "expect": {
+    "min_memory_records": 3,
+    "min_recall_records": 1,
+    "max_recall_records": 1,
+    "min_discarded_items": 1,
+    "required_memory_summaries": [
+      "No-login real ack boundary",
+      "Overpass @latest risk",
+      "Go toolchain and mockey test pitfall"
+    ],
+    "required_recall_summaries": [
+      "Treasure handler/domain layering"
+    ],
+    "required_discard_reasons": {
+      "missing_reuse_trigger": 1
+    }
+  }
+}

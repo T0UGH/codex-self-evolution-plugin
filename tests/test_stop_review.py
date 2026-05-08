@@ -114,6 +114,43 @@ def test_stop_review_returns_suggestion_families_breakdown(tmp_path):
     assert result["reviewer_provider"] == "dummy"
 
 
+def test_stop_review_does_not_enqueue_empty_reviewer_output(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    payload = tmp_path / "payload.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "thread_id": "thread-empty",
+                "turn_id": "turn-empty",
+                "cwd": str(repo),
+                "reviewer_provider": "dummy",
+                "provider_stub_response": {
+                    "memory_updates": [],
+                    "recall_candidate": [],
+                    "skill_action": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = stop_review(hook_payload=payload, state_dir=state)
+
+    assert result["hook"] == "Stop"
+    assert result["status"] == "skipped_empty"
+    assert result["pending_suggestion_path"] is None
+    assert result["suggestion_count"] == 0
+    assert result["suggestion_families"] == {
+        "memory_updates": 0,
+        "recall_candidate": 0,
+        "skill_action": 0,
+    }
+    assert not list((state / "suggestions" / "pending").glob("*.json"))
+    assert list((state / "review" / "snapshots").glob("*.json"))
+
+
 def test_stop_review_dumps_raw_text_when_reviewer_parse_fails(tmp_path):
     """Truncated-JSON scenarios (e.g. max_tokens cutoff) should land the
     reviewer's raw response on disk under review/failed/ so we can inspect

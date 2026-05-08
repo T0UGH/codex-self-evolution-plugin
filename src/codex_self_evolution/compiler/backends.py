@@ -5,7 +5,8 @@ import os
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -18,7 +19,7 @@ from .agent_io import (
     parse_agent_compile_response,
 )
 from .memory import compile_memory
-from .recall import compile_recall
+from .recall import compile_recall_with_discarded
 from .skills import build_manifest_entries, compile_skills
 
 
@@ -85,6 +86,7 @@ class CompileArtifacts:
     discarded_items: list[dict[str, Any]]
     backend_name: str
     fallback_backend: str | None = None
+    compiler_observability: dict[str, Any] = field(default_factory=dict)
 
 
 class CompilerBackend(Protocol):
@@ -94,9 +96,16 @@ class CompilerBackend(Protocol):
 
 
 class AgentCompileError(RuntimeError):
-    def __init__(self, reason: str, detail: str | None = None) -> None:
+    def __init__(
+        self,
+        reason: str,
+        detail: str | None = None,
+        *,
+        compiler_observability: dict[str, Any] | None = None,
+    ) -> None:
         self.reason = reason
         self.detail = detail or ""
+        self.compiler_observability = compiler_observability or {}
         suffix = f": {self.detail}" if self.detail else ""
         super().__init__(f"{reason}{suffix}")
 
@@ -105,13 +114,14 @@ class ScriptCompilerBackend:
     name = "script"
 
     def compile(self, batch: list[SuggestionEnvelope], context: dict[str, Any], options: dict[str, Any]) -> CompileArtifacts:
+        started = time.monotonic()
         all_suggestions = [item for envelope in batch for item in envelope.suggestions]
         existing_manifest = context["existing_manifest"]
         memory_records = compile_memory(
             all_suggestions,
             existing_index=context.get("existing_memory_index"),
         )
-        recall_records = compile_recall(
+        recall_records, recall_discarded = compile_recall_with_discarded(
             all_suggestions,
             repo_fingerprint=context["repo_fingerprint"],
             cwd=context["cwd"],
@@ -119,6 +129,7 @@ class ScriptCompilerBackend:
             existing_records=context.get("existing_recall_records"),
         )
         compiled_skills, discarded_items = compile_skills(all_suggestions, existing_entries=existing_manifest)
+        discarded_items = [*recall_discarded, *discarded_items]
         manifest_entries = build_manifest_entries(compiled_skills, context["skills_dir"], existing_entries=existing_manifest)
         return CompileArtifacts(
             memory_records=memory_records,
@@ -127,6 +138,22 @@ class ScriptCompilerBackend:
             manifest_entries=manifest_entries,
             discarded_items=discarded_items,
             backend_name=self.name,
+            compiler_observability=_build_compiler_observability(
+                backend_name=self.name,
+                batch=batch,
+                context=context,
+                options=options,
+                parsed={
+                    "memory_records": memory_records,
+                    "recall_records": recall_records,
+                    "compiled_skills": compiled_skills,
+                    "manifest_entries": manifest_entries,
+                    "discarded_items": discarded_items,
+                },
+                attempts=1,
+                retry_feedback=[],
+                duration_ms=_elapsed_ms(started),
+            ),
         )
 
 
@@ -145,6 +172,7 @@ class AgentCompilerBackend:
         self._invoker = invoker
 
     def compile(self, batch: list[SuggestionEnvelope], context: dict[str, Any], options: dict[str, Any]) -> CompileArtifacts:
+        started = time.monotonic()
         payload = build_agent_compile_payload(batch, context)
         if self._invoker is None and shutil.which(self.executable) is None:
             raise AgentCompileError(f"{self.executable}_unavailable")
@@ -152,10 +180,13 @@ class AgentCompilerBackend:
         retries = int(options.get("agent_quality_retries", self.DEFAULT_QUALITY_RETRIES))
         last_reason = "agent_failed"
         last_detail = ""
+        retry_feedback: list[dict[str, str]] = []
+        attempts = 0
         for attempt in range(max(0, retries) + 1):
+            attempts = attempt + 1
             attempt_payload = dict(payload)
             if attempt > 0:
-                attempt_payload["retry_feedback"] = {
+                feedback = {
                     "reason": last_reason,
                     "detail": last_detail,
                     "instruction": (
@@ -165,6 +196,8 @@ class AgentCompilerBackend:
                         "in discarded_items. Do not return a silent empty artifact set."
                     ),
                 }
+                retry_feedback.append(feedback)
+                attempt_payload["retry_feedback"] = feedback
             try:
                 raw = invoker(attempt_payload, options)
             except Exception as exc:
@@ -189,8 +222,32 @@ class AgentCompilerBackend:
                 manifest_entries=parsed["manifest_entries"],
                 discarded_items=parsed["discarded_items"],
                 backend_name=self.name,
+                compiler_observability=_build_compiler_observability(
+                    backend_name=self.name,
+                    batch=batch,
+                    context=context,
+                    options=options,
+                    parsed=parsed,
+                    attempts=attempts,
+                    retry_feedback=retry_feedback,
+                    duration_ms=_elapsed_ms(started),
+                ),
             )
-        raise AgentCompileError(last_reason, last_detail)
+        raise AgentCompileError(
+            last_reason,
+            last_detail,
+            compiler_observability=_build_compiler_observability(
+                backend_name=self.name,
+                batch=batch,
+                context=context,
+                options=options,
+                parsed={},
+                attempts=attempts,
+                retry_feedback=retry_feedback,
+                duration_ms=_elapsed_ms(started),
+                failure_reason=last_reason,
+            ),
+        )
 
     def _subprocess_invoker(self, payload: dict[str, Any], options: dict[str, Any]) -> str:
         # opencode 1.4.0's `run` takes the message as a positional argument and
@@ -269,6 +326,7 @@ class PiAgentCompilerBackend(AgentCompilerBackend):
         context: dict[str, Any],
         options: dict[str, Any],
     ) -> CompileArtifacts:
+        started = time.monotonic()
         if self._invoker is None and shutil.which(self.executable) is None:
             raise AgentCompileError(f"{self.executable}_unavailable")
         invoker = self._invoker or self._subprocess_edit_invoker
@@ -276,10 +334,13 @@ class PiAgentCompilerBackend(AgentCompilerBackend):
         retries = int(options.get("agent_quality_retries", self.DEFAULT_QUALITY_RETRIES))
         last_reason = "agent_failed"
         last_detail = ""
+        retry_feedback: list[dict[str, str]] = []
+        attempts = 0
         for attempt in range(max(0, retries) + 1):
+            attempts = attempt + 1
             payload = dict(base_payload)
             if attempt > 0:
-                payload["retry_feedback"] = {
+                feedback = {
                     "reason": last_reason,
                     "detail": last_detail,
                     "instruction": (
@@ -288,6 +349,8 @@ class PiAgentCompilerBackend(AgentCompilerBackend):
                         "preserve existing stable assets, and write valid JSON indexes."
                     ),
                 }
+                retry_feedback.append(feedback)
+                payload["retry_feedback"] = feedback
             with tempfile.TemporaryDirectory(prefix="csep-pi-edit-") as workspace_raw:
                 workspace = Path(workspace_raw)
                 payload_path = _prepare_pi_edit_workspace(workspace, payload, context)
@@ -322,8 +385,32 @@ class PiAgentCompilerBackend(AgentCompilerBackend):
                     manifest_entries=parsed["manifest_entries"],
                     discarded_items=parsed["discarded_items"],
                     backend_name=self.name,
+                    compiler_observability=_build_compiler_observability(
+                        backend_name=self.name,
+                        batch=batch,
+                        context=context,
+                        options={**options, "pi_mode": "edit"},
+                        parsed=parsed,
+                        attempts=attempts,
+                        retry_feedback=retry_feedback,
+                        duration_ms=_elapsed_ms(started),
+                    ),
                 )
-        raise AgentCompileError(last_reason, last_detail)
+        raise AgentCompileError(
+            last_reason,
+            last_detail,
+            compiler_observability=_build_compiler_observability(
+                backend_name=self.name,
+                batch=batch,
+                context=context,
+                options={**options, "pi_mode": "edit"},
+                parsed={},
+                attempts=attempts,
+                retry_feedback=retry_feedback,
+                duration_ms=_elapsed_ms(started),
+                failure_reason=last_reason,
+            ),
+        )
 
     def _subprocess_edit_invoker(self, payload: dict[str, Any], options: dict[str, Any]) -> str:
         command = (
@@ -471,8 +558,9 @@ def _build_compile_prompt(payload_path: str) -> str:
         "one-off review discussion, and branch-local task state unless the "
         "item includes a reusable rule that will help a future task.\n"
         "6. For every suggestion you reject, add a discarded_items entry with "
-        "a concrete reason such as task_state_noise, duplicate, "
-        "missing_reuse_trigger, or weak_evidence.\n"
+        "one of these standard reasons: task_state_noise, one_off_plan, "
+        "duplicate, weak_evidence, or missing_reuse_trigger. Put any finer "
+        "explanation in detail.\n"
         "7. Only emit skill actions (create|patch|edit|retire) that are "
         "consistent with existing manifest ownership (managed=true entries "
         "only).\n"
@@ -526,7 +614,7 @@ def _build_edit_compile_prompt(workspace_dir: str, payload_path: str) -> str:
         "1. Preserve existing stable memory/recall/skills unless the payload has an explicit valid removal.\n"
         "2. Keep reusable lessons and durable preferences; discard one-off MR status or temporary process state.\n"
         "3. Keep all JSON files valid. Required string fields must be non-empty.\n"
-        "4. Write discarded suggestions to result.json as {\"discarded_items\": [...]} with concrete reasons.\n"
+        "4. Write discarded suggestions to result.json as {\"discarded_items\": [...]} with reason set to one of: task_state_noise, one_off_plan, duplicate, weak_evidence, missing_reuse_trigger. Put finer explanation in detail.\n"
         "5. Do not return the full artifacts in your chat response. After editing files, respond exactly DONE.\n\n"
         "The local compiler will validate and promote your edited workspace."
     )
@@ -847,6 +935,91 @@ def _truncate(text: str, limit: int = 400) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "..."
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)
+
+
+def _build_compiler_observability(
+    *,
+    backend_name: str,
+    batch: list[SuggestionEnvelope],
+    context: dict[str, Any],
+    options: dict[str, Any],
+    parsed: dict[str, Any],
+    attempts: int,
+    retry_feedback: list[dict[str, str]],
+    duration_ms: int,
+    failure_reason: str | None = None,
+) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "backend": backend_name,
+        "duration_ms": duration_ms,
+        "attempts": attempts,
+        "retry_feedback": [
+            {
+                "reason": str(item.get("reason") or ""),
+                "detail": _truncate(str(item.get("detail") or ""), 240),
+            }
+            for item in retry_feedback
+        ],
+        "input": _summarize_compile_input(batch, context),
+        "output": _summarize_compile_output(parsed),
+    }
+    if failure_reason:
+        data["failure_reason"] = failure_reason
+    if backend_name == "agent:pi":
+        data.update(
+            {
+                "provider": str(options.get("pi_provider") or os.environ.get("CODEX_SELF_EVOLUTION_PI_PROVIDER") or "kimi"),
+                "model": str(options.get("pi_model") or os.environ.get("CODEX_SELF_EVOLUTION_PI_MODEL") or "kimi-k2.6"),
+                "mode": str(options.get("pi_mode") or os.environ.get("CODEX_SELF_EVOLUTION_PI_MODE") or "edit").strip().lower(),
+                "timeout_seconds": float(options.get("pi_timeout_seconds", PiAgentCompilerBackend.DEFAULT_TIMEOUT_SECONDS)),
+            }
+        )
+    elif backend_name == "agent:opencode":
+        data.update(
+            {
+                "model": str(options.get("opencode_model") or os.environ.get("CODEX_SELF_EVOLUTION_OPENCODE_MODEL") or ""),
+                "agent": str(options.get("opencode_agent") or os.environ.get("CODEX_SELF_EVOLUTION_OPENCODE_AGENT") or ""),
+                "timeout_seconds": float(options.get("opencode_timeout_seconds", AgentCompilerBackend.DEFAULT_TIMEOUT_SECONDS)),
+            }
+        )
+    return data
+
+
+def _summarize_compile_input(batch: list[SuggestionEnvelope], context: dict[str, Any]) -> dict[str, Any]:
+    families = {"memory_updates": 0, "recall_candidate": 0, "skill_action": 0}
+    suggestions = 0
+    for envelope in batch:
+        for item in envelope.suggestions:
+            suggestions += 1
+            if item.family in families:
+                families[item.family] += 1
+    memory_index = context.get("existing_memory_index") or {}
+    existing_memory = 0
+    if isinstance(memory_index, dict):
+        existing_memory = len(memory_index.get("user") or []) + len(memory_index.get("global") or [])
+    return {
+        "envelopes": len(batch),
+        "suggestions": suggestions,
+        "families": families,
+        "existing_memory_records": existing_memory,
+        "existing_recall_records": len(context.get("existing_recall_records") or []),
+        "existing_manifest_entries": len(context.get("existing_manifest") or []),
+    }
+
+
+def _summarize_compile_output(parsed: dict[str, Any]) -> dict[str, int]:
+    memory_records = parsed.get("memory_records") or {}
+    return {
+        "memory_records": len(memory_records.get("user", [])) + len(memory_records.get("global", [])),
+        "recall_records": len(parsed.get("recall_records") or []),
+        "compiled_skills": len(parsed.get("compiled_skills") or []),
+        "manifest_entries": len(parsed.get("manifest_entries") or []),
+        "discarded_items": len(parsed.get("discarded_items") or []),
+    }
 
 
 def _agent_empty_output_reason(
