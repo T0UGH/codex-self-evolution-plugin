@@ -479,10 +479,9 @@ def _build_compile_prompt(payload_path: str) -> str:
         "8. Do NOT write files yourself. The writer handles final I/O.\n\n"
         "If the payload contains `retry_feedback`, your previous response was "
         "rejected by local quality gates. Fix the stated issue in the next "
-        "response; do not return a silent empty artifact set. For a non-empty "
-        "batch, a response with only discarded_items and no surviving "
-        "memory/recall/skill artifacts is also rejected; salvage durable signal "
-        "into an artifact whenever the reviewer supplied reusable content.\n\n"
+        "response; do not return a silent empty artifact set. If every input "
+        "suggestion is genuinely non-durable, return discarded_items for all "
+        "of them with concrete reasons.\n\n"
         "Respond with ONE JSON object and NOTHING else — no prose, no code "
         "fence, no comments. The object MUST match this schema:\n"
         "{\n"
@@ -874,8 +873,6 @@ def _agent_empty_output_reason(
     input_suggestions = [item for envelope in batch for item in envelope.suggestions]
     if input_suggestions and emitted_total == 0:
         return "agent_output_empty_unaccounted"
-    if input_suggestions and emitted_assets == 0:
-        return "agent_output_no_survivors"
 
     existing_memory = context.get("existing_memory_index")
     existing_user = existing_global = 0

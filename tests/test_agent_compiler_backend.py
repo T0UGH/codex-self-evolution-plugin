@@ -204,51 +204,26 @@ def test_agent_backend_retries_when_output_drops_batch_without_discarding():
     assert seen_payloads[1]["retry_feedback"]["reason"] == "agent_output_empty_unaccounted"
 
 
-def test_agent_backend_retries_when_output_discards_every_nonempty_suggestion():
+def test_agent_backend_accepts_fully_accounted_discarded_suggestions():
     all_discarded_output = {
         "memory_records": {"user": [], "global": []},
         "recall_records": [],
         "compiled_skills": [],
         "manifest_entries": [],
         "discarded_items": [{"suggestion_id": "sug-1", "reason": "weak_evidence"}],
-    }
-    salvaged_output = {
-        "memory_records": {"user": [{"summary": "s", "content": "c"}], "global": []},
-        "recall_records": [],
-        "compiled_skills": [],
-        "manifest_entries": [],
-        "discarded_items": [],
     }
     seen_payloads = []
 
     def invoker(payload, options):
         seen_payloads.append(payload)
-        return json.dumps(all_discarded_output if len(seen_payloads) == 1 else salvaged_output)
+        return json.dumps(all_discarded_output)
 
     backend = AgentCompilerBackend(invoker=invoker)
     artifacts = backend.compile([_envelope()], _context(), {"allow_fallback": True})
 
-    assert artifacts.memory_records["user"][0]["content"] == "c"
-    assert seen_payloads[1]["retry_feedback"]["reason"] == "agent_output_no_survivors"
-
-
-def test_agent_backend_raises_when_retry_still_discards_every_nonempty_suggestion():
-    all_discarded_output = {
-        "memory_records": {"user": [], "global": []},
-        "recall_records": [],
-        "compiled_skills": [],
-        "manifest_entries": [],
-        "discarded_items": [{"suggestion_id": "sug-1", "reason": "weak_evidence"}],
-    }
-
-    def invoker(payload, options):
-        return json.dumps(all_discarded_output)
-
-    backend = AgentCompilerBackend(invoker=invoker)
-    with pytest.raises(AgentCompileError) as excinfo:
-        backend.compile([_envelope()], _context(), {"allow_fallback": True})
-    assert excinfo.value.reason == "agent_output_no_survivors"
-    assert "weak_evidence" in excinfo.value.detail
+    assert artifacts.memory_records == {"user": [], "global": []}
+    assert artifacts.discarded_items == [{"suggestion_id": "sug-1", "reason": "weak_evidence"}]
+    assert len(seen_payloads) == 1
 
 
 def test_agent_backend_raises_when_output_drops_existing_memory_after_retry_budget():

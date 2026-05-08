@@ -100,7 +100,7 @@ def test_install_script_uses_uv_tool_and_cleans_only_managed_hooks(tmp_path):
         / "cache"
         / "codex-self-evolution"
         / "codex-self-evolution"
-        / "0.7.3"
+        / "0.7.4"
         / ".codex-plugin"
         / "plugin.json"
     )
