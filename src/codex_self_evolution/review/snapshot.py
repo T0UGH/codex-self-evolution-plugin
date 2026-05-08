@@ -60,8 +60,10 @@ def build_review_snapshot(payload: dict[str, Any], paths: Paths) -> tuple[dict[s
         },
         "source_authority": source_authority,
         "provider_stub_response": payload.get("provider_stub_response"),
-        "reviewer_provider": payload.get("reviewer_provider", "dummy"),
     }
+    reviewer_provider = str(payload.get("reviewer_provider") or "").strip()
+    if reviewer_provider:
+        snapshot["reviewer_provider"] = reviewer_provider
     snapshot_id = f"{snapshot['context']['thread_id']}-{compute_snapshot_digest(snapshot)}"
     destination = paths.review_snapshots_dir / f"{snapshot_id}.json"
     atomic_write_json(destination, snapshot)

@@ -3,9 +3,30 @@ from pathlib import Path
 
 import pytest
 
+from codex_self_evolution.config import build_paths
 from codex_self_evolution.hooks.stop_review import stop_review
+from codex_self_evolution.review.snapshot import build_review_snapshot
 from codex_self_evolution.review.runner import ReviewerParseFailure
 
+
+def test_review_snapshot_does_not_default_missing_provider_to_dummy(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    paths = build_paths(repo_root=repo, state_dir=state)
+
+    snapshot, _ = build_review_snapshot(
+        {
+            "thread_id": "thread-config-provider",
+            "turn_id": "turn-config-provider",
+            "cwd": str(repo),
+            "transcript": "real hook payload without explicit provider",
+        },
+        paths,
+    )
+
+    assert "reviewer_provider" not in snapshot
+    assert "reviewer_provider" not in snapshot["turn_snapshot"]["hook_payload_excerpt"]
 
 
 def test_stop_review_reconstructs_snapshot_and_writes_pending_artifact(tmp_path):
