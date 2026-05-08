@@ -36,6 +36,8 @@ def test_scheduler_plist_uses_local_cli_not_uvx(tmp_path, monkeypatch):
         "scan",
         "--backend",
         "agent:pi",
+        "--max-runs-per-project",
+        "3",
     ]
     assert str(fake_bin) in plist["EnvironmentVariables"]["PATH"].split(os.pathsep)
     assert "uvx" not in json.dumps(plist)

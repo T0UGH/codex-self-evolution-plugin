@@ -1,6 +1,6 @@
 {
   "name": "codex-self-evolution",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "description": "Scheduled self-evolution loop with stable background memory, provider-backed stop review, explicit suggestion states, launchd-style compiler preflight, focused recall, managed skills, and per-profile api_key_env so multiple anthropic-style providers can coexist.",
   "author": {
     "name": "T0UGH",
@@ -27,7 +27,7 @@
     },
     {
       "name": "scan",
-      "command": "codex-self-evolution scan --backend agent:pi"
+      "command": "codex-self-evolution scan --backend agent:pi --max-runs-per-project 3"
     },
     {
       "name": "status",
@@ -45,7 +45,7 @@
   "hooks": "./.codex-plugin/hooks.json",
   "scheduler": {
     "recommended": "launchd",
-    "scan_command": "codex-self-evolution scan --backend agent:pi",
+    "scan_command": "codex-self-evolution scan --backend agent:pi --max-runs-per-project 3",
     "preflight_command": "codex-self-evolution compile-preflight --state-dir \"$CODEX_STATE_DIR\"",
     "compile_command": "codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend agent:pi"
   }

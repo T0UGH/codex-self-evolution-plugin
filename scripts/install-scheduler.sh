@@ -23,7 +23,8 @@ LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 LABEL="com.codex-self-evolution.preflight"
 PLIST_PATH="$LAUNCH_AGENTS_DIR/$LABEL.plist"
 ENTRY_POINT="${CSEP_ENTRY_POINT:-codex-self-evolution}"
-SCAN_ARGS=("scan" "--backend" "agent:pi")
+SCAN_MAX_RUNS_PER_PROJECT="${CSEP_SCAN_MAX_RUNS_PER_PROJECT:-3}"
+SCAN_ARGS=("scan" "--backend" "agent:pi" "--max-runs-per-project" "$SCAN_MAX_RUNS_PER_PROJECT")
 # Default: drain every 5 minutes. Matches the old hand-edited plist and is
 # a reasonable tradeoff — compile itself takes seconds to minutes, and
 # suggestions sitting in pending/ cost nothing until they're compiled.
@@ -92,6 +93,8 @@ cat > "$PLIST_PATH" <<PLIST
         <string>${SCAN_ARGS[0]}</string>
         <string>${SCAN_ARGS[1]}</string>
         <string>${SCAN_ARGS[2]}</string>
+        <string>${SCAN_ARGS[3]}</string>
+        <string>${SCAN_ARGS[4]}</string>
     </array>
 
     <key>EnvironmentVariables</key>
@@ -131,6 +134,7 @@ echo ""
 echo "Scheduler installed:"
 echo "  label:    $LABEL"
 echo "  interval: ${INTERVAL_SECONDS}s (override via CSEP_SCHEDULER_INTERVAL)"
+echo "  max runs: ${SCAN_MAX_RUNS_PER_PROJECT}/project (override via CSEP_SCAN_MAX_RUNS_PER_PROJECT)"
 echo "  command:  $ENTRY_POINT_BIN ${SCAN_ARGS[*]}"
 echo "  plist:    $PLIST_PATH"
 echo "  logs:     $LOG_DIR/launchd.{stdout,stderr}.log"

@@ -314,6 +314,76 @@ def test_run_compile_limits_pi_edit_mode_to_single_envelope(tmp_path, monkeypatc
     assert len(list((bucket / "suggestions" / "pending").glob("*.json"))) == 1
 
 
+def test_scan_drains_multiple_pi_edit_runs_without_batching_them(tmp_path, monkeypatch):
+    bucket = _seed_bucket_with_pending(tmp_path, "-fake-pi-edit-drain")
+    for index in range(2, 5):
+        payload = bucket / f"test-payload-{index}.json"
+        payload.write_text(
+            json.dumps({
+                "thread_id": f"thread-pi-edit-drain-{index}",
+                "turn_id": f"turn-{index}",
+                "cwd": "/tmp/fake-pi-edit-drain",
+                "transcript": f"seeded item {index}",
+                "thread_read_output": "ctx",
+                "reviewer_provider": "dummy",
+                "provider_stub_response": {
+                    "memory_updates": [
+                        {
+                            "summary": f"Pi drain fact {index}",
+                            "details": {"content": f"Content {index}.", "scope": "user"},
+                        },
+                    ],
+                },
+            }),
+            encoding="utf-8",
+        )
+        stop_review(hook_payload=payload, state_dir=bucket)
+
+    seen_batch_sizes = []
+
+    class DrainBackend:
+        def compile(self, batch, context, options):
+            seen_batch_sizes.append(len(batch))
+            suggestion = batch[0].suggestions[0]
+            return backends.CompileArtifacts(
+                memory_records={"user": [{"summary": suggestion.summary, "content": suggestion.details["content"]}], "global": []},
+                recall_records=[],
+                compiled_skills=[],
+                manifest_entries=[],
+                discarded_items=[],
+                backend_name="agent:pi",
+                compiler_observability={
+                    "backend": "agent:pi",
+                    "provider": "kimi",
+                    "model": "kimi-k2.6",
+                    "mode": "edit",
+                    "duration_ms": 10,
+                    "attempts": 1,
+                },
+            )
+
+    monkeypatch.setattr(engine, "get_backend", lambda _: DrainBackend())
+
+    result = scan_all_projects(
+        home=tmp_path,
+        backend="agent:pi",
+        batch_size=5,
+        compile_options={"pi_mode": "edit"},
+        max_runs_per_project=3,
+    )
+
+    entry = result["results"][0]
+    assert entry["processed_count"] == 3
+    assert len(entry["runs"]) == 3
+    assert seen_batch_sizes == [1, 1, 1]
+    assert entry["drain_limit_reached"] is True
+    assert entry["terminal_preflight_status"] == "run"
+    assert len(list((bucket / "suggestions" / "pending").glob("*.json"))) == 1
+    assert result["aggregate"]["total_compile_runs"] == 3
+    assert result["aggregate"]["total_agent_attempts"] == 3
+    assert result["aggregate"]["total_compile_duration_ms"] == 30
+
+
 def test_run_compile_splits_failed_agent_batch_and_salvages_items(tmp_path, monkeypatch):
     bucket = _seed_bucket_with_pending(tmp_path, "-fake-agent-split")
     second_payload = bucket / "test-payload-2.json"
@@ -473,3 +543,10 @@ def test_cli_scan_default_backend_is_agent_pi():
     parser = cli.build_parser()
     args = parser.parse_args(["scan"])
     assert args.backend == "agent:pi"
+    assert args.max_runs_per_project == 3
+
+
+def test_cli_scan_accepts_max_runs_per_project():
+    parser = cli.build_parser()
+    args = parser.parse_args(["scan", "--max-runs-per-project", "5"])
+    assert args.max_runs_per_project == 5

@@ -163,11 +163,12 @@ csep recall "focused query" --format json
 ### 4. 手动跑一次 compile
 
 ```bash
-codex-self-evolution scan --backend agent:pi
+codex-self-evolution scan --backend agent:pi --max-runs-per-project 3
 ```
 
 生产默认使用 `agent:pi`。Pi 默认以 `edit` 模式直接编辑临时 assets workspace，
-再由本地校验与原子写入流程晋升到正式 memory/recall；如需回退旧协议，可把
+单次 compile 只处理一条 envelope；scan 会用 `--max-runs-per-project 3` 在每个
+bucket 连续 drain 几轮，避免 5 分钟定时造成积压。如需回退旧协议，可把
 `[compile.pi] mode = "json"`。`agent:opencode` 和 deterministic `script` 仍可用于对比或调试。
 
 ## 工作流
@@ -267,7 +268,7 @@ Compiler 会维护两份内容：
 | `codex-self-evolution stop-review --from-stdin` | Codex Stop hook 入口。 |
 | `codex-self-evolution compile-preflight` | 检查是否需要 compile，处理空队列 / 锁 / stale lock。 |
 | `codex-self-evolution compile --once` | 单次 compile。 |
-| `codex-self-evolution scan --backend agent:pi` | 扫描所有项目 bucket 并编译 pending suggestions。 |
+| `codex-self-evolution scan --backend agent:pi --max-runs-per-project 3` | 扫描所有项目 bucket，并在每个 bucket 内最多连续编译 3 轮 pending suggestions。 |
 | `codex-self-evolution eval-compiler --fixture tests/fixtures/compiler_replay/commerce_membership_api.json` | 回放编译质量样本，输出 pass/fail 和 memory/recall/discard 指标。 |
 | `codex-self-evolution recall-trigger --query "..."` | 触发一次聚焦 recall。 |
 | `codex-self-evolution status` | 输出只读诊断快照。 |
@@ -277,7 +278,7 @@ Compiler 会维护两份内容：
 
 ```bash
 codex-self-evolution status | python3 -m json.tool
-codex-self-evolution scan --backend agent:pi
+codex-self-evolution scan --backend agent:pi --max-runs-per-project 3
 csep recall "这个 repo 的上线检查流程"
 ```
 

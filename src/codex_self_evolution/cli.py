@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .compiler.engine import preflight_compile, run_compile, scan_all_projects
 from .compiler.replay import evaluate_compiler_fixture
+from .config import DEFAULT_SCAN_MAX_RUNS_PER_PROJECT
 from .config_file import (
     ConfigError,
     LoadResult,
@@ -105,6 +106,14 @@ def build_parser() -> argparse.ArgumentParser:
     # unattended. Pi + Kimi is the production default; script stays available
     # for deterministic tests and local debugging.
     scan_parser.add_argument("--backend", default="agent:pi")
+    scan_parser.add_argument(
+        "--max-runs-per-project",
+        type=int,
+        default=DEFAULT_SCAN_MAX_RUNS_PER_PROJECT,
+        help="Maximum compile attempts per project bucket in one scan. Pi edit "
+             "mode still compiles one envelope per attempt; this drains backlog "
+             "without merging unrelated suggestions into one agent edit.",
+    )
 
     config_parser = subparsers.add_parser(
         "config",
@@ -418,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
                 backend=args.backend,
                 allow_fallback=allow_fallback,
                 compile_options=compile_options,
+                max_runs_per_project=args.max_runs_per_project,
             )
         elif args.command == "status":
             result = collect_status(home=args.home)

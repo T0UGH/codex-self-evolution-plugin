@@ -6,6 +6,7 @@ from typing import Any
 from ..config import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_LOCK_STALE_SECONDS,
+    DEFAULT_SCAN_MAX_RUNS_PER_PROJECT,
     PLUGIN_OWNER,
     PROJECTS_SUBDIR,
     build_paths,
@@ -510,6 +511,7 @@ def scan_all_projects(
     allow_fallback: bool = True,
     stale_after_seconds: int = DEFAULT_LOCK_STALE_SECONDS,
     compile_options: dict[str, Any] | None = None,
+    max_runs_per_project: int = DEFAULT_SCAN_MAX_RUNS_PER_PROJECT,
 ) -> dict:
     """Run preflight + compile on every per-project bucket under ``<home>/projects/``.
 
@@ -556,6 +558,7 @@ def scan_all_projects(
     projects_dir = home_dir / PROJECTS_SUBDIR
     counts = {"run": 0, "skipped": 0, "failed": 0}
     results: list[dict] = []
+    max_runs = max(1, int(max_runs_per_project))
 
     if not projects_dir.is_dir():
         # First ever launchd run on a fresh install: nothing to do, surface
@@ -580,11 +583,15 @@ def scan_all_projects(
             "project": bucket_path.name,
             "state_dir": str(bucket_path),
             "preflight_status": None,
+            "terminal_preflight_status": None,
             "compile_status": "not_run",
             "processed_count": 0,
             "backend": None,
             "receipt_path": None,
             "error": None,
+            "runs": [],
+            "max_runs_per_project": max_runs,
+            "drain_limit_reached": False,
         }
         try:
             preflight = preflight_compile(
@@ -594,27 +601,47 @@ def scan_all_projects(
             entry["preflight_status"] = preflight["status"]
             if preflight["status"] != "run":
                 entry["compile_status"] = preflight["status"]
+                entry["terminal_preflight_status"] = preflight["status"]
                 counts["skipped"] += 1
             else:
-                compile_result = run_compile(
-                    state_dir=bucket_path,
-                    batch_size=batch_size,
-                    backend=backend,
-                    allow_fallback=allow_fallback,
-                    compile_options=compile_options,
-                )
-                entry["compile_status"] = compile_result["status"]
-                entry["processed_count"] = compile_result.get("processed_count", 0)
-                entry["backend"] = compile_result.get("backend", backend)
-                entry["receipt_path"] = compile_result.get("receipt_path")
-                entry["fallback_backend"] = compile_result.get("fallback_backend")
-                entry["memory_action_stats"] = compile_result.get("memory_action_stats", {})
-                entry["discarded_count"] = compile_result.get("discarded_count", 0)
-                entry["compiler_observability"] = compile_result.get("compiler_observability", {})
-                if compile_result["status"] == "success":
-                    counts["run"] += 1
-                elif compile_result["status"] == "error":
+                successful_runs = 0
+                while successful_runs < max_runs:
+                    compile_result = run_compile(
+                        state_dir=bucket_path,
+                        batch_size=batch_size,
+                        backend=backend,
+                        allow_fallback=allow_fallback,
+                        compile_options=compile_options,
+                    )
+                    _record_scan_compile_result(entry, compile_result, default_backend=backend)
+
+                    status = compile_result["status"]
+                    if status != "success":
+                        entry["terminal_preflight_status"] = status
+                        break
+
+                    successful_runs += 1
+                    if successful_runs >= max_runs:
+                        terminal_preflight = preflight_compile(
+                            state_dir=bucket_path,
+                            stale_after_seconds=stale_after_seconds,
+                        )
+                        entry["terminal_preflight_status"] = terminal_preflight["status"]
+                        entry["drain_limit_reached"] = terminal_preflight["status"] == "run"
+                        break
+
+                    next_preflight = preflight_compile(
+                        state_dir=bucket_path,
+                        stale_after_seconds=stale_after_seconds,
+                    )
+                    entry["terminal_preflight_status"] = next_preflight["status"]
+                    if next_preflight["status"] != "run":
+                        break
+
+                if any(run.get("status") == "error" for run in entry["runs"]):
                     counts["failed"] += 1
+                elif any(run.get("status") == "success" for run in entry["runs"]):
+                    counts["run"] += 1
                 else:
                     # Non-success but non-error (e.g. raced another runner and
                     # got skip_locked mid-run) still counts as skipped.
@@ -636,6 +663,73 @@ def scan_all_projects(
     }
 
 
+def _record_scan_compile_result(entry: dict[str, Any], compile_result: dict[str, Any], *, default_backend: str) -> None:
+    run_entry = {
+        "status": compile_result.get("status"),
+        "processed_count": int(compile_result.get("processed_count", 0) or 0),
+        "backend": compile_result.get("backend", default_backend),
+        "fallback_backend": compile_result.get("fallback_backend"),
+        "receipt_path": compile_result.get("receipt_path"),
+        "memory_action_stats": compile_result.get("memory_action_stats", {}),
+        "discarded_count": int(compile_result.get("discarded_count", 0) or 0),
+        "compiler_observability": compile_result.get("compiler_observability", {}),
+    }
+    if compile_result.get("error"):
+        run_entry["error"] = compile_result.get("error")
+
+    entry["runs"].append(run_entry)
+    entry["compile_status"] = run_entry["status"]
+    entry["processed_count"] += run_entry["processed_count"]
+    entry["backend"] = run_entry["backend"]
+    entry["receipt_path"] = run_entry["receipt_path"]
+    if run_entry["fallback_backend"]:
+        entry["fallback_backend"] = run_entry["fallback_backend"]
+    if run_entry.get("error"):
+        entry["error"] = run_entry["error"]
+    entry["memory_action_stats"] = _merge_memory_action_stats(
+        entry.get("memory_action_stats", {}),
+        run_entry["memory_action_stats"],
+    )
+    entry["discarded_count"] = int(entry.get("discarded_count", 0) or 0) + run_entry["discarded_count"]
+    entry["compiler_observability"] = _summarize_scan_observability(entry["runs"])
+
+
+def _merge_memory_action_stats(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    if not base and not update:
+        return {}
+    merged = {
+        "total": int((base or {}).get("total", 0) or 0) + int((update or {}).get("total", 0) or 0),
+        "by_action": {"add": 0, "replace": 0, "remove": 0},
+        "by_scope": {"user": 0, "global": 0},
+    }
+    for source in (base or {}, update or {}):
+        for key, value in (source.get("by_action") or {}).items():
+            if key in merged["by_action"]:
+                merged["by_action"][key] += int(value or 0)
+        for key, value in (source.get("by_scope") or {}).items():
+            if key in merged["by_scope"]:
+                merged["by_scope"][key] += int(value or 0)
+    if merged["total"] == 0:
+        return {}
+    return merged
+
+
+def _summarize_scan_observability(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    observations = [
+        run.get("compiler_observability")
+        for run in runs
+        if isinstance(run.get("compiler_observability"), dict) and run.get("compiler_observability")
+    ]
+    if not observations:
+        return {}
+    summary = dict(observations[-1])
+    summary["runs"] = observations
+    summary["run_count"] = len(observations)
+    summary["duration_ms"] = sum(int(obs.get("duration_ms", 0) or 0) for obs in observations)
+    summary["attempts"] = sum(int(obs.get("attempts", 0) or 0) for obs in observations)
+    return summary
+
+
 def _aggregate_scan_stats(results: list[dict]) -> dict[str, Any]:
     """Roll up per-bucket metrics into a single dict for plugin.log readers.
 
@@ -651,6 +745,8 @@ def _aggregate_scan_stats(results: list[dict]) -> dict[str, Any]:
     total_discarded = 0
     total_compile_duration_ms = 0
     total_agent_attempts = 0
+    total_compile_runs = 0
+    buckets_drain_limited = 0
     for entry in results:
         stats = entry.get("memory_action_stats") or {}
         if stats:
@@ -670,6 +766,9 @@ def _aggregate_scan_stats(results: list[dict]) -> dict[str, Any]:
             if isinstance(observability, dict):
                 total_compile_duration_ms += int(observability.get("duration_ms", 0) or 0)
                 total_agent_attempts += int(observability.get("attempts", 0) or 0)
+        total_compile_runs += len(entry.get("runs") or [])
+        if entry.get("drain_limit_reached"):
+            buckets_drain_limited += 1
     return {
         "buckets_processed": buckets_processed,
         "buckets_with_fallback": buckets_with_fallback,
@@ -679,4 +778,6 @@ def _aggregate_scan_stats(results: list[dict]) -> dict[str, Any]:
         "total_discarded": total_discarded,
         "total_compile_duration_ms": total_compile_duration_ms,
         "total_agent_attempts": total_agent_attempts,
+        "total_compile_runs": total_compile_runs,
+        "buckets_drain_limited": buckets_drain_limited,
     }

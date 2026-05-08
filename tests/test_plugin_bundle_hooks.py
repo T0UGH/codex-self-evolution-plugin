@@ -48,7 +48,7 @@ def test_plugin_manifest_commands_use_local_cli_not_uvx():
             'codex-self-evolution compile --once --state-dir "$CODEX_STATE_DIR" '
             "--backend agent:pi"
         ),
-        "scan": "codex-self-evolution scan --backend agent:pi",
+        "scan": "codex-self-evolution scan --backend agent:pi --max-runs-per-project 3",
         "status": "codex-self-evolution status",
         "recall": (
             'csep recall "$CODEX_RECALL_QUERY" --cwd "$CODEX_CWD" '
@@ -62,7 +62,7 @@ def test_plugin_manifest_commands_use_local_cli_not_uvx():
 
     scheduler = manifest["scheduler"]
     assert scheduler["scan_command"] == (
-        "codex-self-evolution scan --backend agent:pi"
+        "codex-self-evolution scan --backend agent:pi --max-runs-per-project 3"
     )
     assert scheduler["preflight_command"] == (
         'codex-self-evolution compile-preflight --state-dir "$CODEX_STATE_DIR"'
