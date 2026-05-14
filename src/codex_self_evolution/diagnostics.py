@@ -28,9 +28,12 @@ from pathlib import Path
 from typing import Any
 
 from .config import PROJECTS_SUBDIR, get_home_dir, is_archived_bucket
+from .managed_skills.publish import codex_skills_dir
+from .skill_synthesis.inventory import read_skills_inventory
 
 HOOK_MARKER = "codex-self-evolution-plugin managed"
 LAUNCHD_LABEL = "com.codex-self-evolution.preflight"
+SKILL_SYNTHESIS_LAUNCHD_LABEL = "com.codex-self-evolution.skill-synthesis"
 
 # Keys we recognize from .env.provider.example. Not exhaustive — other env
 # vars a user might add (custom MINIMAX_BASE_URL etc.) are reported as
@@ -66,6 +69,8 @@ def collect_status(
         "legacy_user_hooks": legacy_hooks,
         "plugin_hooks": _check_plugin_hook_bundle(),
         "scheduler": _check_scheduler(),
+        "skill_synthesis": _check_skill_synthesis(home_dir),
+        "skills": _check_skill_counts(),
         "env_provider": _check_env_provider(home_dir),
         "tools": _check_tools(),
         "buckets": _list_buckets(home_dir),
@@ -215,9 +220,15 @@ def _commands_for_hook_event(entries: Any) -> list[str]:
 
 
 def _check_scheduler() -> dict[str, Any]:
+    return _check_launchd_label(LAUNCHD_LABEL)
+
+
+def _check_launchd_label(label: str) -> dict[str, Any]:
     plist_path = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
+    if label != LAUNCHD_LABEL:
+        plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
     result: dict[str, Any] = {
-        "label": LAUNCHD_LABEL,
+        "label": label,
         "plist_path": str(plist_path),
         "plist_exists": plist_path.exists(),
         "loaded": False,
@@ -243,10 +254,42 @@ def _check_scheduler() -> dict[str, Any]:
     # "does our label appear", not about PID or status — launchd might have
     # our job loaded but not currently running (between ticks).
     for line in proc.stdout.splitlines():
-        if line.strip().endswith(LAUNCHD_LABEL):
+        if line.strip().endswith(label):
             result["loaded"] = True
             break
     return result
+
+
+def _check_skill_synthesis(home_dir: Path) -> dict[str, Any]:
+    root = home_dir / "skill_synthesis"
+    return {
+        "root": str(root),
+        "exists": root.exists(),
+        "scheduler": _check_launchd_label(SKILL_SYNTHESIS_LAUNCHD_LABEL),
+        "last_receipt": _read_skill_synthesis_receipt(root / "last_receipt.json"),
+    }
+
+
+def _check_skill_counts() -> dict[str, Any]:
+    root = codex_skills_dir()
+    inventory = read_skills_inventory(root)
+    synth = inventory["synth"]
+    legacy = [
+        item for item in inventory["non_synth"]
+        if Path(item["path"]).parent.name.startswith("csep-")
+    ]
+    return {
+        "skills_root": str(root),
+        "synthesized": {
+            "active": sum(1 for item in synth if not item.get("invalid_marker") and item.get("csep_status") != "retired"),
+            "invalid": sum(1 for item in synth if item.get("invalid_marker")),
+            "retired": sum(1 for item in synth if item.get("csep_status") == "retired"),
+        },
+        "compiler_legacy": {
+            "active": len(legacy),
+            "note": "legacy; compiler no longer creates or updates skills",
+        },
+    }
 
 
 # ---------- .env.provider key presence ----------------------------------
@@ -406,6 +449,39 @@ def _read_last_receipt(receipt_path: Path) -> dict[str, Any] | None:
         "skip_reason": data.get("skip_reason"),
         "memory_action_stats": data.get("memory_action_stats") or {},
         "compiler_observability": data.get("compiler_observability") or {},
+    }
+
+
+def _read_skill_synthesis_receipt(receipt_path: Path) -> dict[str, Any] | None:
+    if not receipt_path.is_file():
+        return None
+    try:
+        data = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    try:
+        mtime = receipt_path.stat().st_mtime
+        timestamp = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+    except OSError:
+        timestamp = None
+    return {
+        "path": str(receipt_path),
+        "timestamp": timestamp,
+        "status": data.get("status"),
+        "run_id": data.get("run_id"),
+        "mode": data.get("mode"),
+        "dry_run": data.get("dry_run"),
+        "evidence_count": data.get("evidence_count"),
+        "valid_count": len(data.get("valid") or []),
+        "invalid_count": len(data.get("invalid") or []),
+        "retired_count": len(data.get("retired") or []),
+        "mismatch": data.get("mismatch"),
+        "dry_run_leak": data.get("dry_run_leak"),
+        "result_missing": data.get("result_missing"),
+        "result_invalid": data.get("result_invalid"),
+        "error": data.get("error"),
     }
 
 
