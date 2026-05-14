@@ -97,6 +97,44 @@ def test_find_active_parent_job_ignores_stale_active_jobs(tmp_path: Path) -> Non
     assert find_active_parent_job("parent-1", home=tmp_path, stale_after_seconds=60)["job_id"] == created["job_id"]
 
 
+def test_find_active_parent_job_treats_naive_updated_at_as_active(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    created = create_job_from_payload(_payload(repo), home=tmp_path)
+    job_path = tmp_path / "session_reflection" / "jobs" / f"{created['job_id']}.json"
+    job = {
+        **json.loads(job_path.read_text(encoding="utf-8")),
+        "updated_at": utc_now().replace(microsecond=0, tzinfo=None).isoformat(),
+    }
+    atomic_write_json(job_path, job)
+
+    assert find_active_parent_job("parent-1", home=tmp_path)["job_id"] == created["job_id"]
+
+
+def test_find_active_parent_job_skips_newest_stale_and_returns_older_fresh_job(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    older = create_job_from_payload(_payload(repo), home=tmp_path)
+    newest = create_job_from_payload(_payload(repo), home=tmp_path)
+    jobs_dir = tmp_path / "session_reflection" / "jobs"
+    fresh_job = {
+        **json.loads((jobs_dir / f"{older['job_id']}.json").read_text(encoding="utf-8")),
+        "status": "running",
+        "updated_at": _timestamp(utc_now()),
+    }
+    stale_job = {
+        **json.loads((jobs_dir / f"{newest['job_id']}.json").read_text(encoding="utf-8")),
+        "status": "queued",
+        "updated_at": _timestamp(utc_now() - timedelta(seconds=61)),
+    }
+    atomic_write_json(jobs_dir / f"{older['job_id']}.json", fresh_job)
+    atomic_write_json(jobs_dir / f"{newest['job_id']}.json", stale_job)
+
+    found = find_active_parent_job("parent-1", home=tmp_path, stale_after_seconds=60)
+
+    assert found["job_id"] == older["job_id"]
+
+
 def test_create_job_from_payload_accepts_trigger_decision_fields(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
