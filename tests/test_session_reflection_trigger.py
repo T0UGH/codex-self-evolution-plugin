@@ -5,9 +5,11 @@ from pathlib import Path
 
 import pytest
 
+from codex_self_evolution.config_file import SessionReflectionTriggerConfig
 from codex_self_evolution.session_reflection.trigger import (
     TriggerLockBusy,
     append_decision,
+    evaluate_trigger_policy,
     load_trigger_state,
     reset_counters_after_job,
     session_trigger_lock,
@@ -28,6 +30,13 @@ def _payload(repo: Path, **overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
+
+
+def _append_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
+    """Append JSONL transcript rows using the Codex transcript shape."""
+    with path.open("a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def test_load_trigger_state_defaults(tmp_path: Path) -> None:
@@ -126,3 +135,307 @@ def test_reset_counters_after_job_uses_snapshot_subtraction(tmp_path: Path) -> N
     assert updated["last_memory_review_at"] == "2026-05-15T00:00:00Z"
     assert updated["last_skill_review_at"] is None
     assert updated["active_job_id"] is None
+
+
+def test_evaluate_trigger_archive_only_updates_counters_and_offset(tmp_path: Path) -> None:
+    """Archive-only decisions still persist incremental counters and offset."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    transcript = Path(str(payload["transcript_path"]))
+    _append_jsonl(
+        transcript,
+        [
+            {"type": "response_item", "payload": {"role": "user", "content": "hello"}},
+            {"type": "response_item", "payload": {"role": "assistant", "content": "done"}},
+        ],
+    )
+    cfg = SessionReflectionTriggerConfig(
+        memory_stop_interval=3,
+        memory_context_chars=16000,
+        skill_tool_call_interval=15,
+    )
+
+    result = evaluate_trigger_policy(payload, cfg, home=tmp_path)
+
+    assert result["status"] == "archive_only"
+    assert result["decision"]["skip_reason"] == "below_threshold"
+    assert result["state"]["stops_since_memory_review"] == 1
+    assert result["state"]["readable_chars_since_memory_review"] >= len("hellodone")
+    assert result["state"]["last_counted_byte_offset"] == transcript.stat().st_size
+
+
+def test_evaluate_trigger_memory_stop_interval_queues_memory(tmp_path: Path) -> None:
+    """Memory review queues when Stop interval reaches the configured threshold."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    paths = trigger_paths_for_payload(payload, home=tmp_path)
+    state = load_trigger_state(paths, session_id="parent-1")
+    state["stops_since_memory_review"] = 2
+    write_trigger_state(paths, state)
+
+    result = evaluate_trigger_policy(payload, SessionReflectionTriggerConfig(), home=tmp_path)
+
+    assert result["status"] == "queued"
+    assert result["decision"]["review_memory"] is True
+    assert result["decision"]["review_skills"] is False
+    assert result["decision"]["trigger_reasons"] == ["memory_stop_interval"]
+
+
+def test_evaluate_trigger_tool_calls_queue_skill(tmp_path: Path) -> None:
+    """Skill review queues when legacy tool_calls rows hit the threshold."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    transcript = Path(str(payload["transcript_path"]))
+    _append_jsonl(
+        transcript,
+        [
+            {
+                "type": "response_item",
+                "payload": {
+                    "role": "assistant",
+                    "tool_calls": [{"name": "exec_command", "arguments": {"cmd": "date"}}],
+                },
+            }
+        ],
+    )
+    paths = trigger_paths_for_payload(payload, home=tmp_path)
+    state = load_trigger_state(paths, session_id="parent-1")
+    state["tool_calls_since_skill_review"] = 14
+    write_trigger_state(paths, state)
+
+    result = evaluate_trigger_policy(payload, SessionReflectionTriggerConfig(), home=tmp_path)
+
+    assert result["status"] == "queued"
+    assert result["decision"]["review_skills"] is True
+    assert "skill_tool_call_interval" in result["decision"]["trigger_reasons"]
+
+
+def test_evaluate_trigger_function_call_rows_queue_skill(tmp_path: Path) -> None:
+    """Real Codex function_call transcript rows count as tool calls."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    transcript = Path(str(payload["transcript_path"]))
+    _append_jsonl(
+        transcript,
+        [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "functions.exec_command",
+                    "arguments": '{"cmd":"date"}',
+                },
+            }
+        ],
+    )
+    paths = trigger_paths_for_payload(payload, home=tmp_path)
+    state = load_trigger_state(paths, session_id="parent-1")
+    state["tool_calls_since_skill_review"] = 14
+    write_trigger_state(paths, state)
+
+    result = evaluate_trigger_policy(payload, SessionReflectionTriggerConfig(), home=tmp_path)
+
+    assert result["status"] == "queued"
+    assert result["state"]["tool_calls_since_skill_review"] == 15
+    assert result["decision"]["review_skills"] is True
+    assert result["decision"]["trigger_reasons"] == ["skill_tool_call_interval"]
+
+
+def test_evaluate_trigger_keyword_scans_only_user_message(tmp_path: Path) -> None:
+    """Assistant and tool text cannot trigger high-signal keywords."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    transcript = Path(str(payload["transcript_path"]))
+    _append_jsonl(
+        transcript,
+        [
+            {"type": "response_item", "payload": {"role": "assistant", "content": "memory skill"}},
+            {"type": "response_item", "payload": {"role": "tool", "content": "skill"}},
+            {"type": "response_item", "payload": {"role": "user", "content": "下次记住这个规则"}},
+        ],
+    )
+
+    result = evaluate_trigger_policy(payload, SessionReflectionTriggerConfig(), home=tmp_path)
+
+    assert result["status"] == "queued"
+    assert result["decision"]["review_memory"] is True
+    assert "high_signal_memory_keyword" in result["decision"]["trigger_reasons"]
+    assert "记住" in result["decision"]["matched_keywords"]
+    assert "matched_context_snippet" in result["decision"]
+
+
+def test_evaluate_trigger_skips_tool_output_readable_chars(tmp_path: Path) -> None:
+    """Function call outputs and tool role rows do not count full output text."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    transcript = Path(str(payload["transcript_path"]))
+    long_output = "test log line\n" * 2000
+    _append_jsonl(
+        transcript,
+        [
+            {"type": "response_item", "payload": {"role": "user", "content": "hello"}},
+            {
+                "type": "response_item",
+                "payload": {"type": "function_call_output", "output": long_output},
+            },
+            {"type": "response_item", "payload": {"role": "tool", "content": long_output}},
+        ],
+    )
+
+    result = evaluate_trigger_policy(payload, SessionReflectionTriggerConfig(), home=tmp_path)
+
+    assert result["status"] == "archive_only"
+    assert result["state"]["readable_chars_since_memory_review"] == len("hello")
+
+
+def test_evaluate_trigger_skips_bootstrap_user_keyword_content(tmp_path: Path) -> None:
+    """Bootstrap-style user context cannot trigger high-signal keyword scans."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    transcript = Path(str(payload["transcript_path"]))
+    _append_jsonl(
+        transcript,
+        [
+            {
+                "type": "response_item",
+                "payload": {
+                    "role": "user",
+                    "content": "# AGENTS.md instructions\n<INSTRUCTIONS>\n以后不要触发 memory\n</INSTRUCTIONS>",
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "role": "user",
+                    "content": "<environment_context>\n请沉淀 skill\n</environment_context>",
+                },
+            },
+        ],
+    )
+
+    result = evaluate_trigger_policy(payload, SessionReflectionTriggerConfig(), home=tmp_path)
+
+    assert result["status"] == "archive_only"
+    assert result["decision"]["matched_keywords"] == []
+    assert "high_signal_memory_keyword" not in result["decision"]["trigger_reasons"]
+    assert "high_signal_skill_keyword" not in result["decision"]["trigger_reasons"]
+
+
+def test_evaluate_trigger_long_normal_user_keyword_triggers(tmp_path: Path) -> None:
+    """Long normal user turns remain eligible for high-signal keyword scans."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    transcript = Path(str(payload["transcript_path"]))
+    _append_jsonl(
+        transcript,
+        [
+            {
+                "type": "response_item",
+                "payload": {"role": "user", "content": ("普通正文" * 2000) + "\n请记住这个偏好"},
+            },
+        ],
+    )
+
+    result = evaluate_trigger_policy(payload, SessionReflectionTriggerConfig(), home=tmp_path)
+
+    assert result["status"] == "queued"
+    assert "high_signal_memory_keyword" in result["decision"]["trigger_reasons"]
+    assert "记住" in result["decision"]["matched_keywords"]
+
+
+def test_evaluate_trigger_quoted_agents_marker_still_triggers(tmp_path: Path) -> None:
+    """Quoting bootstrap marker text inside a normal request does not suppress it."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    transcript = Path(str(payload["transcript_path"]))
+    _append_jsonl(
+        transcript,
+        [
+            {
+                "type": "response_item",
+                "payload": {
+                    "role": "user",
+                    "content": "我引用一下 '# AGENTS.md instructions' 这个标题；请记住这个偏好",
+                },
+            },
+        ],
+    )
+
+    result = evaluate_trigger_policy(payload, SessionReflectionTriggerConfig(), home=tmp_path)
+
+    assert result["status"] == "queued"
+    assert "high_signal_memory_keyword" in result["decision"]["trigger_reasons"]
+    assert "偏好" in result["decision"]["matched_keywords"]
+
+
+def test_evaluate_trigger_does_not_advance_past_trailing_malformed_json(tmp_path: Path) -> None:
+    """A partial trailing JSONL row remains available for the next delta scan."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    transcript = Path(str(payload["transcript_path"]))
+    valid_row = json.dumps(
+        {"type": "response_item", "payload": {"role": "user", "content": "hello"}},
+        ensure_ascii=False,
+    )
+    transcript.write_text(valid_row + "\n" + '{"type":"response_item"', encoding="utf-8")
+
+    result = evaluate_trigger_policy(payload, SessionReflectionTriggerConfig(), home=tmp_path)
+
+    assert result["status"] == "archive_only"
+    assert result["state"]["last_counted_byte_offset"] == len((valid_row + "\n").encode("utf-8"))
+    assert result["state"]["last_counted_byte_offset"] < transcript.stat().st_size
+
+
+def test_english_keyword_uses_word_boundary(tmp_path: Path) -> None:
+    """English keyword matching requires whole words and is case-insensitive."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    transcript = Path(str(payload["transcript_path"]))
+    _append_jsonl(
+        transcript,
+        [
+            {"type": "response_item", "payload": {"role": "user", "content": "this is unskilled text"}},
+        ],
+    )
+
+    result = evaluate_trigger_policy(payload, SessionReflectionTriggerConfig(), home=tmp_path)
+
+    assert result["status"] == "archive_only"
+    assert result["decision"]["matched_keywords"] == []
+
+
+def test_evaluate_trigger_active_job_defers_queue(tmp_path: Path) -> None:
+    """Active parent jobs defer new queueable trigger decisions."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    transcript = Path(str(payload["transcript_path"]))
+    _append_jsonl(
+        transcript,
+        [
+            {"type": "response_item", "payload": {"role": "user", "content": "请沉淀成 skill"}},
+        ],
+    )
+
+    result = evaluate_trigger_policy(
+        payload,
+        SessionReflectionTriggerConfig(),
+        home=tmp_path,
+        active_job={"job_id": "job-1"},
+    )
+
+    assert result["status"] == "deferred_active_job"
+    assert result["decision"]["skip_reason"] == "active_job_running"
+    assert result["decision"]["review_skills"] is True
+    assert result["state"]["active_job_id"] is None

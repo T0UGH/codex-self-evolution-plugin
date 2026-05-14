@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -12,6 +13,24 @@ from ..storage import atomic_write_json, load_json, utc_now
 from .paths import SessionReflectionTriggerPaths, build_session_reflection_trigger_paths
 
 DECISION_RETENTION = 200
+MEMORY_KEYWORDS = ["记住", "记录一下", "下次", "以后不要", "不要再", "规则", "约定", "偏好", "习惯", "memory"]
+SKILL_KEYWORDS = ["skill", "技能", "工作流", "workflow", "复用", "沉淀", "SOP", "runbook"]
+HANDOFF_KEYWORDS = ["交接", "handoff", "status", "收尾", "状态文档"]
+CORRECTION_KEYWORDS = ["不是这个意思", "你理解错了", "不要改代码", "别改代码", "恢复", "回退", "过度抽象"]
+ENGLISH_KEYWORDS = {"memory", "skill", "workflow", "sop", "runbook", "handoff", "status"}
+BOOTSTRAP_USER_MARKERS = (
+    "<environment_context>",
+    "<skills_instructions>",
+    "<plugins_instructions>",
+    "# AGENTS.md instructions",
+    "<INSTRUCTIONS>",
+)
+BOOTSTRAP_WRAPPER_PREFIXES = (
+    "# AGENTS.md instructions",
+    "<environment_context>",
+    "<skills_instructions>",
+    "<plugins_instructions>",
+)
 
 
 class TriggerLockBusy(RuntimeError):
@@ -154,3 +173,272 @@ def reset_counters_after_job(
     if updated.get("active_job_id") == job.get("job_id"):
         updated["active_job_id"] = None
     return updated
+
+
+def _extract_source(entry: dict[str, Any]) -> dict[str, Any]:
+    """Return the message-like source object from a transcript JSONL row."""
+    payload = entry.get("payload")
+    if entry.get("type") == "response_item" and isinstance(payload, dict):
+        return payload
+    return entry
+
+
+def _extract_text(value: Any) -> str:
+    """Extract readable text from common Codex transcript content shapes."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts)
+    if isinstance(value, dict):
+        text = value.get("text") or value.get("content") or value.get("message")
+        return text if isinstance(text, str) else ""
+    return ""
+
+
+def _message_text(source: dict[str, Any]) -> str:
+    """Return the first readable message text found in a source object."""
+    return (
+        _extract_text(source.get("content"))
+        or _extract_text(source.get("text"))
+        or _extract_text(source.get("message"))
+        or _extract_text(source.get("output"))
+    )
+
+
+def _tool_call_summary(source: dict[str, Any]) -> tuple[int, str]:
+    """Return tool-call count plus bounded readable summaries for accounting."""
+    if source.get("type") == "function_call":
+        name = source.get("name") or "tool"
+        args = source.get("arguments") or ""
+        args_text = json.dumps(args, ensure_ascii=False, sort_keys=True) if not isinstance(args, str) else args
+        return 1, f"{name}: {args_text[:300]}"
+    calls = source.get("tool_calls")
+    if not isinstance(calls, list):
+        return 0, ""
+    summaries: list[str] = []
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function") if isinstance(call.get("function"), dict) else {}
+        name = call.get("name") or function.get("name") or call.get("tool_name") or "tool"
+        args = call.get("arguments") or function.get("arguments") or ""
+        args_text = json.dumps(args, ensure_ascii=False, sort_keys=True) if not isinstance(args, str) else args
+        summaries.append(f"{name}: {args_text[:300]}")
+    return len(summaries), "\n".join(summaries)
+
+
+def _scan_keyword_group(text: str, keywords: list[str]) -> list[str]:
+    """Match Chinese keywords literally and English keywords as whole words."""
+    matched: list[str] = []
+    for keyword in keywords:
+        if keyword.lower() in ENGLISH_KEYWORDS:
+            if re.search(rf"\b{re.escape(keyword)}\b", text, flags=re.IGNORECASE):
+                matched.append(keyword)
+        elif keyword in text:
+            matched.append(keyword)
+    return matched
+
+
+def _event_uid(entry: dict[str, Any], source: dict[str, Any], fallback: str) -> str:
+    """Extract the newest event identifier from known transcript fields."""
+    for key in ("event_uid", "uid", "id", "message_id"):
+        value = source.get(key) or entry.get(key)
+        if value:
+            return str(value)
+    return fallback
+
+
+def _is_readable_message(source: dict[str, Any], role: str) -> bool:
+    """Return whether message text should count toward readable context."""
+    if source.get("type") == "function_call_output" or role == "tool":
+        return False
+    return True
+
+
+def _is_scannable_user_text(text: str) -> bool:
+    """Return whether user text looks like an actual user turn."""
+    stripped = text.lstrip()
+    if stripped.startswith(BOOTSTRAP_WRAPPER_PREFIXES):
+        return False
+    marker_count = sum(1 for marker in BOOTSTRAP_USER_MARKERS if marker in text)
+    return marker_count < 2
+
+
+def _read_transcript_delta(path: Path, offset: int) -> tuple[int, int, int, list[str], int, str]:
+    """Scan transcript rows after byte offset and return incremental counters."""
+    readable_chars = 0
+    tool_calls = 0
+    user_texts: list[str] = []
+    message_count = 0
+    last_uid = ""
+    with path.open("rb") as handle:
+        size = path.stat().st_size
+        if offset < 0 or offset > size:
+            offset = 0
+        handle.seek(offset)
+        for raw in handle:
+            row_start = handle.tell() - len(raw)
+            try:
+                line = raw.decode("utf-8", errors="replace").strip()
+                entry = json.loads(line)
+            except ValueError:
+                if not raw.endswith(b"\n"):
+                    return row_start, readable_chars, tool_calls, user_texts, message_count, last_uid
+                continue
+            if not isinstance(entry, dict):
+                continue
+            source = _extract_source(entry)
+            role = str(source.get("role") or "").lower()
+            text = _message_text(source)
+            calls_count, calls_summary = _tool_call_summary(source)
+
+            if text and _is_readable_message(source, role):
+                readable_chars += len(text)
+                message_count += 1
+                if role == "user" and _is_scannable_user_text(text):
+                    user_texts.append(text)
+            if calls_count:
+                tool_calls += calls_count
+                readable_chars += len(calls_summary)
+                message_count += 1
+            last_uid = _event_uid(entry, source, last_uid)
+        return handle.tell(), readable_chars, tool_calls, user_texts, message_count, last_uid
+
+
+def evaluate_trigger_policy(
+    payload: dict[str, Any],
+    config: Any,
+    *,
+    home: str | Path | None = None,
+    active_job: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Update trigger state from transcript delta and return the trigger decision."""
+    session_id = payload_session_id(payload)
+    paths = trigger_paths_for_payload(payload, home=home)
+    with session_trigger_lock(paths):
+        state = load_trigger_state(paths, session_id=session_id)
+        transcript_path = Path(str(payload.get("transcript_path") or payload.get("codex_transcript_path") or ""))
+        warnings: list[str] = []
+        new_offset = int(state.get("last_counted_byte_offset") or 0)
+        readable_delta = 0
+        tool_delta = 0
+        user_texts: list[str] = []
+        message_count_delta = 0
+        last_uid = str(state.get("last_counted_event_uid") or "")
+
+        if transcript_path.is_file():
+            new_offset, readable_delta, tool_delta, user_texts, message_count_delta, delta_last_uid = _read_transcript_delta(
+                transcript_path,
+                int(state.get("last_counted_byte_offset") or 0),
+            )
+            last_uid = delta_last_uid or last_uid
+        else:
+            warnings.append("transcript_unreadable")
+
+        state["stops_since_memory_review"] = int(state.get("stops_since_memory_review") or 0) + 1
+        state["readable_chars_since_memory_review"] = (
+            int(state.get("readable_chars_since_memory_review") or 0) + readable_delta
+        )
+        state["tool_calls_since_skill_review"] = int(state.get("tool_calls_since_skill_review") or 0) + tool_delta
+        state["last_counted_byte_offset"] = new_offset
+        state["last_counted_message_index"] = int(state.get("last_counted_message_index") or 0) + message_count_delta
+        state["last_counted_event_uid"] = last_uid
+
+        matched_memory: list[str] = []
+        matched_skill: list[str] = []
+        matched_snippet = ""
+        if bool(getattr(config, "high_signal_immediate", True)):
+            for user_text in user_texts:
+                memory_hits = (
+                    _scan_keyword_group(user_text, MEMORY_KEYWORDS)
+                    + _scan_keyword_group(user_text, HANDOFF_KEYWORDS)
+                    + _scan_keyword_group(user_text, CORRECTION_KEYWORDS)
+                )
+                skill_hits = _scan_keyword_group(user_text, SKILL_KEYWORDS)
+                if memory_hits or skill_hits:
+                    matched_memory.extend(memory_hits)
+                    matched_skill.extend(skill_hits)
+                    if not matched_snippet:
+                        matched_snippet = user_text[:160]
+
+        reasons: list[str] = []
+        review_memory = False
+        review_skills = False
+        if int(state["stops_since_memory_review"]) >= int(getattr(config, "memory_stop_interval", 3)):
+            review_memory = True
+            reasons.append("memory_stop_interval")
+        if int(state["readable_chars_since_memory_review"]) >= int(getattr(config, "memory_context_chars", 16000)):
+            review_memory = True
+            reasons.append("memory_context_chars")
+        if int(state["tool_calls_since_skill_review"]) >= int(getattr(config, "skill_tool_call_interval", 15)):
+            review_skills = True
+            reasons.append("skill_tool_call_interval")
+        if matched_memory:
+            review_memory = True
+            reasons.append("high_signal_memory_keyword")
+        if matched_skill:
+            review_skills = True
+            reasons.append("high_signal_skill_keyword")
+
+        matched_keywords = sorted(set(matched_memory + matched_skill))
+        if active_job and (review_memory or review_skills):
+            decision = {
+                "schema_version": 1,
+                "status": "deferred_active_job",
+                "review_memory": review_memory,
+                "review_skills": review_skills,
+                "trigger_reasons": reasons,
+                "matched_keywords": matched_keywords,
+                "matched_context_snippet": matched_snippet,
+                "skip_reason": "active_job_running",
+                "warnings": warnings,
+                "counters": _counter_snapshot(state),
+            }
+        elif review_memory or review_skills:
+            decision = {
+                "schema_version": 1,
+                "status": "queued",
+                "review_memory": review_memory,
+                "review_skills": review_skills,
+                "trigger_reasons": reasons,
+                "matched_keywords": matched_keywords,
+                "matched_context_snippet": matched_snippet,
+                "warnings": warnings,
+                "counters": _counter_snapshot(state),
+            }
+            state["active_job_id"] = "pending"
+        else:
+            decision = {
+                "schema_version": 1,
+                "status": "archive_only",
+                "review_memory": False,
+                "review_skills": False,
+                "trigger_reasons": [],
+                "matched_keywords": [],
+                "matched_context_snippet": "",
+                "skip_reason": warnings[0] if warnings else "below_threshold",
+                "warnings": warnings,
+                "counters": _counter_snapshot(state),
+            }
+
+        state["last_decision"] = decision
+        write_trigger_state(paths, state)
+        append_decision(paths, decision)
+        return {"status": decision["status"], "decision": decision, "state": state, "paths": paths}
+
+
+def _counter_snapshot(state: dict[str, Any]) -> dict[str, int]:
+    """Return the counters a queued job should later subtract from state."""
+    return {
+        "stops_since_memory_review": int(state.get("stops_since_memory_review") or 0),
+        "readable_chars_since_memory_review": int(state.get("readable_chars_since_memory_review") or 0),
+        "tool_calls_since_skill_review": int(state.get("tool_calls_since_skill_review") or 0),
+    }
