@@ -116,6 +116,17 @@ def test_map_codex_stop_payload_skip_transcript_read(tmp_path):
     assert result["transcript"] == "last msg"
 
 
+def test_map_codex_stop_payload_preserves_thread_source_for_debug():
+    result = map_codex_stop_payload(_codex_payload(threadSource="memory_consolidation"))
+    assert result["codex_thread_source"] == "memory_consolidation"
+
+    result = map_codex_stop_payload(_codex_payload(thread_source="agent"))
+    assert result["codex_thread_source"] == "agent"
+
+    result = map_codex_stop_payload(_codex_payload(source="stop_hook"))
+    assert result["codex_thread_source"] == "stop_hook"
+
+
 def test_map_codex_stop_payload_handles_content_list_parts():
     codex_payload = {
         "session_id": "s1",
@@ -146,18 +157,25 @@ def test_map_codex_stop_payload_handles_content_list_parts():
     assert "part two" in result["transcript"]
 
 
-def test_cli_from_stdin_spawns_background_reviewer_and_returns_continue(monkeypatch, capsys, tmp_path):
+def test_cli_from_stdin_spawns_reflection_worker_and_returns_continue(monkeypatch, capsys, tmp_path):
     captured = {}
 
     class FakePopen:
         def __init__(self, argv, **kwargs):
             captured["argv"] = argv
             captured["kwargs"] = kwargs
-            # Surface the tempfile path so the test can inspect it.
-            idx = argv.index("--hook-payload") + 1
-            captured["payload_path"] = argv[idx]
 
     monkeypatch.setattr(cli.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(
+        cli,
+        "enqueue_reflection_from_payload",
+        lambda payload, *, home=None: {
+            "status": "queued",
+            "job_id": "job-1",
+            "payload": payload,
+            "home": home,
+        },
+    )
 
     codex_payload = _codex_payload(cwd=str(tmp_path), last_assistant_message="hi there")
     monkeypatch.setattr(sys, "stdin", StringIO(json.dumps(codex_payload)))
@@ -170,16 +188,10 @@ def test_cli_from_stdin_spawns_background_reviewer_and_returns_continue(monkeypa
 
     argv = captured["argv"]
     assert argv[0] == sys.executable
-    assert argv[1:4] == ["-m", "codex_self_evolution.cli", "stop-review"]
-    assert "--hook-payload" in argv
-    assert "--cleanup-payload" in argv
+    assert argv[1:4] == ["-m", "codex_self_evolution.cli", "session-reflect"]
+    assert argv[4:6] == ["--job", "job-1"]
     # Subprocess must be detached so it outlives the hook caller.
     assert captured["kwargs"].get("start_new_session") is True
-
-    # Tempfile must contain the mapped payload, not the raw Codex payload.
-    written = json.loads(open(captured["payload_path"], encoding="utf-8").read())
-    assert written["thread_id"] == "019da-session"
-    assert "reviewer_provider" not in written
 
 
 def test_cli_from_stdin_forwards_state_dir_to_child(monkeypatch, capsys):
@@ -189,13 +201,18 @@ def test_cli_from_stdin_forwards_state_dir_to_child(monkeypatch, capsys):
         "Popen",
         lambda argv, **_: captured_argv.extend(argv) or None,
     )
+    monkeypatch.setattr(
+        cli,
+        "enqueue_reflection_from_payload",
+        lambda payload, *, home=None: {"status": "queued", "job_id": "job-1"},
+    )
     monkeypatch.setattr(sys, "stdin", StringIO(json.dumps(_codex_payload())))
 
     cli.main(["stop-review", "--from-stdin", "--state-dir", "/explicit/state"])
     capsys.readouterr()  # drain stdout so pytest doesn't complain
 
-    assert "--state-dir" in captured_argv
-    assert captured_argv[captured_argv.index("--state-dir") + 1] == "/explicit/state"
+    assert "--home" in captured_argv
+    assert captured_argv[captured_argv.index("--home") + 1] == "/explicit/state"
 
 
 def test_cli_from_stdin_tolerates_malformed_json(monkeypatch, capsys):

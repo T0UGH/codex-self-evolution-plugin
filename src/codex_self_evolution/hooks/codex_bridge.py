@@ -57,8 +57,8 @@ def map_codex_stop_payload(
       ``CODEX_SELF_EVOLUTION_REVIEWER_PROVIDER`` env override. When omitted,
       the reviewer runner falls back to ``config.toml``'s active profile.
     - Extra Codex-only fields (``codex_transcript_path``, ``hook_event_name``,
-      ``model``, ``permission_mode``) preserved under passthrough keys so
-      downstream debugging has the full context.
+      ``model``, ``permission_mode``, ``codex_thread_source``) preserved under
+      passthrough keys so downstream debugging has the full context.
     """
     provider = reviewer_provider or os.environ.get(DEFAULT_PROVIDER_ENV)
 
@@ -81,6 +81,12 @@ def map_codex_stop_payload(
         "codex_hook_event": str(codex_payload.get("hook_event_name") or ""),
         "codex_model": str(codex_payload.get("model") or ""),
         "codex_permission_mode": str(codex_payload.get("permission_mode") or ""),
+        "codex_thread_source": str(
+            codex_payload.get("threadSource")
+            or codex_payload.get("thread_source")
+            or codex_payload.get("source")
+            or ""
+        ),
     }
     if provider:
         mapped["reviewer_provider"] = provider

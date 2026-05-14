@@ -6,9 +6,9 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 from .compiler.engine import preflight_compile, run_compile, scan_all_projects
 from .compiler.replay import evaluate_compiler_fixture
@@ -23,7 +23,6 @@ from .config_file import (
 from .config_file_template import CONFIG_TEMPLATE
 from .diagnostics import collect_status
 from .env_loader import hydrate_env_for_subprocesses
-from .hooks.codex_bridge import map_codex_stop_payload
 from .hooks.session_start import format_session_start_for_codex, session_start
 from .hooks.stop_review import stop_review
 from .logging_setup import configure as configure_logging, get_logger
@@ -34,6 +33,11 @@ from .recall.workflow import (
     render_focused_recall_markdown,
 )
 from .skill_synthesis.runner import run_skill_synthesis
+from .session_reflection.runner import (
+    enqueue_reflection_from_payload,
+    run_reflection_job,
+    session_reflection_status,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,15 +64,22 @@ def build_parser() -> argparse.ArgumentParser:
     stop_parser.add_argument(
         "--from-stdin",
         action="store_true",
-        help="Read a Codex native Stop hook JSON payload from stdin, map it to the "
-             "stop_review schema, fire a detached background reviewer, and emit "
-             '{"continue": true} so Codex unblocks within its hook timeout.',
+        help="Read a Codex native Stop hook JSON payload from stdin, enqueue a "
+             "session-reflection job, fire a detached reflection worker, and "
+             'emit {"continue": true} so Codex unblocks within its hook timeout.',
     )
     stop_parser.add_argument(
         "--cleanup-payload",
         action="store_true",
         help="Delete --hook-payload after the reviewer finishes (internal use by --from-stdin).",
     )
+
+    reflect_parser = subparsers.add_parser("session-reflect")
+    reflect_mode = reflect_parser.add_mutually_exclusive_group(required=True)
+    reflect_mode.add_argument("--hook-payload")
+    reflect_mode.add_argument("--job")
+    reflect_mode.add_argument("--status", action="store_true")
+    reflect_parser.add_argument("--home")
 
     compile_parser = subparsers.add_parser("compile")
     compile_parser.add_argument("--state-dir")
@@ -305,13 +316,11 @@ def _handle_stop_from_stdin(args: argparse.Namespace) -> int:
     stdout within its per-hook timeout (typically 5-10s). We:
 
     1. Read + parse the Codex payload from stdin.
-    2. Map it to the plugin's native stop_review schema.
-    3. Persist the mapped payload to a temp file.
-    4. Spawn a *detached* child process that re-invokes this CLI with
-       ``stop-review --hook-payload <tmp> --cleanup-payload`` so the reviewer
-       (which can take tens of seconds against a real provider) runs in the
-       background and cleans its own tempfile.
-    5. Print ``{"continue": true}`` and return immediately.
+    2. Enqueue a session-reflection job using the raw Codex payload.
+    3. Spawn a *detached* child process that re-invokes this CLI with
+       ``session-reflect --job <job_id>`` so app-server reflection runs in the
+       background.
+    4. Print ``{"continue": true}`` and return immediately.
 
     The child runs via ``sys.executable -m codex_self_evolution.cli`` to avoid
     any dependency on ``uvx`` / PATH at runtime — whatever interpreter is
@@ -328,36 +337,34 @@ def _handle_stop_from_stdin(args: argparse.Namespace) -> int:
         print(json.dumps({"continue": True, "warning": "codex payload is not an object"}))
         return 0
 
-    mapped = map_codex_stop_payload(codex_payload)
+    try:
+        queued = enqueue_reflection_from_payload(codex_payload, home=args.state_dir)
+    except Exception as exc:  # noqa: BLE001 — Stop hook must not block Codex.
+        print(json.dumps({"continue": True, "warning": f"failed to enqueue reflection job: {exc}"}))
+        return 0
 
-    with tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        prefix="codex-self-evolution-stop-",
-        suffix=".json",
-        delete=False,
-    ) as handle:
-        json.dump(mapped, handle)
-        tmp_path = handle.name
+    job_id = queued.get("job_id")
+    if queued.get("status") != "queued" or not job_id:
+        print(json.dumps({"continue": True}))
+        return 0
 
     child_argv = [
         sys.executable,
         "-m",
         "codex_self_evolution.cli",
-        "stop-review",
-        "--hook-payload",
-        tmp_path,
-        "--cleanup-payload",
+        "session-reflect",
+        "--job",
+        str(job_id),
     ]
     if args.state_dir:
-        child_argv.extend(["--state-dir", args.state_dir])
+        child_argv.extend(["--home", args.state_dir])
 
-    # Background reviewer can fail silently (network, provider, schema). Point
+    # Background reflection can fail silently (app server, provider, schema). Point
     # stderr/stdout at a per-pid log file so we can post-mortem without turning
     # the hook into a foreground blocker.
-    log_dir = Path(tempfile.gettempdir()) / "codex-self-evolution"
+    log_dir = Path("/tmp") / "codex-self-evolution"
     log_dir.mkdir(exist_ok=True)
-    log_path = log_dir / f"stop-review-{os.getpid()}-{int(os.times()[4])}.log"
+    log_path = log_dir / f"session-reflect-{os.getpid()}-{int(os.times()[4])}.log"
     try:
         log_handle = open(log_path, "w", encoding="utf-8")
     except OSError:
@@ -373,12 +380,32 @@ def _handle_stop_from_stdin(args: argparse.Namespace) -> int:
             close_fds=True,
         )
     except OSError as exc:
-        # The tempfile will leak, but that's preferable to failing the hook.
-        print(json.dumps({"continue": True, "warning": f"failed to spawn reviewer: {exc}"}))
+        if hasattr(log_handle, "close"):
+            log_handle.close()
+        print(json.dumps({"continue": True, "warning": f"failed to spawn reflection worker: {exc}"}))
         return 0
 
+    if hasattr(log_handle, "close"):
+        log_handle.close()
     print(json.dumps({"continue": True}))
     return 0
+
+
+def _handle_session_reflect(args: argparse.Namespace) -> dict[str, Any]:
+    """Dispatch the session-reflection CLI modes and return JSON-serializable output."""
+    if args.job:
+        return run_reflection_job(args.job, home=args.home)
+    if args.status:
+        return session_reflection_status(home=args.home)
+
+    payload_path = Path(args.hook_payload)
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("session-reflect --hook-payload must contain a JSON object")
+    queued = enqueue_reflection_from_payload(payload, home=args.home)
+    if queued.get("status") == "queued" and queued.get("job_id"):
+        return run_reflection_job(str(queued["job_id"]), home=args.home)
+    return queued
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -420,6 +447,8 @@ def main(argv: list[str] | None = None) -> int:
             if not args.hook_payload:
                 parser.error("stop-review requires --hook-payload or --from-stdin")
             result = _run_stop_review(args)
+        elif args.command == "session-reflect":
+            result = _handle_session_reflect(args)
         elif args.command == "compile":
             allow_fallback, compile_options = _compile_runtime_options()
             result = run_compile(
