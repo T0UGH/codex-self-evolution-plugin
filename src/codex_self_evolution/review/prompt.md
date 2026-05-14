@@ -4,7 +4,7 @@ You are a memory/skills curator. Review the completed turn and emit at most thre
 
 - `memory_updates`: durable facts worth carrying into future sessions
 - `recall_candidate`: context that future turns could retrieve on demand
-- `skill_action`: candidate managed skills to create, patch, edit, or retire
+- `skill_action`: deprecated; return an empty array for this field
 
 ## How to read the input
 
@@ -13,7 +13,7 @@ The input object gives you everything you need:
 - `turn_snapshot.transcript` / `thread_read_output`: what happened this turn
 - `comparison_materials.current_memory_md`: the MEMORY.md that is **already saved for this repo**. Treat this as authoritative — you must check it before proposing any `memory_updates` with `scope: "global"`.
 - `comparison_materials.current_user_md`: the USER.md that is already saved. Same rule for `scope: "user"`.
-- `comparison_materials.managed_skills_summary`: existing managed skills.
+- `comparison_materials.managed_skills_summary`: legacy managed skills.
 
 If a proposed entry says the same thing as an existing entry, you must either emit `action: "replace"` to update the existing one or skip it. **Do not emit a new `add` that duplicates existing material** — the pipeline's dedup only catches exact character-for-character matches, not semantic near-duplicates.
 
@@ -85,17 +85,9 @@ For `memory_updates`, `details` must additionally include:
 - `action`: `"add"` | `"replace"` | `"remove"` (optional, default `"add"`)
 - `old_summary`: required when `action` is `"replace"` or `"remove"`
 
-For `memory_updates` and `recall_candidate`, `details` may additionally include:
-
-- `skill_candidate`: optional object with `skill_id`, `title`, `description`, and `content` when the entry reveals a repeated workflow that should become a managed skill.
-
-For `skill_action`, `details` must additionally include:
-
-- `action`: one of `"create" | "patch" | "edit" | "retire"`
-- `skill_id`: short kebab-case id
-- `title`: non-empty string
-- `description`: concrete trigger description, preferably `This skill should be used when ...`
-- `content`: non-empty string
+`skill_action` is deprecated. Return an empty array for this field if the
+schema still asks for it. Reusable workflow synthesis is handled later by the
+periodic `skill-synthesize` command.
 
 ## Handling of non-conforming items
 

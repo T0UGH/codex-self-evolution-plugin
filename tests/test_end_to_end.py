@@ -113,18 +113,16 @@ def test_end_to_end_loop(tmp_path, monkeypatch):
         compile_options={"pi_mode": "json"},
     )
     assert compile_result["processed_count"] == 1
-    assert (state / "skills" / "managed" / "test-skill.md").exists()
-    skill_doc = tmp_path / "codex-skills" / "csep-test-skill" / "SKILL.md"
-    assert skill_doc.exists()
-    skill_doc_content = skill_doc.read_text(encoding="utf-8")
-    assert skill_doc_content.startswith("---\n")
-    assert "description:" in skill_doc_content
+    assert not (state / "skills" / "managed" / "test-skill.md").exists()
+    assert not (tmp_path / "codex-skills" / "csep-test-skill" / "SKILL.md").exists()
     assert (state / "memory" / "USER.md").exists()
     assert (state / "memory" / "MEMORY.md").exists()
     assert "Prefer concise summaries" in (state / "memory" / "USER.md").read_text(encoding="utf-8")
     assert "Run focused pytest before full suite" in (state / "memory" / "MEMORY.md").read_text(encoding="utf-8")
     receipt = json.loads((state / "compiler" / "last_receipt.json").read_text(encoding="utf-8"))
     assert receipt["fallback_backend"] is None
+    assert receipt["managed_skills"] == 0
+    assert any(item.get("reason") == "skill_action_disabled" for item in receipt["item_receipts"])
     assert (state / "suggestions" / "done").glob("*.json")
 
     trigger = evaluate_recall_trigger("remember focused pytest workflow")

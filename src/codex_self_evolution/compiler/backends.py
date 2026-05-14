@@ -95,6 +95,35 @@ class CompilerBackend(Protocol):
     def compile(self, batch: list[SuggestionEnvelope], context: dict[str, Any], options: dict[str, Any]) -> CompileArtifacts: ...
 
 
+def _discard_disabled_skill_actions(batch: list[SuggestionEnvelope]) -> list[dict[str, Any]]:
+    discarded: list[dict[str, Any]] = []
+    for envelope in batch:
+        for suggestion in envelope.suggestions:
+            if suggestion.family == "skill_action":
+                discarded.append({
+                    "summary": suggestion.summary,
+                    "reason": "skill_action_disabled",
+                    "detail": "compiler no longer produces skills; use skill-synthesize",
+                })
+    return discarded
+
+
+def _disable_compiler_skill_outputs(
+    parsed: dict[str, Any],
+    batch: list[SuggestionEnvelope],
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        **parsed,
+        "compiled_skills": [],
+        "manifest_entries": list(context.get("existing_manifest") or []),
+        "discarded_items": [
+            *list(parsed.get("discarded_items") or []),
+            *_discard_disabled_skill_actions(batch),
+        ],
+    }
+
+
 class AgentCompileError(RuntimeError):
     def __init__(
         self,
@@ -128,9 +157,9 @@ class ScriptCompilerBackend:
             thread_id=batch[0].thread_id if batch else "",
             existing_records=context.get("existing_recall_records"),
         )
-        compiled_skills, discarded_items = compile_skills(all_suggestions, existing_entries=existing_manifest)
-        discarded_items = [*recall_discarded, *discarded_items]
-        manifest_entries = build_manifest_entries(compiled_skills, context["skills_dir"], existing_entries=existing_manifest)
+        compiled_skills: list[dict[str, Any]] = []
+        discarded_items = [*recall_discarded, *_discard_disabled_skill_actions(batch)]
+        manifest_entries: list[SkillManifestEntry] = list(existing_manifest)
         return CompileArtifacts(
             memory_records=memory_records,
             recall_records=recall_records,
@@ -210,6 +239,7 @@ class AgentCompilerBackend:
                 last_reason = "agent_output_invalid"
                 last_detail = _truncate(str(exc))
                 continue
+            parsed = _disable_compiler_skill_outputs(parsed, batch, context)
             empty_output_reason = _agent_empty_output_reason(batch, context, parsed)
             if empty_output_reason:
                 last_reason = empty_output_reason
@@ -373,6 +403,7 @@ class PiAgentCompilerBackend(AgentCompilerBackend):
                     last_reason = "agent_output_invalid"
                     last_detail = _truncate(str(exc))
                     continue
+                parsed = _disable_compiler_skill_outputs(parsed, batch, context)
                 empty_output_reason = _agent_empty_output_reason(batch, context, parsed)
                 if empty_output_reason:
                     last_reason = empty_output_reason

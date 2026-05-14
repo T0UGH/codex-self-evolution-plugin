@@ -137,12 +137,8 @@ def test_agent_backend_returns_parsed_artifacts_on_success():
     assert artifacts.backend_name == "agent:opencode"
     assert artifacts.fallback_backend is None
     assert artifacts.memory_records["user"][0]["content"] == "merged user"
-    assert artifacts.compiled_skills[0]["skill_id"] == "alpha"
-    assert (
-        artifacts.compiled_skills[0]["description"]
-        == "This skill should be used when compiling alpha workflows."
-    )
-    assert artifacts.manifest_entries[0].skill_id == "alpha"
+    assert artifacts.compiled_skills == []
+    assert artifacts.manifest_entries == []
     assert artifacts.discarded_items == [{"reason": "duplicate"}]
     assert artifacts.compiler_observability["backend"] == "agent:opencode"
     assert artifacts.compiler_observability["input"]["suggestions"] == 1

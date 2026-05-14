@@ -337,7 +337,7 @@ def run_compile(
                 compiled_skills=artifacts.compiled_skills,
                 manifest_entries=artifacts.manifest_entries,
                 existing_entries=context["existing_manifest"],
-                publish_global_skills_enabled=True,
+                publish_global_skills_enabled=False,
             )
             item_receipts = []
             item_receipts.extend(noop_item_receipts)
@@ -457,7 +457,7 @@ def _compile_claimed_individually(
             compiled_skills=artifacts.compiled_skills,
             manifest_entries=artifacts.manifest_entries,
             existing_entries=context["existing_manifest"],
-            publish_global_skills_enabled=True,
+            publish_global_skills_enabled=False,
         )
         last_skill_publish = output_paths["skills"][2]
         compiler_observability = artifacts.compiler_observability or compiler_observability
