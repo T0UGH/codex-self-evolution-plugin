@@ -33,6 +33,7 @@ from .recall.workflow import (
     evaluate_session_recall,
     render_focused_recall_markdown,
 )
+from .skill_synthesis.runner import run_skill_synthesis
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -114,6 +115,16 @@ def build_parser() -> argparse.ArgumentParser:
              "mode still compiles one envelope per attempt; this drains backlog "
              "without merging unrelated suggestions into one agent edit.",
     )
+
+    synth_parser = subparsers.add_parser(
+        "skill-synthesize",
+        help="Run global synthesized skill generation from memory/recall/done suggestions.",
+    )
+    synth_parser.add_argument("--home")
+    synth_parser.add_argument("--mode", choices=("incremental", "full"))
+    synth_parser.add_argument("--lookback-hours", type=int)
+    synth_parser.add_argument("--lookback-days", type=int)
+    synth_parser.add_argument("--dry-run", action="store_true")
 
     config_parser = subparsers.add_parser(
         "config",
@@ -428,6 +439,14 @@ def main(argv: list[str] | None = None) -> int:
                 allow_fallback=allow_fallback,
                 compile_options=compile_options,
                 max_runs_per_project=args.max_runs_per_project,
+            )
+        elif args.command == "skill-synthesize":
+            result = run_skill_synthesis(
+                home=args.home,
+                mode=args.mode,
+                lookback_hours=args.lookback_hours,
+                lookback_days=args.lookback_days,
+                dry_run=args.dry_run,
             )
         elif args.command == "status":
             result = collect_status(home=args.home)
@@ -938,6 +957,18 @@ def _observability_extras(command: str | None, result: object) -> dict:
         if aggregate.get("buckets_processed", 0) > 0 or aggregate.get("total_memory_suggestions", 0) > 0:
             return {"aggregate": aggregate}
         return {}
+    if command == "skill-synthesize":
+        return {
+            "status": result.get("status"),
+            "mode": result.get("mode"),
+            "dry_run": result.get("dry_run"),
+            "evidence_count": result.get("evidence_count", 0),
+            "valid_count": len(result.get("valid") or []),
+            "invalid_count": len(result.get("invalid") or []),
+            "retired_count": len(result.get("retired") or []),
+            "mismatch": result.get("mismatch"),
+            "dry_run_leak": result.get("dry_run_leak"),
+        }
     if command == "stop-review":
         # The background reviewer is where MiniMax actually runs. Without
         # these fields you can't tell whether "0 memory_updates at compile
