@@ -214,18 +214,26 @@ def release_global_lock(
     """Release the global lock only if this owner still owns it."""
     path = global_lock_path(home=home)
     try:
-        raw = load_json(path)
-    except FileNotFoundError:
-        return False
-    except (OSError, ValueError):
-        return False
-    if not isinstance(raw, dict) or raw.get("owner_token") != owner_token:
+        guard = _global_lock_acquire_guard(path)
+    except ReflectionLockError:
         return False
     try:
-        path.unlink()
-    except FileNotFoundError:
+        with guard:
+            try:
+                raw = load_json(path)
+            except FileNotFoundError:
+                return False
+            except (OSError, ValueError):
+                return False
+            if not isinstance(raw, dict) or raw.get("owner_token") != owner_token:
+                return False
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                return False
+            return True
+    except ReflectionLockError:
         return False
-    return True
 
 
 def write_global_lock(*, home: str | Path | None = None) -> Path:

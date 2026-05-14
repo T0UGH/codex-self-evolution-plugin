@@ -144,6 +144,21 @@ def test_release_global_lock_requires_owner_token(tmp_path: Path) -> None:
     assert json.loads(global_lock_path(home=tmp_path).read_text(encoding="utf-8"))["owner_token"] == "other-owner"
 
 
+def test_release_global_lock_refuses_while_acquisition_guard_is_held(tmp_path: Path) -> None:
+    """Lock release cannot race with another acquisition replacing the lock."""
+    lock = acquire_global_lock(home=tmp_path)
+    path = global_lock_path(home=tmp_path)
+    guard_path = path.with_name(f"{path.name}.acquire")
+
+    with guard_path.open("a+", encoding="utf-8") as guard:
+        fcntl.flock(guard.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert release_global_lock(owner_token=lock["owner_token"], home=tmp_path) is False
+        fcntl.flock(guard.fileno(), fcntl.LOCK_UN)
+
+    assert json.loads(path.read_text(encoding="utf-8"))["owner_token"] == lock["owner_token"]
+    assert release_global_lock(owner_token=lock["owner_token"], home=tmp_path) is True
+
+
 def test_acquire_global_lock_refuses_while_acquisition_guard_is_held(tmp_path: Path) -> None:
     """Stale lock replacement is serialized by a separate acquisition guard."""
     path = global_lock_path(home=tmp_path)
