@@ -337,12 +337,15 @@ def test_config_to_dict_serializes_whole_tree(tmp_path: Path) -> None:
     # active_profile + profile_names).
     assert set(data.keys()) == {
         "schema_version", "active_profile", "profile_names",
-        "reviewer", "compile", "scheduler", "skill_synthesis", "log",
+        "reviewer", "compile", "scheduler", "skill_synthesis",
+        "session_reflection", "log",
     }
     assert "subprocess" in data["reviewer"]
     assert "opencode" in data["compile"]
     assert "pi" in data["compile"]
     assert "agent" in data["skill_synthesis"]
+    assert data["session_reflection"]["backend"] == "codex-app-server"
+    assert data["session_reflection"]["skill_prefix"] == "csep-reflect-"
 
 
 # ---- allowed providers list stays in sync ------------------------------
