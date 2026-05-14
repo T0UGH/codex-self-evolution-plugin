@@ -25,6 +25,8 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from .config import REFLECT_SKILL_PREFIX
+
 
 # ---- Dataclasses --------------------------------------------------------
 
@@ -107,6 +109,22 @@ class SkillSynthesisConfig:
 
 
 @dataclass
+class SessionReflectionConfig:
+    """Session-level reflection worker configuration."""
+
+    enabled: bool = True
+    backend: str = "codex-app-server"
+    model: str = "gpt-5.3-codex-spark"
+    ephemeral: bool = True
+    sandbox: str = "danger-full-access"
+    approval_policy: str = "never"
+    skill_prefix: str = REFLECT_SKILL_PREFIX
+    timeout_seconds: float = 900.0
+    max_concurrent_jobs: int = 1
+    replace_stop_reviewer: bool = True
+
+
+@dataclass
 class LogConfig:
     retention_days: int = 14
 
@@ -125,6 +143,7 @@ class PluginConfig:
     compile: CompileConfig = field(default_factory=CompileConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     skill_synthesis: SkillSynthesisConfig = field(default_factory=SkillSynthesisConfig)
+    session_reflection: SessionReflectionConfig = field(default_factory=SessionReflectionConfig)
     log: LogConfig = field(default_factory=LogConfig)
 
 
@@ -172,6 +191,9 @@ ALLOWED_RESPONSE_FORMATS = {"codex-events", "opencode-events", "raw-json"}
 ALLOWED_COMPILE_BACKENDS = {"script", "agent:opencode", "agent:pi"}
 ALLOWED_SKILL_SYNTHESIS_BACKENDS = {"agent:pi"}
 ALLOWED_SKILL_SYNTHESIS_MODES = {"incremental", "full"}
+ALLOWED_SESSION_REFLECTION_BACKENDS = {"codex-app-server"}
+ALLOWED_SESSION_REFLECTION_SANDBOXES = {"read-only", "workspace-write", "danger-full-access"}
+ALLOWED_SESSION_REFLECTION_APPROVAL_POLICIES = {"untrusted", "on-failure", "on-request", "never"}
 
 # Map new-style CODEX_SELF_EVOLUTION_* env vars to dotted config paths.
 _NEW_ENV_MAP: dict[str, str] = {
@@ -650,6 +672,127 @@ def load_config(
         if config.skill_synthesis.agent.timeout_seconds <= 0:
             warnings.append("skill_synthesis.agent.timeout_seconds must be positive")
 
+    # --- session_reflection ---
+    reflection_toml = raw_toml.get("session_reflection", {}) or {}
+    reflection_enabled = reflection_toml.get("enabled")
+    if isinstance(reflection_enabled, bool):
+        config.session_reflection.enabled = reflection_enabled
+        sources["session_reflection.enabled"] = "config.toml"
+    else:
+        sources["session_reflection.enabled"] = "default"
+
+    config.session_reflection.backend, sources["session_reflection.backend"] = _resolve(
+        field_path="session_reflection.backend",
+        new_env=None,
+        env_map=env_map,
+        toml_value=reflection_toml.get("backend"),
+        default=config.session_reflection.backend,
+    )
+    config.session_reflection.model, sources["session_reflection.model"] = _resolve(
+        field_path="session_reflection.model",
+        new_env=None,
+        env_map=env_map,
+        toml_value=reflection_toml.get("model"),
+        default=config.session_reflection.model,
+    )
+
+    reflection_ephemeral = reflection_toml.get("ephemeral")
+    if isinstance(reflection_ephemeral, bool):
+        config.session_reflection.ephemeral = reflection_ephemeral
+        sources["session_reflection.ephemeral"] = "config.toml"
+    else:
+        sources["session_reflection.ephemeral"] = "default"
+
+    config.session_reflection.sandbox, sources["session_reflection.sandbox"] = _resolve(
+        field_path="session_reflection.sandbox",
+        new_env=None,
+        env_map=env_map,
+        toml_value=reflection_toml.get("sandbox"),
+        default=config.session_reflection.sandbox,
+    )
+    config.session_reflection.approval_policy, sources["session_reflection.approval_policy"] = _resolve(
+        field_path="session_reflection.approval_policy",
+        new_env=None,
+        env_map=env_map,
+        toml_value=reflection_toml.get("approval_policy"),
+        default=config.session_reflection.approval_policy,
+    )
+    config.session_reflection.skill_prefix, sources["session_reflection.skill_prefix"] = _resolve(
+        field_path="session_reflection.skill_prefix",
+        new_env=None,
+        env_map=env_map,
+        toml_value=reflection_toml.get("skill_prefix"),
+        default=config.session_reflection.skill_prefix,
+    )
+    config.session_reflection.timeout_seconds, sources["session_reflection.timeout_seconds"] = _resolve_number(
+        "session_reflection.timeout_seconds",
+        new_env=None,
+        env_map=env_map,
+        toml_value=reflection_toml.get("timeout_seconds"),
+        default=config.session_reflection.timeout_seconds,
+        cast=float,
+    )
+    config.session_reflection.max_concurrent_jobs, sources["session_reflection.max_concurrent_jobs"] = _resolve_number(
+        "session_reflection.max_concurrent_jobs",
+        new_env=None,
+        env_map=env_map,
+        toml_value=reflection_toml.get("max_concurrent_jobs"),
+        default=config.session_reflection.max_concurrent_jobs,
+        cast=int,
+    )
+
+    replace_stop_reviewer = reflection_toml.get("replace_stop_reviewer")
+    if isinstance(replace_stop_reviewer, bool):
+        config.session_reflection.replace_stop_reviewer = replace_stop_reviewer
+        sources["session_reflection.replace_stop_reviewer"] = "config.toml"
+    else:
+        sources["session_reflection.replace_stop_reviewer"] = "default"
+
+    if (
+        "timeout_seconds" in reflection_toml
+        and sources["session_reflection.timeout_seconds"] == "default"
+    ):
+        warnings.append("session_reflection.timeout_seconds must be numeric")
+    if (
+        "max_concurrent_jobs" in reflection_toml
+        and sources["session_reflection.max_concurrent_jobs"] == "default"
+    ):
+        warnings.append("session_reflection.max_concurrent_jobs must be numeric")
+    if config.session_reflection.backend not in ALLOWED_SESSION_REFLECTION_BACKENDS:
+        warnings.append(
+            "session_reflection.backend must be codex-app-server in v1; "
+            f"got {config.session_reflection.backend!r}"
+        )
+    if config.session_reflection.sandbox not in ALLOWED_SESSION_REFLECTION_SANDBOXES:
+        warnings.append(
+            "session_reflection.sandbox must be one of "
+            f"{sorted(ALLOWED_SESSION_REFLECTION_SANDBOXES)!r}; "
+            f"got {config.session_reflection.sandbox!r}"
+        )
+    if config.session_reflection.approval_policy not in ALLOWED_SESSION_REFLECTION_APPROVAL_POLICIES:
+        warnings.append(
+            "session_reflection.approval_policy must be one of "
+            f"{sorted(ALLOWED_SESSION_REFLECTION_APPROVAL_POLICIES)!r}; "
+            f"got {config.session_reflection.approval_policy!r}"
+        )
+    if (
+        "skill_prefix" in reflection_toml
+        and not str(reflection_toml.get("skill_prefix")).startswith(REFLECT_SKILL_PREFIX)
+    ):
+        warnings.append(
+            "session_reflection.skill_prefix must start with "
+            f"{REFLECT_SKILL_PREFIX!r}; got {reflection_toml.get('skill_prefix')!r}"
+        )
+    elif not str(config.session_reflection.skill_prefix).startswith(REFLECT_SKILL_PREFIX):
+        warnings.append(
+            "session_reflection.skill_prefix must start with "
+            f"{REFLECT_SKILL_PREFIX!r}; got {config.session_reflection.skill_prefix!r}"
+        )
+    if config.session_reflection.timeout_seconds <= 0:
+        warnings.append("session_reflection.timeout_seconds must be positive")
+    if config.session_reflection.max_concurrent_jobs <= 0:
+        warnings.append("session_reflection.max_concurrent_jobs must be positive")
+
     # --- log ---
     log_toml = raw_toml.get("log", {}) or {}
     config.log.retention_days, sources["log.retention_days"] = _resolve_number(
@@ -810,6 +953,12 @@ _RECOGNIZED_PATHS: frozenset[str] = frozenset([
     "skill_synthesis.agent", "skill_synthesis.agent.backend",
     "skill_synthesis.agent.provider", "skill_synthesis.agent.model",
     "skill_synthesis.agent.timeout_seconds",
+    "session_reflection", "session_reflection.enabled",
+    "session_reflection.backend", "session_reflection.model",
+    "session_reflection.ephemeral", "session_reflection.sandbox",
+    "session_reflection.approval_policy", "session_reflection.skill_prefix",
+    "session_reflection.timeout_seconds", "session_reflection.max_concurrent_jobs",
+    "session_reflection.replace_stop_reviewer",
     "log", "log.retention_days",
 ])
 

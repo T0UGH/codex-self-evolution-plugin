@@ -149,6 +149,23 @@ timeout_seconds = 1800
 
 
 # ===========================================================================
+# [session_reflection] — reflect completed sessions through Codex app server
+# ===========================================================================
+
+[session_reflection]
+enabled = true
+backend = "codex-app-server"
+model = "gpt-5.3-codex-spark"
+ephemeral = true
+sandbox = "danger-full-access"
+approval_policy = "never"
+skill_prefix = "csep-reflect-"
+timeout_seconds = 900
+max_concurrent_jobs = 1
+replace_stop_reviewer = true
+
+
+# ===========================================================================
 # [log] — plugin.log rotation
 # ===========================================================================
 

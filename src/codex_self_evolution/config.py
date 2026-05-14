@@ -25,6 +25,8 @@ PLUGIN_OWNER = "codex-self-evolution-plugin"
 MANAGED_SKILLS_DIRNAME = "managed"
 SKILL_SYNTHESIS_SUBDIR = "skill_synthesis"
 SYNTH_SKILL_PREFIX = "csep-synth-"
+SESSION_REFLECTION_SUBDIR = "session_reflection"
+REFLECT_SKILL_PREFIX = "csep-reflect-"
 
 # Where per-project state (suggestions, memory, recall, review) lives by default.
 # Mirrors Claude Code's `~/.claude/projects/<mangled-path>/` convention so each
