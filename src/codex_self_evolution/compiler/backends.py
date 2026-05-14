@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from ..managed_skills.manifest import dump_manifest, load_manifest
-from ..schemas import SkillManifestEntry, SuggestionEnvelope
+from ..schemas import RecallRecord, SchemaError, SkillManifestEntry, SuggestionEnvelope
 from ..storage import read_text_if_exists
 from .agent_io import (
     AgentResponseError,
@@ -368,7 +368,7 @@ class PiAgentCompilerBackend(AgentCompilerBackend):
                     last_detail = _truncate(str(exc))
                     continue
                 try:
-                    parsed = _load_pi_edit_workspace_artifacts(workspace)
+                    parsed = _load_pi_edit_workspace_artifacts(workspace, context)
                 except AgentResponseError as exc:
                     last_reason = "agent_output_invalid"
                     last_detail = _truncate(str(exc))
@@ -686,9 +686,11 @@ def _prepare_pi_edit_workspace(workspace: Path, payload: dict[str, Any], context
     return payload_path
 
 
-def _load_pi_edit_workspace_artifacts(workspace: Path) -> dict[str, Any]:
+def _load_pi_edit_workspace_artifacts(workspace: Path, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = context or {}
     assets_dir = workspace / "assets"
     result_path = workspace / "compiler" / "result.json"
+    metadata_discards: list[dict[str, Any]] = []
     memory_raw = _load_required_json(assets_dir / "memory" / "memory.json", "memory/memory.json")
     recall_raw = _load_required_json(assets_dir / "recall" / "index.json", "recall/index.json")
     if not isinstance(recall_raw, dict):
@@ -698,18 +700,248 @@ def _load_pi_edit_workspace_artifacts(workspace: Path) -> dict[str, Any]:
         result_raw = {"discarded_items": []}
     if not isinstance(result_raw, dict):
         raise AgentResponseError("compiler/result.json must be an object")
-    manifest_entries = [
-        entry.to_dict()
-        for entry in load_manifest(assets_dir / "skills" / "manifest.json")
-    ]
+    memory_records = _load_pi_edit_memory_records(memory_raw, metadata_discards)
+    recall_records = _load_pi_edit_recall_records(recall_raw.get("records", []), context, metadata_discards)
+    compiled_skills = _load_pi_edit_compiled_skills(result_raw.get("compiled_skills"), metadata_discards)
+    workspace_manifest = _load_pi_edit_manifest_file(
+        assets_dir / "skills" / "manifest.json",
+        metadata_discards,
+    )
+    result_manifest = (
+        _load_pi_edit_manifest_metadata(result_raw.get("manifest_entries"), metadata_discards)
+        if "manifest_entries" in result_raw
+        else None
+    )
+    manifest_entries = _select_pi_edit_manifest_entries(
+        compiled_skills=compiled_skills,
+        workspace_manifest=workspace_manifest,
+        result_manifest=result_manifest,
+        context=context,
+    )
+    discarded_items = result_raw.get("discarded_items", [])
+    if isinstance(discarded_items, list):
+        discarded_items = [*discarded_items, *metadata_discards]
     response = {
-        "memory_records": memory_raw,
-        "recall_records": recall_raw.get("records", []),
-        "compiled_skills": result_raw.get("compiled_skills", []),
-        "manifest_entries": result_raw.get("manifest_entries", manifest_entries),
-        "discarded_items": result_raw.get("discarded_items", []),
+        "memory_records": memory_records,
+        "recall_records": recall_records,
+        "compiled_skills": compiled_skills,
+        "manifest_entries": manifest_entries,
+        "discarded_items": discarded_items,
     }
-    return parse_agent_compile_response(response)
+    parsed = parse_agent_compile_response(response)
+    return _restore_pi_edit_existing_assets(parsed, context)
+
+
+def _load_pi_edit_memory_records(value: Any, discarded_items: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    if not isinstance(value, dict):
+        raise AgentResponseError("memory/memory.json must be an object")
+    out: dict[str, list[dict[str, Any]]] = {"user": [], "global": []}
+    for scope in ("user", "global"):
+        items = value.get(scope, [])
+        if not isinstance(items, list):
+            raise AgentResponseError(f"memory/memory.json.{scope} must be a list")
+        for index, item in enumerate(items):
+            try:
+                parsed = parse_agent_compile_response(
+                    {
+                        "memory_records": {
+                            "user": [item] if scope == "user" else [],
+                            "global": [item] if scope == "global" else [],
+                        },
+                        "recall_records": [],
+                        "compiled_skills": [],
+                        "manifest_entries": [],
+                        "discarded_items": [],
+                    }
+                )
+            except AgentResponseError as exc:
+                _append_pi_edit_metadata_discard(
+                    discarded_items,
+                    f"invalid_memory_record.{scope}: {exc}",
+                    index=index,
+                    item=item,
+                )
+                continue
+            out[scope].extend(parsed["memory_records"][scope])
+    return out
+
+
+def _load_pi_edit_recall_records(
+    value: Any,
+    context: dict[str, Any],
+    discarded_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise AgentResponseError("recall/index.json.records must be a list")
+    out: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        raw = dict(item) if isinstance(item, dict) else item
+        if isinstance(raw, dict):
+            if not str(raw.get("repo_fingerprint") or "").strip():
+                raw["repo_fingerprint"] = str(context.get("repo_fingerprint") or "")
+            if not str(raw.get("cwd") or "").strip():
+                raw["cwd"] = str(context.get("cwd") or "")
+        try:
+            parsed = parse_agent_compile_response(
+                {
+                    "memory_records": {"user": [], "global": []},
+                    "recall_records": [raw],
+                    "compiled_skills": [],
+                    "manifest_entries": [],
+                    "discarded_items": [],
+                }
+            )
+        except AgentResponseError as exc:
+            _append_pi_edit_metadata_discard(
+                discarded_items,
+                f"invalid_recall_record: {exc}",
+                index=index,
+                item=item,
+            )
+            continue
+        out.extend(record.to_dict() for record in parsed["recall_records"])
+    return out
+
+
+def _load_pi_edit_compiled_skills(value: Any, discarded_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        _append_pi_edit_metadata_discard(discarded_items, "invalid_compiled_skills_metadata: must be a list")
+        return []
+    out: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        try:
+            parsed = parse_agent_compile_response(
+                {
+                    "memory_records": {"user": [], "global": []},
+                    "recall_records": [],
+                    "compiled_skills": [item],
+                    "manifest_entries": [],
+                    "discarded_items": [],
+                }
+            )
+        except AgentResponseError as exc:
+            _append_pi_edit_metadata_discard(
+                discarded_items,
+                f"invalid_compiled_skill_metadata: {exc}",
+                index=index,
+                item=item,
+            )
+            continue
+        out.extend(parsed["compiled_skills"])
+    return out
+
+
+def _load_pi_edit_manifest_file(path: Path, discarded_items: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    try:
+        return [entry.to_dict() for entry in load_manifest(path)]
+    except (AttributeError, OSError, SchemaError, ValueError) as exc:
+        _append_pi_edit_metadata_discard(
+            discarded_items,
+            f"invalid_workspace_manifest: {exc}",
+        )
+        return None
+
+
+def _load_pi_edit_manifest_metadata(value: Any, discarded_items: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        _append_pi_edit_metadata_discard(discarded_items, "invalid_result_manifest_entries: must be a list")
+        return None
+    entries: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        try:
+            if not isinstance(item, dict):
+                raise SchemaError("manifest_entries entries must be objects")
+            entries.append(SkillManifestEntry.from_dict(item).to_dict())
+        except SchemaError as exc:
+            _append_pi_edit_metadata_discard(
+                discarded_items,
+                f"invalid_result_manifest_entries: {exc}",
+                index=index,
+                item=item,
+            )
+            return None
+    return entries
+
+
+def _select_pi_edit_manifest_entries(
+    *,
+    compiled_skills: list[dict[str, Any]],
+    workspace_manifest: list[dict[str, Any]] | None,
+    result_manifest: list[dict[str, Any]] | None,
+    context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if compiled_skills:
+        if result_manifest:
+            return result_manifest
+        return [
+            entry.to_dict()
+            for entry in build_manifest_entries(
+                compiled_skills,
+                str(context.get("skills_dir") or ""),
+                existing_entries=_context_manifest_entries(context),
+            )
+        ]
+    if workspace_manifest is not None:
+        return workspace_manifest
+    if result_manifest is not None:
+        return result_manifest
+    return [entry.to_dict() for entry in _context_manifest_entries(context)]
+
+
+def _restore_pi_edit_existing_assets(parsed: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    restored = dict(parsed)
+    if not restored.get("recall_records") and context.get("existing_recall_records"):
+        restored["recall_records"] = _context_recall_records(context)
+    if not restored.get("manifest_entries") and context.get("existing_manifest"):
+        restored["manifest_entries"] = _context_manifest_entries(context)
+    return restored
+
+
+def _context_recall_records(context: dict[str, Any]) -> list[RecallRecord]:
+    out: list[RecallRecord] = []
+    for item in context.get("existing_recall_records") or []:
+        raw = item.to_dict() if hasattr(item, "to_dict") else item
+        if not isinstance(raw, dict):
+            continue
+        try:
+            out.append(RecallRecord.from_dict(raw))
+        except SchemaError:
+            continue
+    return out
+
+
+def _context_manifest_entries(context: dict[str, Any]) -> list[SkillManifestEntry]:
+    out: list[SkillManifestEntry] = []
+    for item in context.get("existing_manifest") or []:
+        raw = item.to_dict() if hasattr(item, "to_dict") else item
+        if not isinstance(raw, dict):
+            continue
+        try:
+            out.append(SkillManifestEntry.from_dict(raw))
+        except SchemaError:
+            continue
+    return out
+
+
+def _append_pi_edit_metadata_discard(
+    discarded_items: list[dict[str, Any]],
+    detail: str,
+    *,
+    index: int | None = None,
+    item: Any = None,
+) -> None:
+    discarded: dict[str, Any] = {"reason": "weak_evidence", "detail": detail, "artifact_error": True}
+    if index is not None:
+        discarded["index"] = index
+    if isinstance(item, dict):
+        skill_id = str(item.get("skill_id") or "").strip()
+        if skill_id:
+            discarded["skill_id"] = skill_id
+    discarded_items.append(discarded)
 
 
 def _load_required_json(path: Path, label: str) -> Any:
@@ -1042,7 +1274,12 @@ def _agent_empty_output_reason(
         + len(parsed.get("compiled_skills") or [])
         + len(parsed.get("manifest_entries") or [])
     )
-    emitted_total = emitted_assets + len(parsed.get("discarded_items") or [])
+    accounted_discards = [
+        item
+        for item in (parsed.get("discarded_items") or [])
+        if not (isinstance(item, dict) and item.get("artifact_error"))
+    ]
+    emitted_total = emitted_assets + len(accounted_discards)
     input_suggestions = [item for envelope in batch for item in envelope.suggestions]
     if input_suggestions and emitted_total == 0:
         return "agent_output_empty_unaccounted"

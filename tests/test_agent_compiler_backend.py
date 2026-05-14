@@ -69,6 +69,20 @@ def _context_with_existing_memory() -> dict:
     return context
 
 
+def _recall_dict(recall_id: str = "r1") -> dict:
+    return {
+        "id": recall_id,
+        "summary": "existing recall",
+        "content": "Keep this reusable diagnostic path.",
+        "source_paths": ["notes.md"],
+        "repo_fingerprint": "fp-1",
+        "cwd": "/tmp/repo",
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "source_updated_at": "2026-01-01T00:00:00Z",
+    }
+
+
 def _manifest_dict(skill_id: str = "alpha") -> dict:
     return SkillManifestEntry(
         skill_id=skill_id,
@@ -312,3 +326,199 @@ def test_pi_backend_edit_mode_reads_agent_edited_workspace():
         "recall_candidate": 0,
         "skill_action": 0,
     }
+
+
+def test_pi_backend_edit_mode_restores_existing_recall_when_agent_drops_index():
+    context = _context()
+    context["existing_recall_records"] = [_recall_dict()]
+
+    def invoker(payload, options):
+        workspace = Path(payload["workspace_dir"])
+        memory_path = workspace / "assets" / "memory" / "memory.json"
+        recall_path = workspace / "assets" / "recall" / "index.json"
+        memory_path.write_text(
+            json.dumps(
+                {
+                    "user": [],
+                    "global": [
+                        {
+                            "summary": "new memory",
+                            "content": "Keep the new reusable memory.",
+                            "source_paths": ["review.md"],
+                            "confidence": 0.9,
+                            "provenance": [],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        recall_path.write_text(json.dumps({"records": []}), encoding="utf-8")
+        return "DONE"
+
+    backend = PiAgentCompilerBackend(invoker=invoker)
+    artifacts = backend.compile([_envelope()], context, {"allow_fallback": True, "pi_mode": "edit"})
+
+    assert artifacts.recall_records[0].id == "r1"
+    assert artifacts.compiler_observability["output"]["recall_records"] == 1
+
+
+def test_pi_backend_edit_mode_discards_invalid_optional_skill_metadata():
+    def invoker(payload, options):
+        workspace = Path(payload["workspace_dir"])
+        memory_path = workspace / "assets" / "memory" / "memory.json"
+        result_path = workspace / "compiler" / "result.json"
+        memory_path.write_text(
+            json.dumps(
+                {
+                    "user": [],
+                    "global": [
+                        {
+                            "summary": "new memory",
+                            "content": "Keep the new reusable memory.",
+                            "source_paths": ["review.md"],
+                            "confidence": 0.9,
+                            "provenance": [],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        result_path.write_text(
+            json.dumps(
+                {
+                    "compiled_skills": [
+                        {
+                            "skill_id": "bad",
+                            "title": "Bad",
+                            "description": "This skill should be used when metadata is invalid.",
+                            "content": "Track invalid metadata without failing the whole compile.",
+                            "action": "track",
+                        }
+                    ],
+                    "discarded_items": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return "DONE"
+
+    backend = PiAgentCompilerBackend(invoker=invoker)
+    artifacts = backend.compile([_envelope()], _context(), {"allow_fallback": True, "pi_mode": "edit"})
+
+    assert artifacts.compiled_skills == []
+    assert artifacts.discarded_items[0]["reason"] == "weak_evidence"
+    assert artifacts.discarded_items[0]["skill_id"] == "bad"
+    assert "invalid_compiled_skill_metadata" in artifacts.discarded_items[0]["detail"]
+
+
+def test_pi_backend_edit_mode_drops_malformed_memory_items_without_losing_valid_items():
+    def invoker(payload, options):
+        workspace = Path(payload["workspace_dir"])
+        memory_path = workspace / "assets" / "memory" / "memory.json"
+        memory_path.write_text(
+            json.dumps(
+                {
+                    "user": [],
+                    "global": [
+                        {"summary": "", "content": ""},
+                        {
+                            "summary": "valid memory",
+                            "content": "Keep the valid memory item even when a sibling item is malformed.",
+                            "source_paths": ["review.md"],
+                            "confidence": 0.9,
+                            "provenance": [],
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return "DONE"
+
+    backend = PiAgentCompilerBackend(invoker=invoker)
+    artifacts = backend.compile([_envelope()], _context(), {"allow_fallback": True, "pi_mode": "edit"})
+
+    assert [item["summary"] for item in artifacts.memory_records["global"]] == ["valid memory"]
+    assert artifacts.discarded_items[0]["artifact_error"] is True
+    assert "invalid_memory_record.global" in artifacts.discarded_items[0]["detail"]
+
+
+def test_pi_backend_edit_mode_fills_recall_repo_context_fields():
+    def invoker(payload, options):
+        workspace = Path(payload["workspace_dir"])
+        memory_path = workspace / "assets" / "memory" / "memory.json"
+        recall_path = workspace / "assets" / "recall" / "index.json"
+        memory_path.write_text(
+            json.dumps(
+                {
+                    "user": [],
+                    "global": [
+                        {
+                            "summary": "new memory",
+                            "content": "Keep the new reusable memory.",
+                            "source_paths": ["review.md"],
+                            "confidence": 0.9,
+                            "provenance": [],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        recall_record = _recall_dict()
+        recall_record.pop("repo_fingerprint")
+        recall_record.pop("cwd")
+        recall_path.write_text(json.dumps({"records": [recall_record]}), encoding="utf-8")
+        return "DONE"
+
+    backend = PiAgentCompilerBackend(invoker=invoker)
+    artifacts = backend.compile([_envelope()], _context(), {"allow_fallback": True, "pi_mode": "edit"})
+
+    assert artifacts.recall_records[0].repo_fingerprint == "fp-1"
+    assert artifacts.recall_records[0].cwd == "/tmp/repo"
+
+
+def test_pi_backend_edit_mode_falls_back_from_invalid_manifest_metadata():
+    context = _context()
+    context["existing_manifest"] = [SkillManifestEntry.from_dict(_manifest_dict("alpha"))]
+
+    def invoker(payload, options):
+        workspace = Path(payload["workspace_dir"])
+        memory_path = workspace / "assets" / "memory" / "memory.json"
+        manifest_path = workspace / "assets" / "skills" / "manifest.json"
+        result_path = workspace / "compiler" / "result.json"
+        memory_path.write_text(
+            json.dumps(
+                {
+                    "user": [],
+                    "global": [
+                        {
+                            "summary": "new memory",
+                            "content": "Keep the new reusable memory.",
+                            "source_paths": ["review.md"],
+                            "confidence": 0.9,
+                            "provenance": [],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        invalid_manifest = _manifest_dict("broken")
+        invalid_manifest["managed"] = "true"
+        manifest_path.write_text(json.dumps({"skills": [invalid_manifest]}), encoding="utf-8")
+        result_path.write_text(
+            json.dumps({"manifest_entries": [{"action": "track"}], "discarded_items": []}),
+            encoding="utf-8",
+        )
+        return "DONE"
+
+    backend = PiAgentCompilerBackend(invoker=invoker)
+    artifacts = backend.compile([_envelope()], context, {"allow_fallback": True, "pi_mode": "edit"})
+
+    assert artifacts.manifest_entries[0].skill_id == "alpha"
+    details = [item["detail"] for item in artifacts.discarded_items]
+    assert any("invalid_workspace_manifest" in detail for detail in details)
+    assert any("invalid_result_manifest_entries" in detail for detail in details)
