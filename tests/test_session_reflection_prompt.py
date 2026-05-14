@@ -26,3 +26,26 @@ def test_reflection_prompt_contains_markers_paths_classification_and_receipt_sha
     assert '"memory_changes": []' in prompt
     assert '"skill_changes": []' in prompt
     assert str(tmp_path / "runs" / "job-1" / "receipt.json") in prompt
+
+
+def test_reflection_prompt_includes_trigger_scope_and_skill_mode(tmp_path: Path) -> None:
+    """Prompt tells child which scopes to review and how to handle skills."""
+    prompt = build_reflection_prompt(
+        job_id="job-1",
+        parent_session_id="parent-1",
+        cwd=tmp_path,
+        memory_user_path=tmp_path / "USER.md",
+        memory_project_path=tmp_path / "MEMORY.md",
+        skills_root=tmp_path / "skills",
+        receipt_path=tmp_path / "receipt.json",
+        review_memory=True,
+        review_skills=False,
+        trigger_reasons=["memory_stop_interval"],
+        skill_generation_mode="one_shot_active",
+    )
+
+    assert "Review memory: true" in prompt
+    assert "Review skills: false" in prompt
+    assert "Trigger reasons: memory_stop_interval" in prompt
+    assert "Skill generation mode: one_shot_active" in prompt
+    assert "Do not evaluate skills when Review skills is false." in prompt

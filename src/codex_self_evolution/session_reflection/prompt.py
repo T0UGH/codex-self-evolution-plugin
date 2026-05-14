@@ -12,6 +12,10 @@ def build_reflection_prompt(
     memory_project_path: str | Path,
     skills_root: str | Path,
     receipt_path: str | Path,
+    review_memory: bool = True,
+    review_skills: bool = True,
+    trigger_reasons: list[str] | None = None,
+    skill_generation_mode: str = "one_shot_active",
 ) -> str:
     """Build the bounded instruction contract for the reflection child."""
     return (
@@ -24,6 +28,16 @@ def build_reflection_prompt(
         f"Project memory file: {Path(memory_project_path)}\n"
         f"Writable skill namespace: {Path(skills_root) / 'csep-reflect-*'}\n"
         f"Required receipt path: {Path(receipt_path)}\n\n"
+        f"Review memory: {str(review_memory).lower()}\n"
+        f"Review skills: {str(review_skills).lower()}\n"
+        f"Trigger reasons: {', '.join(trigger_reasons or [])}\n"
+        f"Skill generation mode: {skill_generation_mode}\n\n"
+        "Do not evaluate memory when Review memory is false.\n"
+        "Do not evaluate skills when Review skills is false.\n"
+        "When Skill generation mode is one_shot_active, a complete workflow candidate may become an active "
+        "csep-reflect-* skill in this run.\n"
+        "When Skill generation mode is evidence_first, record workflow evidence or skipped candidates but do not "
+        "publish an active skill.\n\n"
         "Your only durable outputs are memory and skills.\n"
         "Classify every candidate as: fact | rule | preference | workflow | duplicate | transient | sensitive.\n"
         "Write facts, rules, and preferences only to the memory files above.\n"

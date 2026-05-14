@@ -261,10 +261,62 @@ def test_run_reflection_job_forks_starts_registers_validates_and_cleans_lock(
     ]
     assert client.start_calls[0]["child_thread_id"] == "child-1"
     assert "Required receipt path: " in client.start_calls[0]["prompt"]
+    assert "Review memory: true" in client.start_calls[0]["prompt"]
+    assert "Review skills: true" in client.start_calls[0]["prompt"]
+    assert "Skill generation mode: one_shot_active" in client.start_calls[0]["prompt"]
     assert child_thread_registry_path("child-1", home=home).is_file()
     assert (home / "session_reflection" / "runs" / str(job["job_id"]) / "prompt.txt").is_file()
     assert (home / "session_reflection" / "runs" / str(job["job_id"]) / "validation.json").is_file()
     assert not global_lock_path(home=home).exists()
+
+
+def test_run_reflection_job_resets_trigger_counters_after_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Successful validation subtracts the job counter snapshot."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setenv("CSEP_CODEX_SKILLS_DIR", str(tmp_path / "skills"))
+    payload = _payload(repo)
+    decision = {
+        "status": "queued",
+        "review_memory": True,
+        "review_skills": False,
+        "trigger_reasons": ["memory_stop_interval"],
+        "counters": {
+            "stops_since_memory_review": 3,
+            "readable_chars_since_memory_review": 9000,
+            "tool_calls_since_skill_review": 0,
+        },
+    }
+    job = create_job_from_payload(
+        payload,
+        home=home,
+        trigger_decision=decision,
+        skill_generation_mode="one_shot_active",
+    )
+    from codex_self_evolution.session_reflection.trigger import (
+        load_trigger_state,
+        trigger_paths_for_payload,
+        write_trigger_state,
+    )
+
+    trigger_paths = trigger_paths_for_payload(payload, home=home)
+    state = load_trigger_state(trigger_paths, session_id="parent-1")
+    state["active_job_id"] = job["job_id"]
+    state["stops_since_memory_review"] = 4
+    state["readable_chars_since_memory_review"] = 12000
+    write_trigger_state(trigger_paths, state)
+
+    run_reflection_job(str(job["job_id"]), home=home, client=FakeReflectionClient())
+
+    updated = load_trigger_state(trigger_paths, session_id="parent-1")
+    assert updated["stops_since_memory_review"] == 1
+    assert updated["readable_chars_since_memory_review"] == 3000
+    assert updated["active_job_id"] is None
 
 
 def test_run_reflection_job_marks_failed_and_cleans_lock_on_exception(
@@ -330,6 +382,61 @@ def test_run_reflection_job_fails_wrong_child_receipt_id_and_cleans_lock(
     assert updated["status"] == "failed"
     assert updated["validation"]["reason"] == "child_thread_id_mismatch"
     assert not global_lock_path(home=home).exists()
+
+
+def test_run_reflection_job_failed_validation_clears_active_job_without_counter_subtraction(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Failed validation releases the active job reservation without resetting counters."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setenv("CSEP_CODEX_SKILLS_DIR", str(tmp_path / "skills"))
+    payload = _payload(repo)
+    decision = {
+        "status": "queued",
+        "review_memory": True,
+        "review_skills": True,
+        "trigger_reasons": ["memory_stop_interval", "skill_tool_interval"],
+        "counters": {
+            "stops_since_memory_review": 3,
+            "readable_chars_since_memory_review": 9000,
+            "tool_calls_since_skill_review": 5,
+        },
+    }
+    job = create_job_from_payload(
+        payload,
+        home=home,
+        trigger_decision=decision,
+        skill_generation_mode="one_shot_active",
+    )
+    from codex_self_evolution.session_reflection.trigger import (
+        load_trigger_state,
+        trigger_paths_for_payload,
+        write_trigger_state,
+    )
+
+    trigger_paths = trigger_paths_for_payload(payload, home=home)
+    state = load_trigger_state(trigger_paths, session_id="parent-1")
+    state["active_job_id"] = job["job_id"]
+    state["stops_since_memory_review"] = 4
+    state["readable_chars_since_memory_review"] = 12000
+    state["tool_calls_since_skill_review"] = 7
+    write_trigger_state(trigger_paths, state)
+
+    run_reflection_job(
+        str(job["job_id"]),
+        home=home,
+        client=FakeReflectionClient(receipt_child_thread_id="wrong-child"),
+    )
+
+    updated = load_trigger_state(trigger_paths, session_id="parent-1")
+    assert updated["stops_since_memory_review"] == 4
+    assert updated["readable_chars_since_memory_review"] == 12000
+    assert updated["tool_calls_since_skill_review"] == 7
+    assert updated["active_job_id"] is None
 
 
 def test_run_reflection_job_active_lock_fails_without_app_server_call(

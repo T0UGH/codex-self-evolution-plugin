@@ -20,8 +20,17 @@ from .state import (
     release_global_lock,
     register_child_thread,
     update_job_status,
+    utc_timestamp,
 )
-from .trigger import TriggerLockBusy, evaluate_trigger_policy, payload_session_id, write_trigger_state
+from .trigger import (
+    TriggerLockBusy,
+    evaluate_trigger_policy,
+    load_trigger_state,
+    payload_session_id,
+    reset_counters_after_job,
+    trigger_paths_for_payload,
+    write_trigger_state,
+)
 from .validation import validate_receipt
 
 
@@ -100,6 +109,10 @@ def run_reflection_job(
             memory_project_path=project_paths.memory_dir / "MEMORY.md",
             skills_root=skills_root,
             receipt_path=paths.receipt_path,
+            review_memory=bool(job.get("review_memory", True)),
+            review_skills=bool(job.get("review_skills", True)),
+            trigger_reasons=list(job.get("trigger_reasons") or []),
+            skill_generation_mode=str(job.get("skill_generation_mode") or "one_shot_active"),
         )
         atomic_write_text(paths.run_dir / "prompt.txt", prompt)
 
@@ -138,6 +151,7 @@ def run_reflection_job(
             expected_child_thread_id=child_thread_id,
         )
         atomic_write_json(paths.run_dir / "validation.json", validation)
+        _reset_trigger_state_for_job(job, validation, home=resolved_home)
         return update_job_status(
             job_id,
             str(validation["status"]),
@@ -223,3 +237,29 @@ def _build_project_paths_for_home(repo_root: str | Path, *, home: Path | None) -
     from ..config import build_paths
 
     return build_paths(repo_root=resolved_repo, state_dir=state_dir)
+
+
+def _reset_trigger_state_for_job(job: dict[str, Any], validation: dict[str, Any], *, home: Path | None) -> None:
+    """Apply trigger counter reset and clear the matching active job after validation."""
+    payload = job.get("raw_payload") if isinstance(job.get("raw_payload"), dict) else {}
+    if not payload:
+        return
+    paths = trigger_paths_for_payload(payload, home=home)
+    state = load_trigger_state(paths, session_id=str(job.get("parent_session_id") or "unknown-session"))
+    status = str(validation.get("status") or "")
+    reason = str(validation.get("reason") or "")
+    succeeded = status in {"succeeded", "skipped_empty"}
+    partial = status == "partial"
+    job_for_reset = dict(job)
+    job_for_reset["review_memory"] = bool(job.get("review_memory", True))
+    job_for_reset["review_skills"] = bool(job.get("review_skills", True))
+    memory_succeeded = bool(job_for_reset["review_memory"]) and (succeeded or partial)
+    skill_succeeded = bool(job_for_reset["review_skills"]) and (succeeded or partial) and reason != "skill_invalid"
+    updated = reset_counters_after_job(
+        state,
+        job_for_reset,
+        memory_succeeded=memory_succeeded,
+        skill_succeeded=skill_succeeded,
+        now=utc_timestamp(),
+    )
+    write_trigger_state(paths, updated)
