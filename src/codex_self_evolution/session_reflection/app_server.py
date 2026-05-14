@@ -79,7 +79,14 @@ class ReflectionAppServerClient:
         if transcript_path:
             params["path"] = transcript_path
         raw = self._transport.request("thread/fork", params, timeout_seconds=self._timeout_seconds)
-        child_thread_id = _first_text(raw, "id", "threadId", "sessionId")
+        child_thread_id = _first_text_path(
+            raw,
+            ("thread", "id"),
+            ("id",),
+            ("threadId",),
+            ("sessionId",),
+            ("thread", "sessionId"),
+        )
         if not child_thread_id:
             raise AppServerError("thread/fork response missing child thread id")
         return child_thread_id, raw
@@ -104,7 +111,7 @@ class ReflectionAppServerClient:
             "input": [{"type": "text", "text": prompt}],
         }
         raw = self._transport.request("turn/start", params, timeout_seconds=self._timeout_seconds)
-        turn_id = _first_text(raw, "id", "turnId", "turn_id")
+        turn_id = _first_text_path(raw, ("turn", "id"), ("id",), ("turnId",), ("turn_id",))
         if not turn_id:
             raise AppServerError("turn/start response missing turn id")
         return turn_id, raw
@@ -152,10 +159,15 @@ def _json_candidates(text: str) -> list[str]:
     return lines + [text]
 
 
-def _first_text(payload: dict[str, Any], *keys: str) -> str:
-    """Return the first non-empty string-like value from a response object."""
-    for key in keys:
-        value = payload.get(key)
+def _first_text_path(payload: dict[str, Any], *paths: tuple[str, ...]) -> str:
+    """Return the first non-empty string-like value from nested response paths."""
+    for path in paths:
+        value: Any = payload
+        for key in path:
+            if not isinstance(value, dict):
+                value = None
+                break
+            value = value.get(key)
         if value is not None and str(value):
             return str(value)
     return ""

@@ -61,6 +61,25 @@ def test_fork_thread_sends_required_params_and_returns_child_id() -> None:
     ]
 
 
+def test_fork_thread_accepts_schema_thread_response() -> None:
+    """thread/fork accepts the real app-server v2 ThreadForkResponse shape."""
+    transport = FakeTransport([{"thread": {"id": "child-1", "sessionId": "session-1"}}])
+    client = ReflectionAppServerClient(transport=transport)
+
+    child_thread_id, raw = client.fork_thread(
+        parent_thread_id="parent-1",
+        transcript_path="/tmp/transcript.jsonl",
+        model="gpt-5.3-codex-spark",
+        cwd="/repo",
+        ephemeral=True,
+        sandbox="danger-full-access",
+        approval_policy="never",
+    )
+
+    assert child_thread_id == "child-1"
+    assert raw == {"thread": {"id": "child-1", "sessionId": "session-1"}}
+
+
 def test_fork_thread_omits_empty_transcript_path() -> None:
     """thread/fork does not send a blank path field."""
     transport = FakeTransport([{"id": "child-1"}])
@@ -109,6 +128,24 @@ def test_start_reflection_turn_sends_required_params_and_returns_turn_id() -> No
             "timeout_seconds": 900.0,
         }
     ]
+
+
+def test_start_reflection_turn_accepts_schema_turn_response() -> None:
+    """turn/start accepts the real app-server v2 TurnStartResponse shape."""
+    transport = FakeTransport([{"turn": {"id": "turn-1", "status": "running"}}])
+    client = ReflectionAppServerClient(transport=transport)
+
+    turn_id, raw = client.start_reflection_turn(
+        child_thread_id="child-1",
+        cwd="/repo",
+        model="gpt-5.3-codex-spark",
+        approval_policy="never",
+        sandbox="danger-full-access",
+        prompt="reflect this",
+    )
+
+    assert turn_id == "turn-1"
+    assert raw == {"turn": {"id": "turn-1", "status": "running"}}
 
 
 def test_client_raises_when_response_id_is_missing() -> None:

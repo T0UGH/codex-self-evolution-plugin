@@ -16,6 +16,7 @@ def test_collect_status_includes_session_reflection_latest_job(tmp_path: Path) -
             "job_id": "reflect-job-1",
             "status": "succeeded",
             "updated_at": "2026-05-14T12:00:00Z",
+            "error": "none",
         }),
         encoding="utf-8",
     )
@@ -27,3 +28,4 @@ def test_collect_status_includes_session_reflection_latest_job(tmp_path: Path) -
     assert reflection["latest"]["job_id"] == "reflect-job-1"
     assert reflection["latest"]["status"] == "succeeded"
     assert reflection["latest"]["updated_at"] == "2026-05-14T12:00:00Z"
+    assert reflection["latest"]["error"] == "none"

@@ -130,11 +130,7 @@ def session_reflection_status(*, home: str | Path | None = None) -> dict[str, An
             loaded = load_json(latest_path)
             if not isinstance(loaded, dict):
                 raise ValueError("latest job pointer is not an object")
-            latest = {
-                "job_id": loaded.get("job_id"),
-                "status": loaded.get("status"),
-                "updated_at": loaded.get("updated_at"),
-            }
+            latest = _status_latest_job(loaded, home=resolved_home)
         except Exception:
             latest = {"unreadable": True, "path": str(latest_path)}
     return {
@@ -143,6 +139,39 @@ def session_reflection_status(*, home: str | Path | None = None) -> dict[str, An
         "latest": latest,
         "global_lock": global_lock_status(home=resolved_home),
     }
+
+
+def _status_latest_job(job: dict[str, Any], *, home: Path | None) -> dict[str, Any]:
+    """Return the latest-job fields useful for status and failure diagnosis."""
+    summary: dict[str, Any] = {
+        "job_id": job.get("job_id"),
+        "status": job.get("status"),
+        "updated_at": job.get("updated_at"),
+    }
+    for key in ("created_at", "error", "receipt_path", "child_thread_id", "turn_id"):
+        value = job.get(key)
+        if value is not None:
+            summary[key] = value
+    job_id = job.get("job_id")
+    if job_id:
+        paths = build_session_reflection_paths(home=home, job_id=str(job_id))
+        summary["job_path"] = str(paths.job_path)
+        summary.setdefault("receipt_path", str(paths.receipt_path))
+        summary["validation_path"] = str(paths.run_dir / "validation.json")
+    validation = job.get("validation")
+    if isinstance(validation, dict):
+        summary["validation"] = _compact_validation(validation)
+    return summary
+
+
+def _compact_validation(validation: dict[str, Any]) -> dict[str, Any]:
+    """Return the validation fields needed to diagnose status failures."""
+    compact: dict[str, Any] = {}
+    for key in ("status", "reason", "error"):
+        value = validation.get(key)
+        if value is not None:
+            compact[key] = value
+    return compact
 
 
 def _build_project_paths_for_home(repo_root: str | Path, *, home: Path | None) -> Paths:

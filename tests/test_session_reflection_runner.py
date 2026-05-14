@@ -17,6 +17,7 @@ from codex_self_evolution.session_reflection.state import (
     child_thread_registry_path,
     create_job_from_payload,
     global_lock_path,
+    update_job_status,
 )
 
 
@@ -322,3 +323,36 @@ def test_session_reflection_status_is_compact(monkeypatch: pytest.MonkeyPatch, t
     assert status["latest"]["job_id"] == job["job_id"]
     assert status["latest"]["status"] == "queued"
     assert status["global_lock"]["locked"] is False
+
+
+def test_session_reflection_status_reports_failure_details(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Status includes failure reason and artifact paths for latest job."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    job = create_job_from_payload(_payload(repo), home=home)
+    updated = update_job_status(
+        str(job["job_id"]),
+        "failed",
+        home=home,
+        error="app-server unavailable",
+        receipt_path=str(home / "session_reflection" / "runs" / str(job["job_id"]) / "receipt.json"),
+        validation={"status": "failed", "reason": "missing_receipt", "error": "receipt missing"},
+    )
+
+    status = session_reflection_status(home=home)
+
+    assert status["latest"]["job_id"] == updated["job_id"]
+    assert status["latest"]["status"] == "failed"
+    assert status["latest"]["error"] == "app-server unavailable"
+    assert status["latest"]["receipt_path"].endswith("/receipt.json")
+    assert status["latest"]["validation_path"].endswith("/validation.json")
+    assert status["latest"]["validation"] == {
+        "status": "failed",
+        "reason": "missing_receipt",
+        "error": "receipt missing",
+    }
