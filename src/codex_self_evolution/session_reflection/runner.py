@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..config import build_paths
+from ..config import PROJECTS_SUBDIR, Paths, mangle_project_path, resolve_bucket_key, resolve_repo_root
 from ..config_file import load_config
 from ..managed_skills.publish import codex_skills_dir
 from ..storage import atomic_write_json, atomic_write_text, load_json
@@ -13,11 +13,12 @@ from .paths import build_session_reflection_paths
 from .prompt import build_reflection_prompt
 from .state import (
     create_job_from_payload,
+    acquire_global_lock,
     global_lock_status,
     latest_job_path,
+    release_global_lock,
     register_child_thread,
     update_job_status,
-    write_global_lock,
 )
 from .validation import validate_receipt
 
@@ -46,12 +47,13 @@ def run_reflection_job(
     resolved_home = Path(home).expanduser().resolve() if home else None
     config = load_config(home=resolved_home).config.session_reflection
     paths = build_session_reflection_paths(home=resolved_home, job_id=job_id)
-    lock_path: Path | None = None
+    lock_owner_token = ""
     try:
+        lock = acquire_global_lock(home=resolved_home)
+        lock_owner_token = lock["owner_token"]
         job = update_job_status(job_id, "running", home=resolved_home)
-        lock_path = write_global_lock(home=resolved_home)
 
-        project_paths = build_paths(repo_root=job["cwd"], state_dir=None)
+        project_paths = _build_project_paths_for_home(job["cwd"], home=resolved_home)
         skills_root = codex_skills_dir()
         prompt = build_reflection_prompt(
             job_id=job_id,
@@ -94,6 +96,9 @@ def run_reflection_job(
             memory_roots=[project_paths.memory_dir],
             skills_root=skills_root,
             skill_prefix=config.skill_prefix,
+            expected_job_id=job_id,
+            expected_parent_session_id=str(job["parent_session_id"]),
+            expected_child_thread_id=child_thread_id,
         )
         atomic_write_json(paths.run_dir / "validation.json", validation)
         return update_job_status(
@@ -110,8 +115,8 @@ def run_reflection_job(
     except Exception as exc:
         return update_job_status(job_id, "failed", home=resolved_home, error=str(exc))
     finally:
-        if lock_path is not None and lock_path.exists():
-            lock_path.unlink()
+        if lock_owner_token:
+            release_global_lock(owner_token=lock_owner_token, home=resolved_home)
 
 
 def session_reflection_status(*, home: str | Path | None = None) -> dict[str, Any]:
@@ -138,3 +143,17 @@ def session_reflection_status(*, home: str | Path | None = None) -> dict[str, An
         "latest": latest,
         "global_lock": global_lock_status(home=resolved_home),
     }
+
+
+def _build_project_paths_for_home(repo_root: str | Path, *, home: Path | None) -> Paths:
+    """Build project-state paths under the explicit CSEP home when provided."""
+    if home is None:
+        from ..config import build_paths
+
+        return build_paths(repo_root=repo_root, state_dir=None)
+    resolved_repo = resolve_repo_root(repo_root)
+    bucket_key = resolve_bucket_key(resolved_repo)
+    state_dir = home / PROJECTS_SUBDIR / mangle_project_path(bucket_key)
+    from ..config import build_paths
+
+    return build_paths(repo_root=resolved_repo, state_dir=state_dir)

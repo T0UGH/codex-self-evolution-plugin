@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from codex_self_evolution.storage import atomic_write_json, utc_now
 from codex_self_evolution.session_reflection.runner import (
     enqueue_reflection_from_payload,
     run_reflection_job,
@@ -21,9 +23,17 @@ from codex_self_evolution.session_reflection.state import (
 class FakeReflectionClient:
     """Fake app-server client that records calls and writes a receipt."""
 
-    def __init__(self, *, fail_start: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_start: bool = False,
+        receipt_child_thread_id: str = "child-1",
+        steal_lock_home: Path | None = None,
+    ) -> None:
         """Configure whether turn/start raises after fork registration."""
         self.fail_start = fail_start
+        self.receipt_child_thread_id = receipt_child_thread_id
+        self.steal_lock_home = steal_lock_home
         self.fork_calls: list[dict[str, Any]] = []
         self.start_calls: list[dict[str, Any]] = []
 
@@ -45,7 +55,7 @@ class FakeReflectionClient:
                     "schema_version": 1,
                     "job_id": _line_value(str(kwargs["prompt"]), "CSEP_REFLECTION_JOB_ID="),
                     "parent_session_id": _line_value(str(kwargs["prompt"]), "Parent session id: "),
-                    "child_thread_id": "child-1",
+                    "child_thread_id": self.receipt_child_thread_id,
                     "status": "succeeded",
                     "memory_changes": [],
                     "skill_changes": [],
@@ -58,6 +68,15 @@ class FakeReflectionClient:
             ),
             encoding="utf-8",
         )
+        if self.steal_lock_home is not None:
+            atomic_write_json(
+                global_lock_path(home=self.steal_lock_home),
+                {
+                    "created_at": utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                    "pid": os.getpid(),
+                    "owner_token": "other-owner",
+                },
+            )
         return "turn-1", {"turnId": "turn-1"}
 
 
@@ -194,6 +213,98 @@ def test_run_reflection_job_marks_failed_and_cleans_lock_on_exception(
     assert "turn failed" in updated["error"]
     assert child_thread_registry_path("child-1", home=home).is_file()
     assert not global_lock_path(home=home).exists()
+
+
+def test_run_reflection_job_uses_explicit_home_for_memory_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Runner memory paths use home= without requiring a global env override."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.delenv("CODEX_SELF_EVOLUTION_HOME", raising=False)
+    monkeypatch.setenv("CSEP_CODEX_SKILLS_DIR", str(tmp_path / "skills"))
+    job = create_job_from_payload(_payload(repo), home=home)
+    client = FakeReflectionClient()
+
+    run_reflection_job(str(job["job_id"]), home=home, client=client)
+
+    prompt = client.start_calls[0]["prompt"]
+    assert f"User memory file: {home / 'projects'}" in prompt
+    assert f"Project memory file: {home / 'projects'}" in prompt
+    assert "/memory/USER.md" in prompt
+    assert "/memory/MEMORY.md" in prompt
+
+
+def test_run_reflection_job_fails_wrong_child_receipt_id_and_cleans_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Receipt validation binds the receipt to the current child thread."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setenv("CSEP_CODEX_SKILLS_DIR", str(tmp_path / "skills"))
+    job = create_job_from_payload(_payload(repo), home=home)
+
+    updated = run_reflection_job(
+        str(job["job_id"]),
+        home=home,
+        client=FakeReflectionClient(receipt_child_thread_id="wrong-child"),
+    )
+
+    assert updated["status"] == "failed"
+    assert updated["validation"]["reason"] == "child_thread_id_mismatch"
+    assert not global_lock_path(home=home).exists()
+
+
+def test_run_reflection_job_active_lock_fails_without_app_server_call(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A live global lock prevents another worker from starting."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setenv("CSEP_CODEX_SKILLS_DIR", str(tmp_path / "skills"))
+    job = create_job_from_payload(_payload(repo), home=home)
+    atomic_write_json(
+        global_lock_path(home=home),
+        {
+            "created_at": utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "pid": os.getpid(),
+            "owner_token": "existing-owner",
+        },
+    )
+    client = FakeReflectionClient()
+
+    updated = run_reflection_job(str(job["job_id"]), home=home, client=client)
+
+    assert updated["status"] == "failed"
+    assert "global reflection lock is active" in updated["error"]
+    assert client.fork_calls == []
+    assert json.loads(global_lock_path(home=home).read_text(encoding="utf-8"))["owner_token"] == "existing-owner"
+
+
+def test_run_reflection_job_does_not_release_lock_after_owner_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Runner lock cleanup does not remove a lock owned by another worker."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setenv("CSEP_CODEX_SKILLS_DIR", str(tmp_path / "skills"))
+    job = create_job_from_payload(_payload(repo), home=home)
+
+    updated = run_reflection_job(str(job["job_id"]), home=home, client=FakeReflectionClient(steal_lock_home=home))
+
+    assert updated["status"] == "skipped_empty"
+    assert json.loads(global_lock_path(home=home).read_text(encoding="utf-8"))["owner_token"] == "other-owner"
 
 
 def test_session_reflection_status_is_compact(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -27,6 +27,9 @@ def validate_receipt(
     memory_roots: list[Path],
     skills_root: Path,
     skill_prefix: str,
+    expected_job_id: str = "",
+    expected_parent_session_id: str = "",
+    expected_child_thread_id: str = "",
 ) -> dict[str, Any]:
     """Validate child receipt and normalize its status from durable outputs."""
     if not receipt_path.is_file():
@@ -42,6 +45,14 @@ def validate_receipt(
     schema_reason = _receipt_schema_reason(receipt)
     if schema_reason:
         return _failure(schema_reason)
+    identity_reason = _receipt_identity_reason(
+        receipt,
+        expected_job_id=expected_job_id,
+        expected_parent_session_id=expected_parent_session_id,
+        expected_child_thread_id=expected_child_thread_id,
+    )
+    if identity_reason:
+        return _failure(identity_reason)
 
     memory_changes = receipt.get("memory_changes")
     skill_changes = receipt.get("skill_changes")
@@ -90,6 +101,25 @@ def _receipt_schema_reason(receipt: dict[str, Any]) -> str:
     for field in REQUIRED_LIST_FIELDS:
         if not isinstance(receipt.get(field), list):
             return "receipt_schema"
+    return ""
+
+
+def _receipt_identity_reason(
+    receipt: dict[str, Any],
+    *,
+    expected_job_id: str,
+    expected_parent_session_id: str,
+    expected_child_thread_id: str,
+) -> str:
+    """Return a failure reason when receipt identity fields do not match."""
+    expected = {
+        "job_id": expected_job_id,
+        "parent_session_id": expected_parent_session_id,
+        "child_thread_id": expected_child_thread_id,
+    }
+    for field, value in expected.items():
+        if value and receipt.get(field) != value:
+            return f"{field}_mismatch"
     return ""
 
 

@@ -73,6 +73,7 @@ def global_lock_status(
         "age_seconds": age,
         "owner_pid": owner_pid,
         "pid_alive": pid_alive,
+        "owner_token": raw.get("owner_token"),
     }
 
 
@@ -176,11 +177,78 @@ def child_thread_registry_path(child_thread_id: str, *, home: str | Path | None 
     return build_session_reflection_paths(home=home).child_threads_dir / filename
 
 
-def write_global_lock(*, home: str | Path | None = None) -> Path:
-    """Create the global reflection lock file for tests and later worker code."""
+def acquire_global_lock(
+    *,
+    home: str | Path | None = None,
+    stale_after_seconds: int = DEFAULT_LOCK_STALE_SECONDS,
+) -> dict[str, str]:
+    """Atomically acquire the global reflection lock with an owner token."""
     path = global_lock_path(home=home)
-    atomic_write_json(path, {"created_at": utc_timestamp(), "pid": os.getpid()})
-    return path
+    owner_token = uuid.uuid4().hex
+    payload = {"created_at": utc_timestamp(), "pid": os.getpid(), "owner_token": owner_token}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+    except FileExistsError as exc:
+        try:
+            stale_candidate = path.read_text(encoding="utf-8")
+        except OSError as read_exc:
+            raise ReflectionLockError(f"failed to read existing reflection lock: {read_exc}") from read_exc
+        status = global_lock_status(home=home, stale_after_seconds=stale_after_seconds)
+        if status["locked"] and not status["stale"]:
+            raise ReflectionLockError(f"global reflection lock is active: {status['path']}") from exc
+        try:
+            if path.read_text(encoding="utf-8") != stale_candidate:
+                raise ReflectionLockError(f"global reflection lock changed during stale replacement: {path}")
+        except OSError as read_exc:
+            raise ReflectionLockError(f"failed to verify stale reflection lock: {read_exc}") from read_exc
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as unlink_exc:
+            raise ReflectionLockError(f"failed to remove stale reflection lock: {unlink_exc}") from unlink_exc
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+        except FileExistsError as second_exc:
+            raise ReflectionLockError(f"global reflection lock is active: {path}") from second_exc
+    return {"path": str(path), "owner_token": owner_token}
+
+
+def release_global_lock(
+    *,
+    owner_token: str,
+    home: str | Path | None = None,
+) -> bool:
+    """Release the global lock only if this owner still owns it."""
+    path = global_lock_path(home=home)
+    try:
+        raw = load_json(path)
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return False
+    if not isinstance(raw, dict) or raw.get("owner_token") != owner_token:
+        return False
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def write_global_lock(*, home: str | Path | None = None) -> Path:
+    """Create the global reflection lock file for tests."""
+    lock = acquire_global_lock(home=home)
+    return Path(lock["path"])
+
+
+class ReflectionLockError(RuntimeError):
+    """Raised when the reflection global lock cannot be acquired."""
 
 
 def _new_job_id(created_at: str) -> str:

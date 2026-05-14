@@ -44,7 +44,7 @@ class StdioAppServerTransport:
             stdout = completed.stdout.strip()
             detail = stderr or stdout or "no output"
             raise AppServerError(f"codex app-server proxy exited {completed.returncode}: {detail}")
-        return _result_from_stdout(completed.stdout)
+        return _result_from_stdout(completed.stdout, expected_id=request_id)
 
 
 class ReflectionAppServerClient:
@@ -110,9 +110,9 @@ class ReflectionAppServerClient:
         return turn_id, raw
 
 
-def _result_from_stdout(stdout: str) -> dict[str, Any]:
-    """Parse proxy stdout and return a JSON-RPC result object."""
-    response = _parse_json_response(stdout)
+def _result_from_stdout(stdout: str, *, expected_id: str) -> dict[str, Any]:
+    """Parse proxy stdout and return the matching JSON-RPC result object."""
+    response = _matching_json_response(stdout, expected_id=expected_id)
     if "error" in response and response["error"]:
         raise AppServerError(f"app-server error response: {response['error']}")
     if "result" not in response:
@@ -123,21 +123,33 @@ def _result_from_stdout(stdout: str) -> dict[str, Any]:
     return result
 
 
-def _parse_json_response(stdout: str) -> dict[str, Any]:
-    """Parse a whole stdout JSON object or the last JSON object line."""
+def _matching_json_response(stdout: str, *, expected_id: str) -> dict[str, Any]:
+    """Return the first JSON-RPC response with the expected request id."""
     text = stdout.strip()
     if not text:
         raise AppServerError("app-server response was empty")
-    candidates = [text]
-    candidates.extend(line.strip() for line in reversed(text.splitlines()) if line.strip())
-    for candidate in candidates:
+    saw_json = False
+    for candidate in _json_candidates(text):
         try:
             parsed = json.loads(candidate)
         except ValueError:
             continue
-        if isinstance(parsed, dict):
+        if not isinstance(parsed, dict):
+            continue
+        saw_json = True
+        if parsed.get("id") == expected_id:
             return parsed
-    raise AppServerError("app-server response was not valid JSON")
+    if not saw_json:
+        raise AppServerError("app-server response was not valid JSON")
+    raise AppServerError(f"app-server response missing matching id {expected_id}")
+
+
+def _json_candidates(text: str) -> list[str]:
+    """Return whole-output and line-delimited JSON candidates in output order."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) <= 1:
+        return [text]
+    return lines + [text]
 
 
 def _first_text(payload: dict[str, Any], *keys: str) -> str:

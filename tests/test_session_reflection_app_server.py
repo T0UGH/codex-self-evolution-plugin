@@ -130,6 +130,11 @@ def test_client_raises_when_response_id_is_missing() -> None:
 def test_stdio_transport_raises_on_error_response(monkeypatch: pytest.MonkeyPatch) -> None:
     """Real transport converts JSON-RPC error responses into AppServerError."""
 
+    class RequestId:
+        """Deterministic uuid fixture."""
+
+        hex = "1"
+
     class Completed:
         """Minimal subprocess result fixture."""
 
@@ -141,7 +146,67 @@ def test_stdio_transport_raises_on_error_response(monkeypatch: pytest.MonkeyPatc
         """Return a successful process containing a JSON-RPC error."""
         return Completed()
 
+    monkeypatch.setattr("uuid.uuid4", lambda: RequestId())
     monkeypatch.setattr("subprocess.run", fake_run)
 
     with pytest.raises(AppServerError, match="app-server error response"):
+        StdioAppServerTransport().request("thread/fork", {}, timeout_seconds=1)
+
+
+def test_stdio_transport_ignores_notifications_and_wrong_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real transport returns the result matching its generated request id."""
+
+    class RequestId:
+        """Deterministic uuid fixture."""
+
+        hex = "request-1"
+
+    class Completed:
+        """Subprocess result with unrelated JSON-RPC messages first."""
+
+        returncode = 0
+        stdout = "\n".join(
+            [
+                json.dumps({"jsonrpc": "2.0", "method": "notice", "params": {}}),
+                json.dumps({"jsonrpc": "2.0", "id": "wrong", "result": {"id": "wrong-child"}}),
+                json.dumps({"jsonrpc": "2.0", "id": "request-1", "result": {"id": "child-1"}}),
+            ]
+        )
+        stderr = ""
+
+    def fake_run(*args: object, **kwargs: object) -> Completed:
+        """Return mixed JSON-RPC output."""
+        return Completed()
+
+    monkeypatch.setattr("uuid.uuid4", lambda: RequestId())
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    result = StdioAppServerTransport().request("thread/fork", {}, timeout_seconds=1)
+
+    assert result == {"id": "child-1"}
+
+
+def test_stdio_transport_fails_when_no_matching_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real transport fails when stdout has JSON but no matching request id."""
+
+    class RequestId:
+        """Deterministic uuid fixture."""
+
+        hex = "request-1"
+
+    class Completed:
+        """Subprocess result containing only unrelated messages."""
+
+        returncode = 0
+        stdout = json.dumps({"jsonrpc": "2.0", "id": "wrong", "result": {"id": "child-1"}})
+        stderr = ""
+
+    def fake_run(*args: object, **kwargs: object) -> Completed:
+        """Return a wrong-id response."""
+        return Completed()
+
+    monkeypatch.setattr("uuid.uuid4", lambda: RequestId())
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    with pytest.raises(AppServerError, match="missing matching id request-1"):
         StdioAppServerTransport().request("thread/fork", {}, timeout_seconds=1)

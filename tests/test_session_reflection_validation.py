@@ -288,6 +288,40 @@ def test_validate_receipt_rejects_missing_required_field(tmp_path: Path) -> None
     assert result["reason"] == "receipt_schema"
 
 
+def test_validate_receipt_rejects_wrong_expected_job_id(tmp_path: Path) -> None:
+    """Expected job id binds a receipt to the current runner job."""
+    receipt = tmp_path / "receipt.json"
+    _write_receipt(receipt, memory_changes=[], skill_changes=[])
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[tmp_path / "project" / "memory"],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+        expected_job_id="job-2",
+    )
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "job_id_mismatch"
+
+
+def test_validate_receipt_rejects_wrong_expected_child_thread_id(tmp_path: Path) -> None:
+    """Expected child thread id prevents stale child receipts from passing."""
+    receipt = tmp_path / "receipt.json"
+    _write_receipt(receipt, memory_changes=[], skill_changes=[])
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[tmp_path / "project" / "memory"],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+        expected_child_thread_id="child-2",
+    )
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "child_thread_id_mismatch"
+
+
 def test_validate_receipt_rejects_nested_memory_under_allowed_root(tmp_path: Path) -> None:
     """Memory path parent must exactly equal an allowed memory root."""
     memory_root = tmp_path / "project" / "memory"

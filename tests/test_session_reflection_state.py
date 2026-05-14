@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
+import pytest
+
+from codex_self_evolution.storage import atomic_write_json, utc_now
 from codex_self_evolution.session_reflection.state import (
+    ReflectionLockError,
+    acquire_global_lock,
     child_thread_registry_path,
     create_job_from_payload,
     find_existing_parent_job,
+    global_lock_path,
     latest_job_path,
     register_child_thread,
+    release_global_lock,
     update_job_status,
 )
 
@@ -101,3 +109,34 @@ def test_register_child_thread_uses_path_safe_filename(tmp_path: Path) -> None:
     assert registry == child_thread_registry_path(unsafe_id, home=tmp_path)
     assert registry.name != f"{unsafe_id}.json"
     assert json.loads(registry.read_text(encoding="utf-8"))["child_thread_id"] == unsafe_id
+
+
+def test_acquire_global_lock_refuses_active_lock(tmp_path: Path) -> None:
+    """Global lock acquisition fails instead of overwriting live owners."""
+    atomic_write_json(
+        global_lock_path(home=tmp_path),
+        {
+            "created_at": utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "pid": os.getpid(),
+            "owner_token": "existing-owner",
+        },
+    )
+
+    with pytest.raises(ReflectionLockError, match="global reflection lock is active"):
+        acquire_global_lock(home=tmp_path)
+
+
+def test_release_global_lock_requires_owner_token(tmp_path: Path) -> None:
+    """Lock release preserves locks whose owner token changed."""
+    lock = acquire_global_lock(home=tmp_path)
+    atomic_write_json(
+        global_lock_path(home=tmp_path),
+        {
+            "created_at": utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "pid": os.getpid(),
+            "owner_token": "other-owner",
+        },
+    )
+
+    assert release_global_lock(owner_token=lock["owner_token"], home=tmp_path) is False
+    assert json.loads(global_lock_path(home=tmp_path).read_text(encoding="utf-8"))["owner_token"] == "other-owner"
