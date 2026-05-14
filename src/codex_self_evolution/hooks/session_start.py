@@ -10,8 +10,8 @@ from ..storage import ensure_runtime_dirs, load_memory_files, repo_fingerprint
 def session_start(cwd: str | Path | None = None, state_dir: str | Path | None = None) -> dict:
     paths = build_paths(repo_root=cwd, state_dir=state_dir)
     ensure_runtime_dirs(paths)
-    policy = (PACKAGE_ROOT / "recall" / "policy.md").read_text(encoding="utf-8")
-    session_recall_skill = (PACKAGE_ROOT / "recall" / "session_recall.md").read_text(encoding="utf-8")
+    policy = (PACKAGE_ROOT / "session_recall" / "policy.md").read_text(encoding="utf-8")
+    session_recall_skill = (PACKAGE_ROOT / "session_recall" / "session_recall.md").read_text(encoding="utf-8")
     memory_files = load_memory_files(paths)
     combined_prefix = "\n\n".join(
         section
@@ -43,8 +43,6 @@ def session_start(cwd: str | Path | None = None, state_dir: str | Path | None = 
             "trigger_defaults": {"same_repo_first": True, "same_cwd_first": True, "auto_trigger": True},
         },
         "runtime": {
-            "managed_skills_manifest_path": str(paths.skills_dir / "manifest.json"),
-            "review_snapshots_dir": str(paths.review_snapshots_dir),
             "session_context": {
                 "thread_start_injected": True,
                 "repo_root": str(paths.repo_root),
@@ -77,7 +75,7 @@ def format_session_start_for_codex(session_result: dict[str, Any]) -> dict[str, 
     ``additionalContext`` = ``stable_background.combined_prefix`` (USER.md +
     MEMORY.md + session_recall skill) + recall policy. Empty MD files yield
     a short "No entries yet" stub, not a crash — the hook is safe to install
-    on a fresh machine before any reviewer has run.
+    on a fresh machine before any reflection job has written memory.
     """
     prefix = (session_result.get("stable_background") or {}).get("combined_prefix", "").strip()
     policy = (session_result.get("recall") or {}).get("policy", "").strip()

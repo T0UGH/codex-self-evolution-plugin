@@ -1,13 +1,11 @@
 """End-to-end tests for the worktree consolidation migration.
 
 We build two real git worktrees under ``tmp_path``, seed both buckets with
-fake memory + pending suggestions, then run the migration and verify:
+fake memory, then run the migration and verify:
 
 - The feature worktree's bucket is archived, not deleted.
-- The main worktree's bucket absorbs memory entries and pending files.
+- The main worktree's bucket absorbs memory entries.
 - Dedup of (scope, content) holds across the merge.
-- The scheduler-style scan skips ``.archived.*`` dirs (wired via
-  ``scan_all_projects``).
 """
 
 from __future__ import annotations
@@ -20,7 +18,6 @@ from pathlib import Path
 
 import pytest
 
-from codex_self_evolution.compiler.engine import scan_all_projects
 from codex_self_evolution.config import (
     ARCHIVED_BUCKET_SUFFIX,
     CANONICAL_CWD_MARKER,
@@ -47,16 +44,11 @@ def _git(cwd: Path, *args: str) -> None:
 def _seed_bucket(
     bucket: Path,
     memory_entries: dict,
-    pending_names: list[str],
     canonical_cwd: Path | None = None,
 ) -> None:
+    """Seed a migration bucket with legacy memory state."""
     (bucket / "memory").mkdir(parents=True, exist_ok=True)
     (bucket / "memory" / "memory.json").write_text(json.dumps(memory_entries))
-    (bucket / "suggestions" / "pending").mkdir(parents=True, exist_ok=True)
-    for name in pending_names:
-        (bucket / "suggestions" / "pending" / f"{name}.json").write_text(
-            json.dumps({"suggestion_id": name})
-        )
     # Tests use pytest tmp_path which contains dashes (pytest-of-xxx, pytest-N),
     # so the mangle/unmangle round-trip is lossy. Write the canonical_cwd
     # marker that real build_paths would lay down on first bucket access — the
@@ -109,7 +101,7 @@ def test_plan_migration_identifies_linked_worktree_as_source(worktree_setup: tup
 
 
 @requires_git
-def test_run_migration_merges_memory_and_pending(worktree_setup: tuple[Path, Path, Path]) -> None:
+def test_run_migration_merges_memory(worktree_setup: tuple[Path, Path, Path]) -> None:
     home, main_repo, linked = worktree_setup
     projects = home / "projects"
     main_bucket = projects / mangle_project_path(main_repo)
@@ -123,7 +115,6 @@ def test_run_migration_merges_memory_and_pending(worktree_setup: tuple[Path, Pat
                 {"summary": "shared convention", "content": "prefer atomic commits", "confidence": 0.9},
             ],
         },
-        pending_names=["aaa"],
         canonical_cwd=main_repo,
     )
     _seed_bucket(
@@ -137,7 +128,6 @@ def test_run_migration_merges_memory_and_pending(worktree_setup: tuple[Path, Pat
                 {"summary": "feature-specific", "content": "branch feature work in progress", "confidence": 0.7},
             ],
         },
-        pending_names=["bbb"],
         canonical_cwd=linked,
     )
 
@@ -145,7 +135,6 @@ def test_run_migration_merges_memory_and_pending(worktree_setup: tuple[Path, Pat
     assert result["applied"] is True
     assert result["counts"]["to_migrate"] == 1
     assert result["apply_results"][0]["source_bucket"] == linked_bucket.name
-    assert result["apply_results"][0]["moved_pending"] == 1
 
     # Target bucket now has user entry + dedup'd globals + feature-specific
     merged = json.loads((main_bucket / "memory" / "memory.json").read_text())
@@ -155,10 +144,6 @@ def test_run_migration_merges_memory_and_pending(worktree_setup: tuple[Path, Pat
     # Target keeps the higher-confidence version of the shared entry.
     shared = next(item for item in merged["global"] if item["content"] == "prefer atomic commits")
     assert shared["confidence"] == 0.9
-
-    # Pending from linked bucket is now in main bucket; filename preserved.
-    assert (main_bucket / "suggestions" / "pending" / "aaa.json").exists()
-    assert (main_bucket / "suggestions" / "pending" / "bbb.json").exists()
 
     # Source bucket is archived (renamed), not deleted.
     assert not linked_bucket.exists()
@@ -174,34 +159,11 @@ def test_migration_dry_run_does_not_rename(worktree_setup: tuple[Path, Path, Pat
     main_bucket = projects / mangle_project_path(main_repo)
     linked_bucket = projects / mangle_project_path(linked)
 
-    _seed_bucket(main_bucket, {"user": [], "global": []}, [], canonical_cwd=main_repo)
-    _seed_bucket(linked_bucket, {"user": [], "global": []}, ["aaa"], canonical_cwd=linked)
+    _seed_bucket(main_bucket, {"user": [], "global": []}, canonical_cwd=main_repo)
+    _seed_bucket(linked_bucket, {"user": [], "global": []}, canonical_cwd=linked)
 
     result = run_migration(home=home, apply=False)
     assert result["applied"] is False
     assert result["counts"]["to_migrate"] == 1
     # Linked bucket still there — dry-run means no renames.
     assert linked_bucket.exists()
-    assert (linked_bucket / "suggestions" / "pending" / "aaa.json").exists()
-
-
-def test_scan_all_projects_skips_archived_buckets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """scheduler scan must ignore ``.archived.*`` tombstone buckets even when
-    they still contain pending suggestion files, otherwise consolidation
-    would leave phantom compile attempts running against stale state."""
-    home = tmp_path / "state"
-    projects = home / "projects"
-    projects.mkdir(parents=True)
-    # Live bucket: empty (nothing to do)
-    live = projects / "-tmp-live-repo"
-    live.mkdir()
-    # Archived bucket: has pending suggestions that MUST NOT be picked up
-    archived = projects / f"-tmp-old-repo{ARCHIVED_BUCKET_SUFFIX}.20260422T100000"
-    (archived / "suggestions" / "pending").mkdir(parents=True)
-    (archived / "suggestions" / "pending" / "x.json").write_text("{}")
-
-    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
-    result = scan_all_projects(home=home)
-    bucket_names = [entry["project"] for entry in result["results"]]
-    assert "-tmp-live-repo" in bucket_names
-    assert not any(ARCHIVED_BUCKET_SUFFIX in name for name in bucket_names)

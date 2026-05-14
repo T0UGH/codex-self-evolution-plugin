@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "codex-self-evolution-plugin"
 version = "0.7.8"
-description = "Self-evolution loop for OpenAI Codex: Stop-hook reviewer, memory/recall compiler, and independent skill synthesis, zero runtime dependencies."
+description = "Self-evolution loop for OpenAI Codex: session reflection, session recall, and reflection-generated skills with zero runtime dependencies."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -22,11 +22,9 @@ keywords = [
     "plugin",
     "self-evolution",
 ]
-# Keep runtime deps empty — the plugin only uses stdlib. Provider HTTP calls
-# go through urllib (see review/providers.py), which means ``pip install
-# codex-self-evolution-plugin`` lands nothing extra in the user's env. If you
-# ever add a real dep, also update the "zero runtime dependencies" wording
-# in the description above and in README.
+# Keep runtime deps empty — the plugin only uses stdlib. If you ever add a real
+# dep, also update the "zero runtime dependencies" wording in the description
+# above and in README.
 dependencies = []
 
 # Classifiers drive PyPI search + the project page sidebar. Keep the list
@@ -63,9 +61,8 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.package-data]
 codex_self_evolution = [
-    "review/prompt.md",
-    "recall/policy.md",
-    "recall/session_recall.md",
+    "session_recall/policy.md",
+    "session_recall/session_recall.md",
     "plugin_bundle/.codex-plugin/plugin.json",
     "plugin_bundle/.codex-plugin/hooks.json",
 ]

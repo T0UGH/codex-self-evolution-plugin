@@ -1,28 +1,24 @@
 """Plugin-wide structured logging — append one JSON line per CLI invocation.
 
-Why this exists: before P1-6 the plugin emitted almost no log output beyond
-the final JSON result on stdout. When a Stop hook reviewer failed mid-flight
-(401, parse error, model refused, etc.), the evidence vanished with the
-subprocess — users only noticed that pending/ stopped growing.
+Why this exists: lifecycle hooks normally run without an interactive terminal.
+If a SessionStart, SessionStop, or background reflection step fails, the final
+stdout JSON is not enough evidence for post-mortem debugging.
 
 Design decisions:
 
 - **Single destination file** ``<home>/logs/plugin.log``, rotated daily
   (``TimedRotatingFileHandler``, 14 days retention). One file is easier
-  to ``tail`` / ``jq`` than a maze of per-command files, and scheduler
-  frequency (5 min default) is low enough that even a busy install fits
-  comfortably in one day's log.
+  to ``tail`` / ``jq`` than a maze of per-command files.
 - **JSON lines** — readable by humans with ``tail``, trivially filterable
-  with ``jq '. | select(.kind=="stop-review")'``. No log-framework
+  with ``jq '. | select(.kind=="session-stop")'``. No log-framework
   dependency; stdlib ``logging`` + a 20-line formatter.
 - **Logger reset on every ``configure()`` call** so tests can redirect
   logs per-tmp_path without fixture gymnastics. The CLI is short-lived
   (< a second per invocation) so rebuilding the handler costs nothing.
 - **Record one summary line per CLI command** in ``cli.main()`` — that's
   where the high-signal "did this invocation work?" information lives.
-  Deeper per-step logging (inside compile, reviewer, etc.) is intentionally
-  NOT added yet — start with the boundary, push inward only if an actual
-  investigation needs more.
+  Deeper per-step logging is intentionally NOT added yet — start with the
+  boundary, push inward only if an actual investigation needs more.
 """
 from __future__ import annotations
 

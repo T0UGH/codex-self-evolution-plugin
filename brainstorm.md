@@ -864,3 +864,13 @@ review 只负责判断，不直接写最终文件。
 第一版要做的不是“给 Codex 加个 memory”，而是：
 
 > **先做一个全局沉淀层 + recall 局部优先的四层闭环 Hermes 式自我进化插件：用 SessionStart 带入稳定记忆与轻量 recall policy，用 Codex thread 历史承接 recall 原材料，用 background review 把本轮结果分流成 memory / recall / skill，并让这些东西在后续回合按需重新回来。**
+
+---
+
+## 2026-05-15 更新：Session Reflection Trigger Policy Brainstorm
+
+这部分已拆成独立文档：
+
+- [Session Reflection Trigger Policy Brainstorm](docs/plans/2026-05-15-session-reflection-trigger-policy-brainstorm.md)
+
+后续讨论以独立文档为准，避免 `brainstorm.md` 继续膨胀。

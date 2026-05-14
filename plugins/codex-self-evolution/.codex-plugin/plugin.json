@@ -1,7 +1,7 @@
 {
   "name": "codex-self-evolution",
   "version": "0.7.8",
-  "description": "Scheduled self-evolution loop with stable background memory, provider-backed stop review, explicit suggestion states, launchd compiler preflight, focused recall, and independent csep-synth skill synthesis.",
+  "description": "Session-level self-evolution loop with stable memory, session reflection, focused session recall, and csep-reflect skill generation.",
   "author": {
     "name": "T0UGH",
     "url": "https://github.com/T0UGH"
@@ -14,24 +14,8 @@
       "command": "codex-self-evolution session-start --from-stdin"
     },
     {
-      "name": "stop-review",
-      "command": "codex-self-evolution stop-review --from-stdin"
-    },
-    {
-      "name": "compile-preflight",
-      "command": "codex-self-evolution compile-preflight --state-dir \"$CODEX_STATE_DIR\""
-    },
-    {
-      "name": "compile",
-      "command": "codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend agent:pi"
-    },
-    {
-      "name": "scan",
-      "command": "codex-self-evolution scan --backend agent:pi --max-runs-per-project 3"
-    },
-    {
-      "name": "skill-synthesize",
-      "command": "codex-self-evolution skill-synthesize"
+      "name": "session-stop",
+      "command": "codex-self-evolution session-stop --from-stdin"
     },
     {
       "name": "status",
@@ -44,18 +28,7 @@
     {
       "name": "recall",
       "command": "csep recall \"$CODEX_RECALL_QUERY\" --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
-    },
-    {
-      "name": "recall-trigger",
-      "command": "codex-self-evolution recall-trigger --query \"$CODEX_RECALL_QUERY\" --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
     }
   ],
-  "hooks": "./.codex-plugin/hooks.json",
-  "scheduler": {
-    "recommended": "launchd",
-    "scan_command": "codex-self-evolution scan --backend agent:pi --max-runs-per-project 3",
-    "skill_synthesis_command": "codex-self-evolution skill-synthesize --mode incremental --lookback-hours 24",
-    "preflight_command": "codex-self-evolution compile-preflight --state-dir \"$CODEX_STATE_DIR\"",
-    "compile_command": "codex-self-evolution compile --once --state-dir \"$CODEX_STATE_DIR\" --backend agent:pi"
-  }
+  "hooks": "./.codex-plugin/hooks.json"
 }

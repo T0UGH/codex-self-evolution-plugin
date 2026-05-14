@@ -6,29 +6,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-# Agent compilation quality degrades sharply when many heterogeneous reviewer
-# envelopes are merged in one prompt. Keep unattended batches small; repeated
-# scheduler ticks are cheaper than silently losing durable memory.
-DEFAULT_BATCH_SIZE = 5
-# Pi edit mode deliberately compiles one envelope per run_compile call so the
-# agent edits one asset workspace at a time. The scheduled scan may safely call
-# run_compile a few times per bucket to avoid backlog when many Stop hooks land
-# between 5-minute launchd ticks.
-DEFAULT_SCAN_MAX_RUNS_PER_PROJECT = 3
-# Hard upper bound for how long a compile lock may live before the next
-# preflight treats it as stale and reclaims it. Set to 30 minutes: a normal
-# compile should finish well under this (typical target 5-10 minutes); exceeding
-# it means the owning process is stuck and should be evicted.
+# Hard upper bound for how long reflection and trigger locks may live before
+# the next run treats them as stale and reclaims them.
 DEFAULT_LOCK_STALE_SECONDS = 30 * 60
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PLUGIN_OWNER = "codex-self-evolution-plugin"
-MANAGED_SKILLS_DIRNAME = "managed"
-SKILL_SYNTHESIS_SUBDIR = "skill_synthesis"
-SYNTH_SKILL_PREFIX = "csep-synth-"
 SESSION_REFLECTION_SUBDIR = "session_reflection"
 REFLECT_SKILL_PREFIX = "csep-reflect-"
 
-# Where per-project state (suggestions, memory, recall, review) lives by default.
+# Where per-project state lives by default.
 # Mirrors Claude Code's `~/.claude/projects/<mangled-path>/` convention so each
 # repo has an isolated bucket but users' source trees stay clean — no more
 # auto-created `data/` appearing under every repo Codex runs in. Override with
@@ -70,17 +56,12 @@ def unmangle_bucket_name(name: str) -> Path:
     return Path(name.replace("-", "/"))
 
 
-# Suffix marking buckets that have been archived by the worktree-migration
-# flow. The scheduler's ``scan_all_projects`` explicitly skips anything under
-# this suffix so old buckets stop accumulating compile receipts after consolidation.
+# Suffix marking buckets archived by the worktree-migration flow.
 ARCHIVED_BUCKET_SUFFIX = ".archived"
 
 
 def is_archived_bucket(bucket_name: str) -> bool:
-    """True when ``bucket_name`` matches the ``<name>.archived.<ts>`` pattern
-    produced by worktree consolidation (or the bare ``.archived`` suffix an
-    older migration might have used). Used by scheduler scan and diagnostics
-    to skip tombstone buckets consistently."""
+    """Return whether ``bucket_name`` is a worktree-migration archive bucket."""
     return bucket_name.endswith(ARCHIVED_BUCKET_SUFFIX) or f"{ARCHIVED_BUCKET_SUFFIX}." in bucket_name
 
 # Sidecar file that stores the bucket's canonical cwd. Written lazily by
@@ -96,7 +77,7 @@ def _maybe_write_canonical_cwd(state_dir: Path, cwd: Path) -> None:
     """Write the canonical-cwd marker if the bucket directory exists.
 
     Intentionally a no-op when ``state_dir`` is not yet created — the first
-    write into a fresh bucket (e.g. a stop-review snapshot) creates the dir,
+    write into a fresh bucket creates the dir,
     and the next ``build_paths`` call for that bucket materialises the
     marker. That two-phase materialisation keeps this helper side-effect-free
     on pristine checkouts that call ``build_paths`` without actually writing
@@ -180,30 +161,18 @@ class Paths:
     repo_root: Path
     plugin_root: Path
     state_dir: Path
-    suggestions_dir: Path
-    suggestions_pending_dir: Path
-    suggestions_processing_dir: Path
-    suggestions_done_dir: Path
-    suggestions_failed_dir: Path
-    suggestions_discarded_dir: Path
     memory_dir: Path
-    recall_dir: Path
-    skills_dir: Path
-    managed_skills_dir: Path
-    compiler_dir: Path
-    review_dir: Path
-    review_snapshots_dir: Path
-    review_failed_dir: Path
-    scheduler_dir: Path
 
 
 def resolve_repo_root(cwd: str | Path | None = None) -> Path:
+    """Resolve an explicit cwd or the process cwd into an absolute path."""
     if cwd:
         return Path(cwd).resolve()
     return Path.cwd().resolve()
 
 
 def build_paths(repo_root: str | Path | None = None, state_dir: str | Path | None = None) -> Paths:
+    """Build the retained per-repo state paths for memory-backed sessions."""
     resolved_repo = resolve_repo_root(repo_root)
     plugin_root = resolved_repo / ".codex-plugin"
     if state_dir:
@@ -212,26 +181,9 @@ def build_paths(repo_root: str | Path | None = None, state_dir: str | Path | Non
         bucket_key = resolve_bucket_key(resolved_repo)
         resolved_state = get_home_dir() / PROJECTS_SUBDIR / mangle_project_path(bucket_key)
         _maybe_write_canonical_cwd(resolved_state, bucket_key)
-    suggestions_dir = resolved_state / "suggestions"
-    skills_dir = resolved_state / "skills"
-    review_dir = resolved_state / "review"
     return Paths(
         repo_root=resolved_repo,
         plugin_root=plugin_root,
         state_dir=resolved_state,
-        suggestions_dir=suggestions_dir,
-        suggestions_pending_dir=suggestions_dir / "pending",
-        suggestions_processing_dir=suggestions_dir / "processing",
-        suggestions_done_dir=suggestions_dir / "done",
-        suggestions_failed_dir=suggestions_dir / "failed",
-        suggestions_discarded_dir=suggestions_dir / "discarded",
         memory_dir=resolved_state / "memory",
-        recall_dir=resolved_state / "recall",
-        skills_dir=skills_dir,
-        managed_skills_dir=skills_dir / MANAGED_SKILLS_DIRNAME,
-        compiler_dir=resolved_state / "compiler",
-        review_dir=review_dir,
-        review_snapshots_dir=review_dir / "snapshots",
-        review_failed_dir=review_dir / "failed",
-        scheduler_dir=resolved_state / "scheduler",
     )

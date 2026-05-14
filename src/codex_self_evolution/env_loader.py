@@ -1,11 +1,9 @@
 """Hydrate ``~/.codex-self-evolution/.env.provider`` into ``os.environ``.
 
-Why this exists: the ``scan`` job runs under launchd, which hands the child a
-near-empty environment (just ``PATH`` + ``HOME`` per our plist). Downstream
-agents — specifically ``pi`` / ``opencode`` — read their API keys from env
-vars. Without hydration, launchd scan jobs can call the agent without
-``KIMI_API_KEY`` / provider keys and fail with a misleading "no assistant
-text" style receipt.
+Why this exists: Codex lifecycle hooks may run with a narrower environment than
+the user's interactive shell. Hydrating the local provider file once at the CLI
+boundary keeps child subprocesses, such as ``codex app-server proxy``, aligned
+with the same env keys that manual commands see.
 
 Security posture:
 
@@ -96,9 +94,8 @@ def hydrate_env_for_subprocesses() -> list[str]:
     """One-shot: load ``.env.provider`` and apply to ``os.environ``.
 
     Intended to be called once at the CLI entry point. Any subprocess we
-    spawn (pi/opencode for compile, the HTTP reviewer) then inherits these keys
-    via the default ``os.environ`` copy that :class:`subprocess.Popen`
-    performs. Safe to call multiple times.
+    spawn then inherits these keys via the default ``os.environ`` copy that
+    :class:`subprocess.Popen` performs. Safe to call multiple times.
 
     Returns the keys it actually applied so callers can emit a structured
     log line naming which env vars crossed into process scope (values are

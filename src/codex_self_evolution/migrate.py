@@ -13,36 +13,29 @@ so new writes automatically land in the right place. This module provides the
 one-shot migration for pre-existing buckets so users aren't stuck with a
 split view forever.
 
-Design choices (matching what was agreed during design discussion):
+Design choices:
 
 - **Archive, don't delete** — consolidated buckets are renamed to
-  ``<name>.archived.<ts>``. The scheduler's :func:`scan_all_projects`
-  explicitly skips ``.archived`` directories so the stale buckets stop
-  producing receipts, but the data is still on disk for inspection/rollback.
-- **Minimal merge surface** — we consolidate ``memory.json`` (re-rendered to
-  MEMORY.md/USER.md via the existing writer) and move ``suggestions/pending/``
-  into the target so queued-but-not-yet-compiled work continues. Everything
-  else (done/failed history, recall snapshots, skills, compiler receipts)
-  stays in the archived bucket; it's historical and not exercised by the
-  live pipeline.
+  ``<name>.archived.<ts>`` so historical data is still on disk for inspection
+  and rollback.
+- **Minimal merge surface** — we consolidate ``memory.json`` and re-render
+  MEMORY.md/USER.md. Other historical runtime files stay in the archived
+  bucket because they are not part of the retained session-level system.
 - **Dry-run first** — the caller can preview the plan before anything gets
   renamed. Guarded by an ``apply`` flag on :func:`plan_and_run`.
 
 Non-goals for this pass: cross-clone consolidation (two independent clones
 of the same origin URL), deduping *within* already-consolidated buckets, or
-fixing stale ``repo_fingerprint`` fields in historical suggestion files.
+fixing stale ``repo_fingerprint`` fields in historical runtime files.
 """
 
 from __future__ import annotations
 
-import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .compiler.engine import _render_memory_markdown
-from .compiler.memory import _normalize_existing_entry
 from .config import (
     ARCHIVED_BUCKET_SUFFIX,
     CANONICAL_CWD_MARKER,
@@ -67,9 +60,9 @@ class BucketPlan:
     target_path: Path
     target_cwd: Path
     source_memory_entries: int
-    pending_count: int
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize this migration step for CLI JSON output."""
         return {
             "source_bucket": self.source_bucket,
             "source_path": str(self.source_path),
@@ -78,7 +71,6 @@ class BucketPlan:
             "target_path": str(self.target_path),
             "target_cwd": str(self.target_cwd),
             "source_memory_entries": self.source_memory_entries,
-            "pending_count": self.pending_count,
         }
 
 
@@ -90,6 +82,7 @@ class BucketSkip:
     reason: str
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize this skipped bucket for CLI JSON output."""
         return {"bucket": self.bucket, "reason": self.reason}
 
 
@@ -100,6 +93,7 @@ class MigrationPlan:
     skipped: list[BucketSkip] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the complete migration plan for CLI JSON output."""
         return {
             "home": str(self.home),
             "plans": [plan.to_dict() for plan in self.plans],
@@ -146,13 +140,6 @@ def _count_memory_entries(bucket_path: Path) -> int:
         if isinstance(items, list):
             count += sum(1 for item in items if isinstance(item, dict))
     return count
-
-
-def _count_pending(bucket_path: Path) -> int:
-    pending_dir = bucket_path / "suggestions" / "pending"
-    if not pending_dir.is_dir():
-        return 0
-    return sum(1 for item in pending_dir.iterdir() if item.is_file() and item.suffix == ".json")
 
 
 def plan_migration(home: Path | None = None) -> MigrationPlan:
@@ -215,7 +202,6 @@ def plan_migration(home: Path | None = None) -> MigrationPlan:
                 target_path=target_path,
                 target_cwd=identity,
                 source_memory_entries=_count_memory_entries(bucket_path),
-                pending_count=_count_pending(bucket_path),
             )
         )
 
@@ -253,7 +239,7 @@ def _merge_memory(source_path: Path, target_path: Path) -> dict[str, list[dict[s
             for raw in store.get(scope, []) or []:
                 if not isinstance(raw, dict):
                     continue
-                normalized = _normalize_existing_entry(scope, raw)
+                normalized = _normalize_memory_entry(scope, raw)
                 if normalized is None:
                     continue
                 key = (scope, normalized["content"])
@@ -264,14 +250,47 @@ def _merge_memory(source_path: Path, target_path: Path) -> dict[str, list[dict[s
     return merged
 
 
+def _normalize_memory_entry(scope: str, raw: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalize a legacy memory entry while preserving useful metadata."""
+    content = str(raw.get("content") or "").strip()
+    if not content:
+        return None
+    summary = str(raw.get("summary") or "").strip() or content[:80]
+    confidence_raw = raw.get("confidence", 1.0)
+    try:
+        confidence = float(confidence_raw)
+    except (TypeError, ValueError):
+        confidence = 1.0
+    normalized = {
+        "summary": summary,
+        "content": content,
+        "confidence": max(0.0, min(1.0, confidence)),
+        "scope": scope,
+    }
+    for key in ("source", "source_paths", "updated_at"):
+        if key in raw:
+            normalized[key] = raw[key]
+    return normalized
+
+
+def _render_memory_markdown(title: str, records: list[dict[str, Any]]) -> str:
+    """Render retained memory records into a simple Markdown document."""
+    lines = [f"# {title}", ""]
+    if not records:
+        lines.append("_No entries yet._")
+    for item in records:
+        summary = str(item.get("summary") or "Memory").strip()
+        content = str(item.get("content") or "").strip()
+        lines.extend([f"## {summary}", "", content, ""])
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _apply_one(bucket_plan: BucketPlan) -> dict[str, Any]:
-    """Execute a single consolidation: merge memory, move pending, archive source."""
+    """Execute a single consolidation: merge memory and archive source."""
     source = bucket_plan.source_path
     target = bucket_plan.target_path
     target_memory_dir = target / "memory"
-    target_suggestions_pending = target / "suggestions" / "pending"
     target_memory_dir.mkdir(parents=True, exist_ok=True)
-    target_suggestions_pending.mkdir(parents=True, exist_ok=True)
 
     merged = _merge_memory(source, target)
     atomic_write_json(target_memory_dir / "memory.json", merged)
@@ -284,27 +303,8 @@ def _apply_one(bucket_plan: BucketPlan) -> dict[str, Any]:
         _render_memory_markdown("MEMORY", merged["global"]),
     )
 
-    # Move pending suggestions so queued-but-uncompiled work keeps flowing
-    # after archive. Done / failed / discarded / processing stay put: they're
-    # historical receipts tied to snapshots in this same bucket, moving them
-    # would dangle the snapshot paths.
-    moved_pending = 0
-    source_pending = source / "suggestions" / "pending"
-    if source_pending.is_dir():
-        for item in sorted(source_pending.iterdir()):
-            if not (item.is_file() and item.suffix == ".json"):
-                continue
-            dest = target_suggestions_pending / item.name
-            if dest.exists():
-                # Same content-hash filename means the same suggestion was
-                # already queued in the target bucket — skip without error.
-                item.unlink()
-            else:
-                shutil.move(str(item), str(dest))
-            moved_pending += 1
-
-    # Rename the source bucket so the scheduler stops picking it up. The
-    # suffix is timestamped so repeated migrations never collide.
+    # Rename the source bucket. The suffix is timestamped so repeated
+    # migrations never collide.
     ts = time.strftime("%Y%m%dT%H%M%S")
     archived_name = f"{source.name}{ARCHIVED_BUCKET_SUFFIX}.{ts}"
     archived_path = source.parent / archived_name
@@ -315,7 +315,6 @@ def _apply_one(bucket_plan: BucketPlan) -> dict[str, Any]:
         "target_bucket": bucket_plan.target_bucket,
         "archived_as": archived_path.name,
         "merged_memory_entries": len(merged["user"]) + len(merged["global"]),
-        "moved_pending": moved_pending,
     }
 
 

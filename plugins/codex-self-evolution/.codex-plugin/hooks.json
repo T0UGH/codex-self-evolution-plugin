@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "codex-self-evolution stop-review --from-stdin",
+            "command": "codex-self-evolution session-stop --from-stdin",
             "timeout": 20
           }
         ]

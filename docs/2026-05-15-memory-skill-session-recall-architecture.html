@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Codex Self Evolution Architecture</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --ink: #18202a;
+      --muted: #627083;
+      --line: #cbd3df;
+      --memory: #1f7a5c;
+      --skill: #8057b5;
+      --recall: #2468a8;
+      --hook: #b85c24;
+      --surface: #ffffff;
+      --soft: #eef2f6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    header {
+      padding: 32px 40px 20px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 32px;
+      letter-spacing: 0;
+    }
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      max-width: 980px;
+    }
+    main {
+      padding: 28px 40px 44px;
+      display: grid;
+      gap: 24px;
+    }
+    section {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 22px;
+    }
+    h2 {
+      margin: 0 0 16px;
+      font-size: 20px;
+      letter-spacing: 0;
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(120px, 1fr));
+      gap: 12px;
+      align-items: stretch;
+    }
+    .node {
+      min-height: 96px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: var(--soft);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 6px;
+      position: relative;
+    }
+    .node::after {
+      content: "→";
+      position: absolute;
+      right: -14px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .node:last-child::after { content: ""; }
+    .node strong { font-size: 15px; }
+    .node span { color: var(--muted); font-size: 13px; }
+    .hook { border-color: color-mix(in srgb, var(--hook), white 45%); background: #fff1e9; }
+    .memory { border-color: color-mix(in srgb, var(--memory), white 45%); background: #eaf6f0; }
+    .skill { border-color: color-mix(in srgb, var(--skill), white 45%); background: #f3edf9; }
+    .recall { border-color: color-mix(in srgb, var(--recall), white 45%); background: #eaf2fb; }
+    .lanes {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .lane {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fbfcfd;
+    }
+    .lane h3 {
+      margin: 0;
+      padding: 14px 16px;
+      color: white;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+    .lane.memory h3 { background: var(--memory); }
+    .lane.skill h3 { background: var(--skill); }
+    .lane.recall h3 { background: var(--recall); }
+    .lane dl {
+      margin: 0;
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+    dt {
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    dd {
+      margin: 0;
+      color: var(--muted);
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+      background: #edf1f5;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 700;
+      background: #f8fafc;
+    }
+    tr:last-child td { border-bottom: 0; }
+    .note {
+      color: var(--muted);
+      margin: 10px 0 0;
+    }
+    @media (max-width: 980px) {
+      header, main { padding-left: 18px; padding-right: 18px; }
+      .flow { grid-template-columns: 1fr; }
+      .node::after {
+        content: "↓";
+        right: 16px;
+        top: auto;
+        bottom: -18px;
+        transform: none;
+      }
+      .lanes { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Codex Self Evolution 当前架构</h1>
+    <p class="subtitle">当前实现只保留 session 级闭环：Memory、Skill、Session Recall 三条线都从 Codex lifecycle hooks 产生，并在下一次会话被消费。</p>
+  </header>
+
+  <main>
+    <section>
+      <h2>生命周期总览</h2>
+      <div class="flow">
+        <div class="node hook"><strong>SessionStart</strong><span>读取 repo bucket</span></div>
+        <div class="node memory"><strong>注入背景</strong><span><code>USER.md</code> / <code>MEMORY.md</code></span></div>
+        <div class="node hook"><strong>Codex 工作</strong><span>普通对话与工具调用</span></div>
+        <div class="node hook"><strong>Stop</strong><span>归档 transcript</span></div>
+        <div class="node hook"><strong>Trigger Policy</strong><span>session 级计数器 + 高信号关键词</span></div>
+        <div class="node skill"><strong>Reflection Child</strong><span>app-server fork 当前 thread</span></div>
+        <div class="node memory"><strong>下次消费</strong><span>memory / skill / recall 生效</span></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>三条数据线</h2>
+      <div class="lanes">
+        <article class="lane memory">
+          <h3>Memory</h3>
+          <dl>
+            <div>
+              <dt>怎么产生</dt>
+              <dd>Stop hook 达到 memory nudge 条件后，reflection child 写入 repo bucket 下的 <code>memory/USER.md</code> 和 <code>memory/MEMORY.md</code>。</dd>
+            </div>
+            <div>
+              <dt>怎么校验</dt>
+              <dd>child 必须写 <code>receipt.json</code>；parent 只承认 receipt 中声明且位于允许目录内的写入。</dd>
+            </div>
+            <div>
+              <dt>怎么消费</dt>
+              <dd>下一次 <code>SessionStart</code> 读取同一 repo bucket，并把 stable background 注入 Codex。</dd>
+            </div>
+          </dl>
+        </article>
+
+        <article class="lane skill">
+          <h3>Skill</h3>
+          <dl>
+            <div>
+              <dt>怎么产生</dt>
+              <dd>Stop hook 达到 skill nudge 条件后，同一个 reflection child 可以一次性产出 active skill。</dd>
+            </div>
+            <div>
+              <dt>写到哪里</dt>
+              <dd>只允许写入 <code>~/.codex/skills/csep-reflect-*</code>；前缀和路径由 parent 校验。</dd>
+            </div>
+            <div>
+              <dt>怎么消费</dt>
+              <dd>Codex 原生 skills loader 在后续会话中按 description 触发。</dd>
+            </div>
+          </dl>
+        </article>
+
+        <article class="lane recall">
+          <h3>Session Recall</h3>
+          <dl>
+            <div>
+              <dt>怎么产生</dt>
+              <dd>Stop hook 默认把 Codex transcript 归档到 <code>session_recall/state.db</code>，并建立 FTS 索引。</dd>
+            </div>
+            <div>
+              <dt>如何分组</dt>
+              <dd>默认按当前 repo scope 检索；同一个 git common dir 下的多个 worktree 视为同一个 repo。</dd>
+            </div>
+            <div>
+              <dt>怎么消费</dt>
+              <dd>模型或用户显式调用 <code>csep recall</code>、<code>csep recall --recent</code>、<code>csep recall --global</code>。</dd>
+            </div>
+          </dl>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>关键状态与命令</h2>
+      <table>
+        <thead>
+          <tr><th>对象</th><th>路径 / 命令</th><th>作用</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Plugin hooks</td>
+            <td><code>plugins/codex-self-evolution/.codex-plugin/hooks.json</code></td>
+            <td>声明 <code>session-start --from-stdin</code> 和 <code>session-stop --from-stdin</code>。</td>
+          </tr>
+          <tr>
+            <td>Reflection state</td>
+            <td><code>~/.codex-self-evolution/session_reflection/</code></td>
+            <td>保存 job、trigger state、child thread 映射、receipt 和 validation。</td>
+          </tr>
+          <tr>
+            <td>Repo memory</td>
+            <td><code>~/.codex-self-evolution/projects/&lt;bucket&gt;/memory/</code></td>
+            <td>保存下一次 SessionStart 注入的稳定背景。</td>
+          </tr>
+          <tr>
+            <td>Reflect skills</td>
+            <td><code>~/.codex/skills/csep-reflect-*</code></td>
+            <td>保存 reflection child 产出的可复用流程。</td>
+          </tr>
+          <tr>
+            <td>Recall store</td>
+            <td><code>~/.codex-self-evolution/session_recall/state.db</code></td>
+            <td>保存原始 session 消息、repo 元数据和 FTS 索引。</td>
+          </tr>
+          <tr>
+            <td>Status</td>
+            <td><code>codex-self-evolution status</code></td>
+            <td>只读检查 plugin hooks、session reflection、session recall、环境文件和本地工具。</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="note">触发规则是 session 级别的增量窗口，不是全局计数；同一父 session 的活跃 job 会阻止递归 fork。</p>
+    </section>
+  </main>
+</body>
+</html>

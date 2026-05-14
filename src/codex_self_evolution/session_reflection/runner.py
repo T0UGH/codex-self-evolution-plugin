@@ -5,7 +5,7 @@ from typing import Any
 
 from ..config import PROJECTS_SUBDIR, Paths, mangle_project_path, resolve_bucket_key, resolve_repo_root
 from ..config_file import load_config
-from ..managed_skills.publish import codex_skills_dir
+from ..skill_paths import codex_skills_dir
 from ..storage import atomic_write_json, atomic_write_text, load_json
 from .app_server import ReflectionAppServerClient
 from .guard import evaluate_recursion_guard

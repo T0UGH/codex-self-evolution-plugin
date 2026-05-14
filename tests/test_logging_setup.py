@@ -1,16 +1,16 @@
 """Plugin-wide structured logging.
 
 These tests guard three properties that matter when an install is actually
-running unattended (Stop hook / launchd scheduler), because that's exactly
-when users stop having a terminal to read stderr:
+running unattended via Codex lifecycle hooks, because that's exactly when users
+stop having a terminal to read stderr:
 
 1. **Log lines are valid JSON** — consumers pipe through ``jq`` / log
    shippers; a malformed line corrupts everything after it.
 2. **Every CLI invocation leaves exactly one summary line** — if this
    regresses (dupes from reconfiguring, or silent drops from a crashed
-   handler), the "did the scheduler run?" question becomes unanswerable.
+   handler), the "did the hook run?" question becomes unanswerable.
 3. **Failed commands get logged BEFORE re-raising** — the CLI is typically
-   invoked by a hook/launchd runner that captures stderr somewhere lossy.
+   invoked by a hook runner that captures stderr somewhere lossy.
    The persistent file log must be the primary evidence trail.
 """
 from __future__ import annotations
@@ -44,7 +44,7 @@ def test_json_formatter_emits_valid_jsonl():
         exc_info=None,
     )
     # `extra=` fields land as record attributes; simulate that.
-    record.kind = "stop-review"
+    record.kind = "session-stop"
     record.exit_code = 0
     record.duration_ms = 42
 
@@ -53,10 +53,10 @@ def test_json_formatter_emits_valid_jsonl():
 
     assert parsed["msg"] == "hello world"
     assert parsed["level"] == "INFO"
-    assert parsed["kind"] == "stop-review"
+    assert parsed["kind"] == "session-stop"
     assert parsed["exit_code"] == 0
     assert parsed["duration_ms"] == 42
-    # ts field must be ISO-8601 with Z suffix — scheduler grep-ability relies
+    # ts field must be ISO-8601 with Z suffix — log grep-ability relies
     # on this stable format. Changing it breaks downstream log shippers.
     assert parsed["ts"].endswith("Z")
 
@@ -88,8 +88,7 @@ def test_json_formatter_includes_exc_info():
     out = logging_setup.JsonFormatter().format(record)
     parsed = json.loads(out)
     # The exception traceback is embedded — without this, debugging a silent
-    # reviewer failure means reading the Stop hook's subprocess output log
-    # which may not exist.
+    # hook failure means reading subprocess output that may not exist.
     assert "detonation" in parsed["exc"]
 
 
@@ -160,7 +159,7 @@ def test_cli_main_logs_failure_before_reraising(tmp_path, monkeypatch, capsys):
     # Force session_start to blow up — the log MUST capture the error
     # summary even though main() re-raises. This is the property that
     # makes the log file the primary post-mortem trail for silent
-    # hook/scheduler failures.
+    # hook failures.
     def boom(**_):
         raise RuntimeError("simulated disk failure")
 

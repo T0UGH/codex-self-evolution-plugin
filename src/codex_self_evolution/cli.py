@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import subprocess
@@ -11,12 +10,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .compiler.engine import preflight_compile, run_compile, scan_all_projects
-from .compiler.replay import evaluate_compiler_fixture
-from .config import DEFAULT_SCAN_MAX_RUNS_PER_PROJECT
 from .config_file import (
     ConfigError,
-    LoadResult,
     config_to_dict,
     get_config_path,
     load_config,
@@ -25,15 +20,8 @@ from .config_file_template import CONFIG_TEMPLATE
 from .diagnostics import collect_status
 from .env_loader import hydrate_env_for_subprocesses
 from .hooks.session_start import format_session_start_for_codex, session_start
-from .hooks.stop_review import stop_review
 from .logging_setup import configure as configure_logging, get_logger
 from .migrate import run_migration
-from .recall.search import search_recall
-from .recall.workflow import (
-    evaluate_session_recall,
-    render_focused_recall_markdown,
-)
-from .skill_synthesis.runner import run_skill_synthesis
 from .session_reflection.runner import (
     enqueue_reflection_from_payload,
     run_reflection_job,
@@ -59,20 +47,14 @@ def build_parser() -> argparse.ArgumentParser:
              "DeveloperInstructions in the model's session.",
     )
 
-    stop_parser = subparsers.add_parser("stop-review")
-    stop_parser.add_argument("--hook-payload")
+    stop_parser = subparsers.add_parser("session-stop")
     stop_parser.add_argument("--state-dir")
     stop_parser.add_argument(
         "--from-stdin",
         action="store_true",
-        help="Read a Codex native Stop hook JSON payload from stdin, enqueue a "
-             "session-reflection job, fire a detached reflection worker, and "
-             'emit {"continue": true} so Codex unblocks within its hook timeout.',
-    )
-    stop_parser.add_argument(
-        "--cleanup-payload",
-        action="store_true",
-        help="Delete --hook-payload after the reviewer finishes (internal use by --from-stdin).",
+        help="Read a Codex native Stop hook JSON payload from stdin, archive the session, "
+             "evaluate the deterministic reflection trigger policy, enqueue a session-reflection "
+             'job when needed, and emit {"continue": true}.',
     )
 
     reflect_parser = subparsers.add_parser("session-reflect")
@@ -82,74 +64,28 @@ def build_parser() -> argparse.ArgumentParser:
     reflect_mode.add_argument("--status", action="store_true")
     reflect_parser.add_argument("--home")
 
-    compile_parser = subparsers.add_parser("compile")
-    compile_parser.add_argument("--state-dir")
-    compile_parser.add_argument("--repo-root")
-    compile_parser.add_argument("--once", action="store_true")
-    compile_parser.add_argument("--backend", default="script")
-
-    preflight_parser = subparsers.add_parser("compile-preflight")
-    preflight_parser.add_argument("--state-dir")
-    preflight_parser.add_argument("--repo-root")
-
     status_parser = subparsers.add_parser(
         "status",
         help="Read-only diagnostic snapshot: which hooks are wired, whether "
-             "launchd scheduler is loaded, which API keys are set (reports "
-             "names only, never values), CLI tool versions, and per-bucket "
-             "pending/done/failed counts + last compile receipt. Outputs JSON.",
+             "which API keys are set (reports names only, never values), CLI "
+             "tool versions, and per-bucket session state. Outputs JSON.",
     )
     status_parser.add_argument(
         "--home",
         help="Override CODEX_SELF_EVOLUTION_HOME (default ~/.codex-self-evolution).",
     )
 
-    scan_parser = subparsers.add_parser(
-        "scan",
-        help="Run preflight+compile on every project bucket under <home>/projects/. "
-             "Designed for launchd/cron scheduling — a single invocation drains all "
-             "repos that have pending suggestions, with per-bucket exception isolation.",
-    )
-    scan_parser.add_argument(
-        "--home",
-        help="Override CODEX_SELF_EVOLUTION_HOME for this invocation (default "
-             "~/.codex-self-evolution). Mostly useful in tests.",
-    )
-    # Unlike `compile`, scan defaults to the agent backend since it runs
-    # unattended. Pi + Kimi is the production default; script stays available
-    # for deterministic tests and local debugging.
-    scan_parser.add_argument("--backend", default="agent:pi")
-    scan_parser.add_argument(
-        "--max-runs-per-project",
-        type=int,
-        default=DEFAULT_SCAN_MAX_RUNS_PER_PROJECT,
-        help="Maximum compile attempts per project bucket in one scan. Pi edit "
-             "mode still compiles one envelope per attempt; this drains backlog "
-             "without merging unrelated suggestions into one agent edit.",
-    )
-
-    synth_parser = subparsers.add_parser(
-        "skill-synthesize",
-        help="Run global synthesized skill generation from memory/recall/done suggestions.",
-    )
-    synth_parser.add_argument("--home")
-    synth_parser.add_argument("--mode", choices=("incremental", "full"))
-    synth_parser.add_argument("--lookback-hours", type=int)
-    synth_parser.add_argument("--lookback-days", type=int)
-    synth_parser.add_argument("--dry-run", action="store_true")
-
     config_parser = subparsers.add_parser(
         "config",
         help="Inspect / initialise / validate ~/.codex-self-evolution/config.toml "
-             "— the single source of truth for plugin behavior (provider, "
-             "model, backend, timeouts). Sibling .env.provider keeps API keys.",
+             "— the single source of truth for retained session-level behavior.",
     )
     config_sub = config_parser.add_subparsers(dest="config_command", required=True)
 
     config_show = config_sub.add_parser(
         "show",
-        help="Print the fully-resolved configuration — including which layer "
-             "(env var / config.toml / default) each value came from.",
+        help="Print the fully-resolved configuration — including whether each "
+             "value came from config.toml or defaults.",
     )
     config_show.add_argument("--home")
     config_show.add_argument(
@@ -178,41 +114,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     config_path.add_argument("--home")
 
-    config_migrate = config_sub.add_parser(
-        "migrate-from-env",
-        help="Scan os.environ (including .env.provider) for legacy reviewer/compile "
-             "settings and write them to config.toml so behavior is explicitly "
-             "captured in one place. Does not modify .env.provider — you can "
-             "unset the legacy vars yourself afterward.",
-    )
-    config_migrate.add_argument("--home")
-    config_migrate.add_argument("--force", action="store_true",
-                                 help="Overwrite an existing config.toml.")
-
-    config_use = config_sub.add_parser(
-        "use",
-        help="Switch active_profile by rewriting only that line in config.toml. "
-             "Preserves comments + other settings.",
-    )
-    config_use.add_argument("profile", help="Name of a [profiles.<name>] section defined in config.toml.")
-    config_use.add_argument("--home")
-
-    config_list = config_sub.add_parser(
-        "list-profiles",
-        help="List every [profiles.<name>] defined in config.toml, "
-             "marking the active one.",
-    )
-    config_list.add_argument("--home")
-
-    config_migrate_v2 = config_sub.add_parser(
-        "migrate-to-v2",
-        help="Rewrite a schema_version=1 config.toml so the legacy [reviewer] "
-             "block becomes a [profiles.default] section + active_profile.",
-    )
-    config_migrate_v2.add_argument("--home")
-    config_migrate_v2.add_argument("--force", action="store_true",
-                                    help="Overwrite an existing v2 config.toml.")
-
     migrate_parser = subparsers.add_parser(
         "migrate-worktrees",
         help="Consolidate buckets that belong to git worktrees of the same logical "
@@ -229,39 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
              "only prints the plan (dry-run).",
     )
 
-    recall_parser = subparsers.add_parser("recall")
-    recall_parser.add_argument("--query", required=True)
-    recall_parser.add_argument("--cwd", required=True)
-    recall_parser.add_argument("--state-dir")
-
-    trigger_parser = subparsers.add_parser("recall-trigger")
-    trigger_parser.add_argument("--query", required=True)
-    trigger_parser.add_argument("--cwd", required=True)
-    trigger_parser.add_argument("--state-dir")
-    trigger_parser.add_argument("--explicit", action="store_true")
-    trigger_parser.add_argument("--top-k", type=int, default=3)
-    trigger_parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
-
-    eval_parser = subparsers.add_parser(
-        "eval-compiler",
-        help="Replay a saved compiler-quality fixture and report pass/fail metrics without mutating runtime state.",
-    )
-    eval_parser.add_argument("--fixture", required=True)
-    eval_parser.add_argument("--backend", default="script")
-
     return parser
-
-
-def _run_stop_review(args: argparse.Namespace) -> dict:
-    """Synchronous stop_review with optional post-run payload cleanup."""
-    try:
-        return stop_review(hook_payload=args.hook_payload, state_dir=args.state_dir)
-    finally:
-        if args.cleanup_payload and args.hook_payload:
-            try:
-                Path(args.hook_payload).unlink()
-            except OSError:
-                pass
 
 
 def _spawn_session_archive_from_stop_payload(
@@ -379,7 +248,7 @@ def _handle_session_start_from_stdin(args: argparse.Namespace) -> int:
     return 0
 
 
-def _handle_stop_from_stdin(args: argparse.Namespace) -> int:
+def _handle_session_stop_from_stdin(args: argparse.Namespace) -> int:
     """Codex Stop hook entry point.
 
     Codex will send a JSON object on stdin and expects a JSON response on
@@ -485,16 +354,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     # Install the JSON-lines file logger before anything that might fail.
-    # Every main() invocation is a fresh short-lived process (hook, scheduler,
-    # or a user-typed command), so reconfiguring on entry is cheap and keeps
+    # Every main() invocation is a fresh short-lived process (hook or a
+    # user-typed command), so reconfiguring on entry is cheap and keeps
     # test isolation tight — configure() also acts as a reset.
     configure_logging()
     logger = get_logger()
 
-    # Hydrate ~/.codex-self-evolution/.env.provider into os.environ so that
-    # subprocesses (pi/opencode for compile, urllib for the HTTP reviewer)
-    # can find their API keys even when we're launched by launchd with a
-    # minimal PATH+HOME-only environment.
+    # Hydrate ~/.codex-self-evolution/.env.provider into os.environ so local
+    # subprocesses can find provider keys when launched by hooks.
     hydrated = hydrate_env_for_subprocesses()
     if hydrated:
         # Values are NEVER logged; only the key names that just entered scope.
@@ -511,44 +378,14 @@ def main(argv: list[str] | None = None) -> int:
             if not args.cwd:
                 parser.error("session-start requires --cwd or --from-stdin")
             result = session_start(cwd=args.cwd, state_dir=args.state_dir)
-        elif args.command == "stop-review":
+        elif args.command == "session-stop":
             if args.from_stdin:
-                exit_code = _handle_stop_from_stdin(args)
+                exit_code = _handle_session_stop_from_stdin(args)
                 _log_command(logger, args.command, started, exit_code=exit_code, mode="from_stdin")
                 return exit_code
-            if not args.hook_payload:
-                parser.error("stop-review requires --hook-payload or --from-stdin")
-            result = _run_stop_review(args)
+            parser.error("session-stop requires --from-stdin")
         elif args.command == "session-reflect":
             result = _handle_session_reflect(args)
-        elif args.command == "compile":
-            allow_fallback, compile_options = _compile_runtime_options()
-            result = run_compile(
-                repo_root=args.repo_root,
-                state_dir=args.state_dir,
-                backend=args.backend,
-                allow_fallback=allow_fallback,
-                compile_options=compile_options,
-            )
-        elif args.command == "compile-preflight":
-            result = preflight_compile(repo_root=args.repo_root, state_dir=args.state_dir)
-        elif args.command == "scan":
-            allow_fallback, compile_options = _compile_runtime_options(args.home)
-            result = scan_all_projects(
-                home=args.home,
-                backend=args.backend,
-                allow_fallback=allow_fallback,
-                compile_options=compile_options,
-                max_runs_per_project=args.max_runs_per_project,
-            )
-        elif args.command == "skill-synthesize":
-            result = run_skill_synthesis(
-                home=args.home,
-                mode=args.mode,
-                lookback_hours=args.lookback_hours,
-                lookback_days=args.lookback_days,
-                dry_run=args.dry_run,
-            )
         elif args.command == "status":
             result = collect_status(home=args.home)
         elif args.command == "migrate-worktrees":
@@ -564,35 +401,11 @@ def main(argv: list[str] | None = None) -> int:
                 _log_command(logger, args.command, started, exit_code=exit_code,
                              subcommand=args.config_command)
                 return exit_code
-        elif args.command == "recall":
-            results = search_recall(query=args.query, cwd=args.cwd, state_dir=args.state_dir)
-            result = {"query": args.query, "cwd": str(Path(args.cwd).expanduser().resolve()), "count": len(results), "results": results}
-        elif args.command == "recall-trigger":
-            session_payload = session_start(cwd=args.cwd, state_dir=args.state_dir)
-            result = evaluate_session_recall(
-                query=args.query,
-                cwd=args.cwd,
-                state_dir=args.state_dir,
-                session_payload=session_payload,
-                explicit=args.explicit,
-                top_k=max(1, args.top_k),
-            )
-            result["cwd"] = str(Path(args.cwd).expanduser().resolve())
-        elif args.command == "eval-compiler":
-            allow_fallback, compile_options = _compile_runtime_options()
-            result = evaluate_compiler_fixture(
-                args.fixture,
-                backend=args.backend,
-                compile_options={"allow_fallback": allow_fallback, **compile_options},
-            )
         else:
             parser.error(f"unknown command: {args.command}")
             return 2
 
-        if args.command == "recall-trigger" and args.format == "markdown":
-            print(render_focused_recall_markdown(result), end="")
-        else:
-            print(json.dumps(result, indent=2, sort_keys=True))
+        print(json.dumps(result, indent=2, sort_keys=True))
         log_extras = _observability_extras(args.command, result)
         _log_command(logger, args.command, started, exit_code=0, **log_extras)
         return 0
@@ -641,98 +454,6 @@ def _handle_config_subcommand(args: argparse.Namespace) -> dict:
             "config_path": str(path),
         }
 
-    if args.config_command == "use":
-        try:
-            loaded = load_config(home=home)
-        except ConfigError as exc:
-            return {"_exit_code": 2, "status": "parse_error", "error": str(exc)}
-        target = args.profile
-        if target not in loaded.config.profile_names:
-            return {
-                "_exit_code": 1,
-                "status": "unknown_profile",
-                "requested": target,
-                "available": loaded.config.profile_names,
-                "error": f"no [profiles.{target}] section found; available: "
-                         f"{loaded.config.profile_names}",
-            }
-        path = loaded.config_path
-        if not path.is_file():
-            return {"_exit_code": 1, "status": "no_config",
-                    "error": "config.toml does not exist; run `config init` first"}
-        _rewrite_active_profile(path, target)
-        return {
-            "_exit_code": 0,
-            "status": "switched",
-            "active_profile": target,
-            "config_path": str(path),
-        }
-
-    if args.config_command == "list-profiles":
-        try:
-            loaded = load_config(home=home)
-        except ConfigError as exc:
-            return {"_exit_code": 2, "status": "parse_error", "error": str(exc)}
-        return {
-            "_exit_code": 0,
-            "active_profile": loaded.config.active_profile,
-            "profiles": loaded.config.profile_names,
-            "config_path": str(loaded.config_path),
-            "config_exists": loaded.config_exists,
-        }
-
-    if args.config_command == "migrate-to-v2":
-        path = get_config_path(home)
-        if not path.is_file():
-            return {"_exit_code": 1, "status": "no_config",
-                    "error": "config.toml does not exist; nothing to migrate"}
-        try:
-            loaded = load_config(home=home)
-        except ConfigError as exc:
-            return {"_exit_code": 2, "status": "parse_error", "error": str(exc)}
-        # Nothing to do if already schema 2 with profiles.
-        if loaded.config.schema_version >= 2 and loaded.config.profile_names \
-                and not any("deprecated" in w for w in loaded.warnings):
-            return {"_exit_code": 0, "status": "already_v2",
-                    "config_path": str(path)}
-        new_text = _render_v2_from_loaded(loaded)
-        # Write atomically via temp + rename so a failed migration doesn't
-        # leave the user with a half-written config.
-        tmp_path = path.with_suffix(".toml.tmp")
-        tmp_path.write_text(new_text, encoding="utf-8")
-        tmp_path.replace(path)
-        return {
-            "_exit_code": 0,
-            "status": "migrated",
-            "config_path": str(path),
-            "active_profile": "default",
-        }
-
-    if args.config_command == "migrate-from-env":
-        # Pull env-driven values into a persisted config.toml so behavior
-        # is explicit rather than implicit. Only writes the fields whose
-        # sources are environment overrides — defaults stay commented out.
-        path = get_config_path(home)
-        if path.exists() and not args.force:
-            return {
-                "_exit_code": 1,
-                "status": "exists",
-                "config_path": str(path),
-                "error": "config.toml already exists; use --force to overwrite",
-            }
-        loaded = load_config(home=home)
-        toml_text = _render_migrated_toml(loaded)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(toml_text, encoding="utf-8")
-        migrated = [k for k, v in loaded.sources.items() if v.startswith("env:")]
-        return {
-            "_exit_code": 0,
-            "status": "migrated",
-            "config_path": str(path),
-            "migrated_fields": sorted(migrated),
-            "hint": "Review the file; unset the legacy env vars in .env.provider once you've confirmed.",
-        }
-
     if args.config_command == "show":
         if args.raw:
             path = get_config_path(home)
@@ -775,13 +496,7 @@ def _handle_config_subcommand(args: argparse.Namespace) -> dict:
 
 
 def _env_provider_api_key_summary(home: Path | None) -> dict:
-    """Show API key presence (never values) for `config show` output.
-
-    Reuses the same logic as diagnostics._check_env_provider — the
-    reviewer provider decision often hinges on "is this key set at all?",
-    so surfacing it alongside resolved config saves a round-trip to
-    `status`.
-    """
+    """Show API key presence (never values) for `config show` output."""
     from .diagnostics import _check_env_provider
     from .config import get_home_dir
 
@@ -794,313 +509,20 @@ def _env_provider_api_key_summary(home: Path | None) -> dict:
         "keys_unset": data["keys_unset"],
         "other_keys_set": data["other_keys_set"],
     }
-
-
-def _rewrite_active_profile(path: Path, new_value: str) -> None:
-    """Update ``active_profile = "X"`` inline, preserving comments + layout.
-
-    Three cases to handle:
-
-    1. ``active_profile = ...`` already exists: replace the RHS only.
-    2. It doesn't exist but ``schema_version = ...`` does: insert the new
-       line right after schema_version so the two version/selection lines
-       travel together.
-    3. Neither exists: prepend a schema + active line block.
-
-    Uses text-level edits instead of round-tripping TOML because tomllib
-    is read-only and hand-rolling a full TOML writer drops user comments.
-    """
-    import re
-
-    text = path.read_text(encoding="utf-8")
-    active_re = re.compile(r'^(\s*active_profile\s*=\s*)(?:"[^"]*"|\S+)\s*$', re.MULTILINE)
-    if active_re.search(text):
-        new_text = active_re.sub(rf'\g<1>"{new_value}"', text)
-    else:
-        schema_re = re.compile(r'^(\s*schema_version\s*=\s*\d+)\s*$', re.MULTILINE)
-        if schema_re.search(text):
-            new_text = schema_re.sub(
-                rf'\g<1>\nactive_profile = "{new_value}"',
-                text,
-                count=1,
-            )
-        else:
-            new_text = f'schema_version = 2\nactive_profile = "{new_value}"\n\n' + text
-    path.write_text(new_text, encoding="utf-8")
-
-
-def _render_v2_from_loaded(loaded: LoadResult) -> str:
-    """Produce a schema-2 config.toml from a loaded schema-1 state.
-
-    Writes the legacy [reviewer] block's values as a [profiles.default]
-    section and sets ``active_profile = "default"``. Non-reviewer sections
-    (compile, scheduler, log) carry over verbatim.
-    """
-    cfg = loaded.config
-    lines = [
-        "# Migrated from schema_version = 1 by `config migrate-to-v2`.",
-        "# The previous top-level [reviewer] block is now [profiles.default].",
-        "",
-        "schema_version = 2",
-        f'active_profile = "default"',
-        "",
-        "[profiles.default]",
-    ]
-    for attr in ("provider", "model", "base_url"):
-        value = getattr(cfg.reviewer, attr)
-        if value:
-            lines.append(f'{attr} = "{_toml_escape(str(value))}"')
-    lines.append(f"timeout_seconds = {cfg.reviewer.timeout_seconds}")
-    lines.append(f"max_tokens = {cfg.reviewer.max_tokens}")
-    lines.append(f"max_retries = {cfg.reviewer.max_retries}")
-    if cfg.reviewer.retry_backoff:
-        formatted = ", ".join(str(v) for v in cfg.reviewer.retry_backoff)
-        lines.append(f"retry_backoff = [{formatted}]")
-
-    # compile section
-    lines.extend([
-        "",
-        "[compile]",
-        f'backend = "{_toml_escape(cfg.compile.backend)}"',
-        f'allow_fallback = {"true" if cfg.compile.allow_fallback else "false"}',
-    ])
-    if (
-        cfg.compile.pi.provider != "kimi"
-        or cfg.compile.pi.model != "kimi-k2.6"
-        or cfg.compile.pi.mode != "edit"
-        or cfg.compile.pi.timeout_seconds != 900.0
-    ):
-        lines.append("")
-        lines.append("[compile.pi]")
-        if cfg.compile.pi.provider:
-            lines.append(f'provider = "{_toml_escape(cfg.compile.pi.provider)}"')
-        if cfg.compile.pi.model:
-            lines.append(f'model = "{_toml_escape(cfg.compile.pi.model)}"')
-        lines.append(f'mode = "{_toml_escape(cfg.compile.pi.mode)}"')
-        lines.append(f"timeout_seconds = {cfg.compile.pi.timeout_seconds}")
-    if cfg.compile.opencode.model or cfg.compile.opencode.agent or cfg.compile.opencode.timeout_seconds != 900.0:
-        lines.append("")
-        lines.append("[compile.opencode]")
-        if cfg.compile.opencode.model:
-            lines.append(f'model = "{_toml_escape(cfg.compile.opencode.model)}"')
-        if cfg.compile.opencode.agent:
-            lines.append(f'agent = "{_toml_escape(cfg.compile.opencode.agent)}"')
-        lines.append(f"timeout_seconds = {cfg.compile.opencode.timeout_seconds}")
-
-    lines.extend([
-        "",
-        "[scheduler]",
-        f'backend = "{_toml_escape(cfg.scheduler.backend)}"',
-        f"interval_seconds = {cfg.scheduler.interval_seconds}",
-    ])
-    lines.extend([
-        "",
-        "[log]",
-        f"retention_days = {cfg.log.retention_days}",
-    ])
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def _compile_runtime_options(home: str | Path | None = None) -> tuple[bool, dict[str, Any]]:
-    loaded = load_config(home=Path(home).expanduser().resolve() if home else None)
-    cfg = loaded.config
-    options: dict[str, Any] = {
-        "pi_provider": cfg.compile.pi.provider,
-        "pi_model": cfg.compile.pi.model,
-        "pi_mode": cfg.compile.pi.mode,
-        "pi_timeout_seconds": cfg.compile.pi.timeout_seconds,
-        "opencode_model": cfg.compile.opencode.model,
-        "opencode_agent": cfg.compile.opencode.agent,
-        "opencode_timeout_seconds": cfg.compile.opencode.timeout_seconds,
-    }
-    return cfg.compile.allow_fallback, {
-        key: value
-        for key, value in options.items()
-        if value not in ("", None)
-    }
-
-
-def _render_migrated_toml(loaded: LoadResult) -> str:
-    """Emit a config.toml that captures the current env-driven values as
-    TOML settings. Kept deliberately small: only writes fields whose
-    source was an env var (legacy or new), so defaults stay clean.
-
-    We hand-roll TOML output because Python's stdlib ``tomllib`` is
-    read-only; pulling in ``tomli-w`` would break our zero-deps promise.
-    Output format matches the template: section headers + key = value.
-    """
-    cfg = loaded.config
-    srcs = loaded.sources
-
-    def emit(key: str, value: Any) -> str:
-        if isinstance(value, bool):
-            return f"{key} = {'true' if value else 'false'}"
-        if isinstance(value, (int, float)):
-            return f"{key} = {value}"
-        if isinstance(value, list):
-            inner = ", ".join(_toml_string_or_number(v) for v in value)
-            return f"{key} = [{inner}]"
-        return f'{key} = "{_toml_escape(str(value))}"'
-
-    def from_env(path: str) -> bool:
-        return srcs.get(path, "default").startswith("env:")
-
-    lines = [
-        "# Generated by `codex-self-evolution config migrate-from-env`.",
-        "# Captured legacy env-driven values; review before relying on.",
-        "",
-        "schema_version = 1",
-        "",
-    ]
-
-    # reviewer section
-    reviewer_lines: list[str] = []
-    for attr, path in [
-        ("provider", "reviewer.provider"),
-        ("model", "reviewer.model"),
-        ("base_url", "reviewer.base_url"),
-        ("timeout_seconds", "reviewer.timeout_seconds"),
-    ]:
-        if from_env(path):
-            reviewer_lines.append(emit(attr, getattr(cfg.reviewer, attr)))
-    if reviewer_lines:
-        lines.append("[reviewer]")
-        lines.extend(reviewer_lines)
-        lines.append("")
-
-    # compile section
-    compile_lines: list[str] = []
-    if from_env("compile.backend"):
-        compile_lines.append(emit("backend", cfg.compile.backend))
-    if compile_lines:
-        lines.append("[compile]")
-        lines.extend(compile_lines)
-        lines.append("")
-
-    # compile.opencode
-    opencode_lines: list[str] = []
-    for attr, path in [
-        ("model", "compile.opencode.model"),
-        ("agent", "compile.opencode.agent"),
-    ]:
-        if from_env(path):
-            opencode_lines.append(emit(attr, getattr(cfg.compile.opencode, attr)))
-    if opencode_lines:
-        lines.append("[compile.opencode]")
-        lines.extend(opencode_lines)
-
-    pi_lines: list[str] = []
-    for attr, field in (
-        ("provider", "compile.pi.provider"),
-        ("model", "compile.pi.model"),
-        ("mode", "compile.pi.mode"),
-    ):
-        if from_env(field):
-            pi_lines.append(emit(attr, getattr(cfg.compile.pi, attr)))
-    if pi_lines:
-        lines.append("")
-        lines.append("[compile.pi]")
-        lines.extend(pi_lines)
-        lines.append("")
-
-    # If no env-driven values were found, still emit something useful so
-    # users don't see an empty file and think migration failed.
-    if len(lines) <= 5:
-        lines.append("# No legacy env-driven overrides found in your environment.")
-        lines.append("# Run `codex-self-evolution config init` for the full template instead.")
-        lines.append("")
-
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def _toml_escape(s: str) -> str:
-    return s.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def _toml_string_or_number(v: Any) -> str:
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if isinstance(v, (int, float)):
-        return str(v)
-    return f'"{_toml_escape(str(v))}"'
-
-
 def _observability_extras(command: str | None, result: object) -> dict:
-    """Surface the reviewer-action breakdown into the per-invocation log line
-    so a week of plugin.log entries is enough to answer "did Phase 1 work?"
-    without jq-iterating every receipt.
-
-    - ``compile``: pull memory_action_stats straight from run_compile result
-    - ``scan``: pull the aggregate across all buckets touched this run
-    Anything else: no extras (keeps session-start / stop-review log lines tight).
-    """
+    """Return compact per-command log extras for retained commands only."""
     if not isinstance(result, dict):
         return {}
-    if command == "compile":
-        stats = result.get("memory_action_stats") or {}
-        extras: dict = {}
-        if stats:
-            extras["memory_action_stats"] = stats
-        fallback = result.get("fallback_backend")
-        if fallback:
-            extras["fallback_backend"] = fallback
-        discarded = result.get("discarded_count") or 0
-        if discarded:
-            extras["discarded_count"] = discarded
-        compiler_observability = result.get("compiler_observability")
-        if isinstance(compiler_observability, dict) and compiler_observability:
-            extras["compiler_observability"] = compiler_observability
-        return extras
-    if command == "scan":
-        aggregate = result.get("aggregate") or {}
-        # Only log when something actually ran — skip-empty scans would
-        # otherwise bloat plugin.log with a dozen zero-count lines.
-        if aggregate.get("buckets_processed", 0) > 0 or aggregate.get("total_memory_suggestions", 0) > 0:
-            return {"aggregate": aggregate}
-        return {}
-    if command == "skill-synthesize":
-        return {
-            "status": result.get("status"),
-            "mode": result.get("mode"),
-            "dry_run": result.get("dry_run"),
-            "evidence_count": result.get("evidence_count", 0),
-            "valid_count": len(result.get("valid") or []),
-            "invalid_count": len(result.get("invalid") or []),
-            "retired_count": len(result.get("retired") or []),
-            "mismatch": result.get("mismatch"),
-            "dry_run_leak": result.get("dry_run_leak"),
-        }
-    if command == "stop-review":
-        # The background reviewer is where MiniMax actually runs. Without
-        # these fields you can't tell whether "0 memory_updates at compile
-        # time" meant "reviewer emitted none" (working-as-intended, SKIP
-        # list too strict) or "all reviewer calls 529'd" (upstream outage).
-        extras: dict = {}
-        provider = result.get("reviewer_provider")
-        if provider:
-            extras["reviewer_provider"] = provider
-        for key in ("suggestion_count", "skipped_suggestion_count"):
-            value = result.get(key)
-            if isinstance(value, int):
-                extras[key] = value
-        families = result.get("suggestion_families")
-        if isinstance(families, dict) and families:
-            extras["suggestion_families"] = families
-        return extras
-    if command in {"recall", "recall-trigger"}:
-        query = str(result.get("query") or "")
-        extras = {
-            "count": int(result.get("count") or 0),
-            "query_hash": hashlib.sha1(query.encode("utf-8")).hexdigest()[:12],
-        }
-        cwd = result.get("cwd")
-        if cwd:
-            extras["cwd"] = cwd
-        if command == "recall-trigger":
-            extras["triggered"] = bool(result.get("triggered"))
-            reasons = result.get("reasons")
-            if isinstance(reasons, list):
-                extras["reasons"] = [str(item) for item in reasons]
+    if command == "session-stop":
+        return {"mode": "from_stdin"}
+    if command == "session-reflect":
+        status = result.get("status")
+        job_id = result.get("job_id")
+        extras: dict[str, object] = {}
+        if status:
+            extras["status"] = status
+        if job_id:
+            extras["job_id"] = job_id
         return extras
     return {}
 
@@ -1110,10 +532,9 @@ def _log_command(
 ) -> None:
     """Emit one structured summary line per CLI invocation.
 
-    Called at the boundary of ``main()`` so each hook / scheduler / manual
-    CLI call leaves exactly one record behind. Per-step logs inside compile /
-    reviewer / scan are intentionally NOT added here — start with the
-    boundary and push inward only if an investigation actually needs it.
+    Called at the boundary of ``main()`` so each hook or manual CLI call
+    leaves exactly one record behind. Start with the boundary and push inward
+    only if an investigation actually needs it.
     """
     duration_ms = int((time.monotonic() - started) * 1000)
     logger.info(

@@ -1,524 +1,302 @@
-# 起步指南(本机上跑起来)
+# 起步指南
 
-> 适用环境:macOS + bash + Python 3.11+。
+> 适用环境：macOS + bash + Python 3.11+。
 >
-> 目标:在**不改任何插件代码**的前提下,按阶段把 reviewer → compile → memory/recall → skill-synthesize 的整条循环在你本机跑通,然后再选择是否挂到 launchd 自动调度。
-
-全文档结构:
-
-1. [前置检查](#1-前置检查)
-2. [阶段 1:provider 冒烟](#阶段-1provider-冒烟30-秒)
-3. [阶段 2:手动跑一次完整循环](#阶段-2手动跑一次完整循环2-分钟)
-4. [阶段 3:挂 Codex 原生 Stop hook(一键脚本)](#阶段-3挂-codex-原生-stop-hook一键脚本1-分钟)
-5. [阶段 4:挂 launchd 自动调度](#阶段-4挂-launchd-自动调度5-分钟)
-6. [阶段 5:诊断命令(确认装对了)](#阶段-5诊断命令确认装对了)
-7. [Codex CLI 插件集成](#codex-cli-插件集成)
-8. [常见坑](#常见坑)
-
----
+> 目标：把当前唯一保留的链路跑通：`SessionStart` 注入背景，`Stop` 归档 session 并按规则触发 reflection，reflection 写 memory / `csep-reflect-*` skill，`csep recall` 从 session 库召回历史上下文。
 
 ## 1. 前置检查
 
-在仓库根目录(`/path/to/codex-self-evolution-plugin`)先确认以下都满足:
+在仓库根目录先确认：
 
 ```bash
-# Python 3.11+
 python3 --version
-
-# pi 用于生产默认 agent backend
-which pi && pi --version
-
-# 至少配一个 reviewer provider 的 API key(任选)
-env | grep -E '^(MINIMAX|OPENAI|ANTHROPIC)_API_KEY' | sed 's/=.*/=<set>/'
+which uv
+codex --version
 ```
 
-如果是首次使用,创建并激活虚拟环境,装好依赖:
+本地开发安装：
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e .
-.venv/bin/pip install pytest        # 仅跑测试需要
+.venv/bin/pip install -e '.[dev]'
+.venv/bin/python -m pytest -q
 ```
 
-以下所有命令都假设用 `.venv/bin/python` 作为解释器。没用虚拟环境的话,把 `.venv/bin/python` 替换为你的 Python 可执行文件。
-
----
-
-## 阶段 1:provider 冒烟(30 秒)
-
-**目的**:验证 reviewer provider key + 网络都通,避免后面调 provider 才发现问题。
-
-推荐 MiniMax(首选成本低):
+用户级安装：
 
 ```bash
-.venv/bin/python scripts/provider-smoke-test.py --provider minimax
+scripts/install.sh
 ```
 
-其他 provider:
+安装脚本会用 `uv tool install --force <当前仓库>` 安装 `codex-self-evolution` / `csep`，刷新 Codex plugin cache，并清理旧版 marker-managed user hook。
+
+## 2. 初始化配置
+
+查看配置路径：
 
 ```bash
-.venv/bin/python scripts/provider-smoke-test.py --provider openai-compatible
-.venv/bin/python scripts/provider-smoke-test.py --provider anthropic-style
+codex-self-evolution config path
 ```
 
-**期望输出**:一段结构化的 reviewer JSON + 请求 payload 元信息。
-**常见失败**:
-
-- `MINIMAX_API_KEY` 没设 → 看[常见坑](#常见坑)
-- 401 / 403 → key 本身失效
-- `JSONDecodeError` / `reviewer did not return valid JSON` → provider 返回了非 JSON 内容(模型加了代码块围栏已被兼容;加了解释文本就会挂)
-
----
-
-## 阶段 2:手动跑一次完整循环(2 分钟)
-
-**目的**:在不依赖 Codex CLI 的情况下,完整演示 `session-start → stop-review → preflight → compile → 产物落盘` 的闭环。
+写入默认配置：
 
 ```bash
-# 1. 定义:被插件“记忆”的目标 repo,以及 playground 用的 state 目录
-REPO=/path/to/your/target/repo          # 可以就填本仓库本身,做 self-hosting
-STATE=/tmp/csep-tutorial                # 教程用独立目录便于随时 rm -rf
+codex-self-evolution config init
+codex-self-evolution config validate
 ```
 
-**默认位置**:不指定 `--state-dir` 时,所有状态(suggestions/memory/recall/review)
-都会写到 `~/.codex-self-evolution/projects/<$REPO-absolute-path-with-/-replaced-by-->`,
-**不再污染原始代码仓库**。下面教程里为了好清理用了 `/tmp/csep-tutorial`,生产
-场景直接省略 `--state-dir` 即可。
+默认配置：
 
-建议 `$REPO` 就填这个插件自身的路径作为 playground:
+```toml
+schema_version = 2
 
-```bash
-REPO=/Users/$USER/code/github/codex-self-evolution-plugin
-STATE=/tmp/csep-tutorial
+[session_reflection]
+enabled = true
+backend = "codex-app-server"
+model = "gpt-5.3-codex-spark"
+ephemeral = true
+sandbox = "danger-full-access"
+approval_policy = "never"
+skill_prefix = "csep-reflect-"
+timeout_seconds = 900
+max_concurrent_jobs = 1
+
+[session_reflection.trigger]
+enabled = true
+memory_stop_interval = 3
+memory_context_chars = 16000
+skill_tool_call_interval = 15
+high_signal_immediate = true
+skill_generation_mode = "one_shot_active"
+active_job_stale_seconds = 1800
+
+[session_recall]
+enabled = true
+stop_hook_archive = true
+
+[log]
+retention_days = 14
 ```
 
-### 2.1 Session 初始化
+## 3. 启用 Codex Plugin Hooks
 
-```bash
-.venv/bin/python -m codex_self_evolution.cli session-start --cwd $REPO --state-dir $STATE
+在 `~/.codex/config.toml` 中启用：
+
+```toml
+[features]
+plugins = true
+codex_hooks = true
+plugin_hooks = true
+
+[plugins."codex-self-evolution@codex-self-evolution"]
+enabled = true
 ```
 
-**期望**:stdout 打印 `stable_background`、`recall.policy` 的 JSON;`$STATE/memory/`、`$STATE/recall/` 等目录被创建。
+插件声明文件：
 
-### 2.2 构造一个假的 Stop payload
-
-真实场景下 Codex 会自动生成 Stop payload。手工模拟:
-
-```bash
-cat > /tmp/stop.json <<EOF
-{
-  "thread_id": "thread-demo",
-  "turn_id": "turn-1",
-  "cwd": "$REPO",
-  "transcript": "修好了 compile lock,加了 pid 检查,超时从 120s 调到 15 分钟",
-  "thread_read_output": "context",
-  "reviewer_provider": "minimax"
-}
-EOF
+```text
+plugins/codex-self-evolution/.codex-plugin/plugin.json
+plugins/codex-self-evolution/.codex-plugin/hooks.json
 ```
 
-`reviewer_provider` 改成 `openai-compatible` / `anthropic-style` / `dummy` 都可以。用 `dummy` 时可以顺便放 `provider_stub_response` 字段让 review 产出可控。
+声明的生命周期入口：
 
-### 2.3 调 reviewer,产出 pending suggestion
-
-```bash
-.venv/bin/python -m codex_self_evolution.cli stop-review \
-  --hook-payload /tmp/stop.json \
-  --state-dir $STATE
+```text
+SessionStart -> codex-self-evolution session-start --from-stdin
+Stop         -> codex-self-evolution session-stop --from-stdin
 ```
 
-**期望**:
-- 打印 `suggestion_count > 0`、`pending_suggestion_path` 指向 `$STATE/suggestions/pending/<id>.json`
-- `$STATE/review/snapshots/` 下生成这次的 normalized snapshot
+如果当前 Codex CLI 还不支持 `plugin_hooks`，这一步不会生效；先升级 Codex，再重跑 `scripts/install.sh` 刷新 plugin cache。
 
-如果 `suggestion_count == 0`,说明 reviewer 没产出任何 suggestion(模型判断本轮没什么可记的);换一个更"值得沉淀"的 `transcript` 再试。
+## 4. 验证 SessionStart
 
-### 2.4 Preflight:判断是否真需要跑 compile
+手工写一条 memory 到当前 repo bucket：
 
 ```bash
-.venv/bin/python -m codex_self_evolution.cli compile-preflight --state-dir $STATE
-```
-
-**期望**:`"status": "run"`(有 pending 且无 lock)。
-
-其他可能:
-- `"status": "skip_empty"` — 没 pending 也没 retryable failed,不用跑
-- `"status": "skip_locked"` — 有活的 compile 在跑,这次跳过
-
-### 2.5 真正 compile 写入终态资产
-
-```bash
-.venv/bin/python -m codex_self_evolution.cli compile \
-  --once --state-dir $STATE --backend agent:pi
-```
-
-> **两种 backend 的取舍**:`agent:pi` 会真正调 pi CLI 做一次语义级合并(dedupe + 改写更流畅,约 20–40 秒),默认走 `kimi/kimi-k2.6`,需要本地 `pi` 可用且 provider key 已配置。`script` 走纯规则拼装(< 100ms,确定性),不依赖 LLM。调试和 CI 用 `--backend script`;生产/定时任务默认用 `agent:pi`。
->
-> 如果 pi 不在 PATH 或调用失败,agent backend 会在 receipt 的 `discarded_items` 里记 `agent_invoke_failed`,然后**自动 fallback 到 script**,compile 不会整个失败。
-
-**期望**:
-- `"status": "success"` + `processed_count >= 1`
-- `$STATE/memory/USER.md`、`MEMORY.md`、`memory.json` 写好
-- `$STATE/recall/index.json`、`compiled.md` 写好
-- compiler 不再写 `$STATE/skills/managed/*.md`; 历史 `skill_action` 会被记为 `skill_action_disabled`
-- `$STATE/compiler/last_receipt.json` 记录这次的结果
-- 对应 `pending/*.json` 被移到 `done/*.json`
-
-### 2.6 查看产出
-
-```bash
-cat $STATE/memory/MEMORY.md
-cat $STATE/memory/USER.md
-cat $STATE/recall/compiled.md
-cat $STATE/compiler/last_receipt.json
-ls $STATE/suggestions/done/
-```
-
-验证增量合并行为:再造一份 Stop payload,transcript 换成别的内容,重跑 2.3-2.5。`USER.md` / `MEMORY.md` 里**旧条目应该仍在**,新条目 append 到后面。这就是 P3 保守增量 merge 在起作用。
-
----
-
-## 阶段 3:安装本地 CLI + 启用 Codex plugin hooks(1 分钟)
-
-**目的**:让 Codex 通过 plugin manifest 加载 `SessionStart` / `Stop` hooks,并让 hooks 调用本地 `codex-self-evolution` CLI。完成这一步后,你正常用 `codex` / `codex exec` 会自动注入稳定背景,并在 Stop 时创建 session reflection job；pending suggestion 只来自阶段 2 那种手动 `stop-review --hook-payload` legacy 调试路径。
-
-### 3.1 运行安装脚本
-
-```bash
-./scripts/install.sh
-```
-
-脚本行为:
-
-1. 前置检查:`uv` 在 PATH。
-2. 用 `uv tool install --force <当前 repo>` 安装/更新本地 CLI。
-3. 校验 `codex-self-evolution --help` 和 `csep --help` 都可用。
-4. 检查 `uv tool dir --bin` 是否在当前 PATH,不在就打印具体提示。
-5. 创建 `~/.codex-self-evolution/`。
-6. 刷新本地 Codex plugin cache:
-   `~/.codex/plugins/cache/codex-self-evolution/codex-self-evolution/<version>/`。
-7. 如果存在旧版 `~/.codex/hooks.json`,先备份到 `~/.codex/hooks.json.bak.<timestamp>`,然后只移除带 `codex-self-evolution-plugin managed` marker 的旧 user-level hook。不会注入新的 hook entry。
-8. 新的 hook 入口由 Codex plugin manifest 加载:
-   - `.codex-plugin/plugin.json`
-   - `.codex-plugin/hooks.json`
-   - manifest 中的 hooks 路径是相对 plugin root 的 `./.codex-plugin/hooks.json`
-   - `codex-self-evolution session-start --from-stdin`
-   - `codex-self-evolution stop-review --from-stdin`
-
-需要在 Codex 配置中启用 plugin / hook 相关 feature,并启用本地 plugin。不同 Codex 版本的 plugin 安装方式可能不同,以你当前 `codex --help` / plugin 文档为准。
-
-### 3.2 验证
-
-#### Stop hook(session reflection)
-
-新开一个终端,跑:
-
-```bash
-codex exec 'Say one sentence in Chinese to test my Stop hook.'
-```
-
-Codex 回复后,Stop hook 会快速返回,并把 session reflection worker 放到后台跑。
-等约 15-30 秒后检查最新 job:
-
-```bash
-codex-self-evolution session-reflect --status | python3 -m json.tool
-codex-self-evolution status | python3 -m json.tool
-```
-
-`latest.status` 为 `succeeded` 说明 app-server fork、child 写入和 receipt 校验都已通过。
-如果是 `failed` 或 `skipped`,先看后面的
-[Session Reflection 调试](#session-reflection-调试)路径。
-
-#### SessionStart hook(stable background 注入)
-
-手工写一条 USER.md 到当前 repo 的 bucket,然后让 Codex 引用:
-
-```bash
+REPO=$(pwd)
 BUCKET=~/.codex-self-evolution/projects/$(python3 -c "import os; print(os.getcwd().replace('/', '-'))")
 mkdir -p "$BUCKET/memory"
 cat > "$BUCKET/memory/USER.md" <<'EOF'
 # User stable background
 My favorite test passphrase is XANADU_RIVER_442.
 EOF
-codex exec --json 'What is my favorite test passphrase?' 2>/dev/null | grep -i XANADU
-# 期望输出类似: {"type":"item.completed","item":{"text":"... XANADU_RIVER_442 ..."}}
-# 看到了就说明 SessionStart hook 把 USER.md 成功注入 Codex session
+```
 
-# 清理测试数据,避免污染(让 reviewer 将来自行积累 USER.md)
+新开一次 Codex 会话并提问：
+
+```bash
+codex exec --json 'What is my favorite test passphrase?' 2>/dev/null | grep -i XANADU
+```
+
+看到 passphrase 即表示 `SessionStart` 已把 stable background 注入当前会话。测试后清理：
+
+```bash
 rm "$BUCKET/memory/USER.md"
 ```
 
-⚠️ **Codex 版本要求**:`additionalContext` 注入在 `codex-cli ≥ 0.122.0`
-(2026-04-20 release)上验证通过。更早版本的 Codex 会把 hook 输出当成未知
-JSON 丢弃(不会报错,就是"悄悄没效果")。如果模型答不出 XANADU,先跑
-`codex --version` 确认版本。
+## 5. 验证 Stop Hook 与 Reflection
 
-### 3.3 卸载
+正常跑一次 Codex：
 
 ```bash
-./scripts/uninstall-codex-hook.sh
+codex exec 'Say one sentence in Chinese to test my Stop hook.'
 ```
 
-- 这是 legacy compatibility cleanup,只用于清理旧版 user-level hook。
-- 只删带 marker 的条目,**不会误删** vibe-island / luna 等其他工具的 hook
-- 备份一份到 `~/.codex/hooks.json.bak.<timestamp>`
-- 不自动清理:`~/.codex-self-evolution/` 下的数据和 `.env.provider`——卸载只动旧 hook,数据你自己决定保留还是删
-
----
-
-## 阶段 4:挂 launchd 自动调度(一键脚本)
-
-**目的**:让 `scan`(preflight + compile,across all buckets)每 5 分钟自动跑一次,消化 legacy reviewer、手动调试或历史版本留下的 pending envelope,不用你手动触发。
-
-### 4.1 装载
-
-```bash
-./scripts/install-scheduler.sh
-```
-
-脚本行为:
-
-1. 前置检查:`codex-self-evolution` 在 PATH。若找不到,先运行 `./scripts/install.sh`。
-2. 自动探测本地 CLI + `pi` 路径,相关 dir 都写进 plist `EnvironmentVariables.PATH`(launchd 默认 PATH 不含 Homebrew/usr/local/~/.local/bin,**不做这步 scheduler 要么起不来,要么永远 fallback 到 script backend**)
-3. 写 `~/Library/LaunchAgents/com.codex-self-evolution.preflight.plist`,`ProgramArguments` 是
-   `[<absolute codex-self-evolution>, scan, --backend, agent:pi, --max-runs-per-project, 3]`(`ProgramArguments[0]` launchd 要求绝对路径,install 时探测)
-4. `launchctl bootout`(清老的,容错)→ `bootstrap`(新 API)加载
-5. 幂等:再跑一次会 bootout 后重装,仍然只有一条 job
-
-可用 env 变量覆盖默认:
-
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `CSEP_SCHEDULER_INTERVAL` | `300` | 秒。改成 `60` 更激进,`900` 更省电 |
-| `CSEP_SCAN_MAX_RUNS_PER_PROJECT` | `3` | 每个 bucket 单次最多连续 drain 的 pending 数 |
-
-### 4.1.1 独立 Skill Synthesis 调度
-
-Compiler 只晋升 memory / recall。可复用 workflow skills 由独立全局命令处理:
-
-```bash
-codex-self-evolution skill-synthesize --mode full --lookback-days 30 --dry-run
-codex-self-evolution skill-synthesize --mode incremental --lookback-hours 24
-```
-
-安装独立 4 小时 launchd 任务:
-
-```bash
-./scripts/install-skill-synthesis-scheduler.sh
-```
-
-生成的 skill 只会写到 `~/.codex/skills/csep-synth-*`。既有 `csep-*` compiler skills 保留为 legacy read-only artifacts。
-
-### 4.2 观察
-
-```bash
-# 看 job 是否在 launchd 注册表里
-launchctl list | grep codex-self-evolution
-
-# 手动触发一次,不用等 5 分钟
-launchctl kickstart "gui/$(id -u)/com.codex-self-evolution.preflight"
-
-# 最近一次 scan 的全局 JSON 汇总
-cat ~/.codex-self-evolution/logs/launchd.stdout.log
-
-# 有异常时看这个(正常运行应该是空的)
-cat ~/.codex-self-evolution/logs/launchd.stderr.log
-
-# 某个具体 repo 的 compile receipt
-BUCKET=~/.codex-self-evolution/projects/$(python3 -c "print('$REPO'.replace('/', '-'))")
-cat $BUCKET/compiler/last_receipt.json
-```
-
-### 4.3 卸载
-
-```bash
-./scripts/uninstall-scheduler.sh
-```
-
-只删我们这条 plist,不碰其他 launchd job。`~/.codex-self-evolution/logs/` 下的日志文件不自动清,留着 post-mortem。
-
----
-
-## 阶段 5:诊断命令(确认装对了)
-
-装完阶段 3 + 4 后用 `status` 一键盘点所有组件:
-
-```bash
-codex-self-evolution status | python3 -m json.tool
-```
-
-输出纯只读 JSON,包含:
-
-| 段 | 看什么 |
-| --- | --- |
-| `plugin_hooks.session_start_declared` / `stop_declared` | 两个都是 `true` 说明 plugin bundle 声明了 SessionStart / Stop hook |
-| `legacy_user_hooks.stop_installed` / `session_start_installed` | 旧版 user-level hook 诊断；Phase 2 正常不需要它们为 `true` |
-| `scheduler.loaded` / `plist_exists` | 两个都是 `true` 说明 install-scheduler.sh 装成功 + launchd 已注册 |
-| `env_provider.keys_set` | 至少 `["MINIMAX_API_KEY"]`(或其它你用的 provider)。**永远不打印 key 值**,只报 set/unset |
-| `tools.codex.version` / `pi.version` | 两个 CLI 版本。pi 没装 → agent backend 会失败并 fallback 到 script backend |
-| `buckets[].counts` | 每个 repo 的 pending/done/failed 统计。正常状态:pending 应该短时间内变 0(scheduler 5 分钟内消化),done 稳步增长 |
-| `buckets[].last_receipt` | 最后一次 compile 的 run_status / backend / processed_count。**pending > 0 但 last_receipt 很久没更新 = scheduler 没跑** |
-| `session_reflection.exists` / `latest` | session reflection 根目录是否存在,以及最新 job 的 `job_id` / `status` / `updated_at` |
-
-常用诊断流程:
-
-```bash
-# 快速看有没有 pending 堆积
-.venv/bin/python -m codex_self_evolution.cli status | \
-  jq '.buckets[] | {project, pending: .counts.pending, last: .last_receipt.timestamp}'
-
-# 手动触发一次 scheduler 验证闭环
-launchctl kickstart "gui/$(id -u)/com.codex-self-evolution.preflight"
-tail -5 ~/.codex-self-evolution/logs/launchd.stdout.log
-```
-
-### Session Reflection 调试
-
-Stop hook 会快速创建 session reflection job,再让后台 worker 通过 Codex app-server
-fork 当前 thread。child thread 负责写 memory、`csep-reflect-*` skill 和
-`receipt.json`;parent 只校验 receipt、写入边界和失败状态。手动看当前状态:
+Stop hook 会快速返回；如果触发规则认为需要 reflection，会在后台创建 job。等待 15 到 30 秒后查看：
 
 ```bash
 codex-self-evolution session-reflect --status | python3 -m json.tool
 codex-self-evolution status | python3 -m json.tool
 ```
 
-排查失败时先看这些路径:
+关注：
+
+| 字段 | 含义 |
+| --- | --- |
+| `session_reflection.latest.status` | 最新 job 状态 |
+| `session_reflection.global_lock` | 全局 reflection 锁状态 |
+| `session_reflection.trigger.latest_state` | 当前 session 的计数器与最近决策 |
+| `session_recall.db_exists` | session recall 数据库是否存在 |
+
+失败时先看：
 
 ```text
 ~/.codex-self-evolution/session_reflection/latest.json
 ~/.codex-self-evolution/session_reflection/runs/<job_id>/receipt.json
 ~/.codex-self-evolution/session_reflection/runs/<job_id>/validation.json
 /tmp/codex-self-evolution/session-reflect-*.log
+~/.codex-self-evolution/logs/plugin.log
 ```
 
-`latest.json` 只回答最新 job 是谁和状态是什么;`receipt.json` 是 child 写入结果;
-`validation.json` 是 parent 的边界校验结果;`/tmp/codex-self-evolution/session-reflect-*.log`
-记录后台 worker 的 stdout/stderr。
+## 6. 手动调试 Reflection
 
-**结构化日志**:每次 CLI 调用(hook、scheduler、手动)都往
-`~/.codex-self-evolution/logs/plugin.log` 追加一行 JSON(按天滚动,保留 14 天)。
-字段含 `ts / kind / exit_code / duration_ms`,失败时还有
-`error_type / error_message`。过滤示例:
+保存一份 Stop payload 后，可以手动创建并执行 job：
 
 ```bash
-# 最近 20 次调用
-tail -20 ~/.codex-self-evolution/logs/plugin.log | jq .
-
-# 只看失败
-jq 'select(.exit_code != 0)' ~/.codex-self-evolution/logs/plugin.log
-
-# 按命令统计耗时
-jq -s 'group_by(.kind) | map({kind: .[0].kind, count: length, avg_ms: (map(.duration_ms) | add/length)})' \
-  ~/.codex-self-evolution/logs/plugin.log
+codex-self-evolution session-reflect --hook-payload /path/to/stop-payload.json | python3 -m json.tool
 ```
 
-silent reviewer/compile 失败不再需要翻 launchd 的 stdout/stderr log,直接看这个文件。
+只查看状态：
 
----
+```bash
+codex-self-evolution session-reflect --status | python3 -m json.tool
+```
 
-## Codex CLI 插件集成
+只要 `validation.status` 是 `succeeded`，说明 child thread 的写入声明和父进程边界校验都通过。
 
-这个部分**不是必需的**——阶段 2 的手动流程已经演示了完整链路。仅当你希望 Codex CLI 自己在每次会话结束时触发 `Stop` hook,才需要把插件挂给 Codex。
+## 7. Session Recall
 
-`.codex-plugin/plugin.json` 声明了 `SessionStart` 和 `Stop` 两个 hook,需要 **Codex CLI 能识别这份 plugin manifest 并在事件发生时调用**。不同 Codex CLI 版本的加载路径不一致:
+Stop hook 默认会把 transcript 归档到本机 SQLite/FTS：
 
-- 某些版本用 symlink 到 `~/.codex/plugins/` 这样的固定目录
-- 某些版本支持 `--plugin-path` 启动 flag
-- 某些版本需要 `codex plugin install <path>` 类命令
+```text
+~/.codex-self-evolution/session_recall/state.db
+```
 
-**建议做法**:先查你手上 Codex CLI 的 `--help` 看插件加载方式:
+召回当前 repo 的历史片段：
+
+```bash
+csep recall "这个仓库之前 trigger policy 怎么设计的"
+csep recall --recent
+```
+
+跨 repo 检索：
+
+```bash
+csep recall "session reflection" --global
+```
+
+输出 JSON 便于调试：
+
+```bash
+csep recall "session reflection" --format json | python3 -m json.tool
+```
+
+手动归档单个 transcript：
+
+```bash
+csep session-archive --transcript-path /path/to/session.jsonl --cwd /path/to/repo --session-id <id>
+```
+
+回填历史 Codex sessions：
+
+```bash
+csep session-ingest --backfill --root ~/.codex/sessions --since-days 14
+```
+
+## 8. 常见问题
+
+### `plugin_hooks` 不生效
+
+先确认 Codex 支持插件 hook：
 
 ```bash
 codex --help 2>&1 | grep -i plugin
 codex plugin --help 2>&1 | head -20
 ```
 
-手动触发 hooks 永远有效(等同于阶段 2 的步骤),可以在不接 Codex 的情况下先跑起来。
-
----
-
-## 常见坑
-
-### 1. `No module named pytest` / `No module named codex_self_evolution`
-
-没激活虚拟环境或没装依赖。执行:
+再确认本地 plugin cache 已刷新：
 
 ```bash
-.venv/bin/pip install -e .
-.venv/bin/pip install pytest
+scripts/install.sh
+codex-self-evolution status | python3 -m json.tool
 ```
 
-### 2. `reviewer provider requires api_key or MINIMAX_API_KEY`
+### `session_reflection.latest.status` 是 `skipped`
 
-env 变量没传到子进程。两种修法:
+这是正常状态之一。常见原因：
 
-- 把 key 写进 `~/.codex-self-evolution/.env.provider`(从 repo 根的 `.env.provider.example` 复制),Makefile、冒烟脚本、装好的 Stop hook 都 auto-source 同一份
-- 或者在启动前 export:
-  ```bash
-  export MINIMAX_API_KEY=your-key
-  ```
+- 当前 session 计数器还没达到 nudge interval
+- 只有归档价值，没有触发 reflection 的高信号
+- 同一个父 session 已有活跃 job，递归保护生效
+- `[session_reflection] enabled = false`
 
-launchd job 需要 key 时,plist 里加:
+查看 `session_reflection.trigger.latest_state.last_decision` 可以知道具体原因。
 
-```xml
-<key>EnvironmentVariables</key>
-<dict>
-  <key>MINIMAX_API_KEY</key>
-  <string>your-key</string>
-</dict>
-```
+### `session_reflection.latest.status` 是 `failed`
 
-### 3. `compile-preflight` 一直返回 `skip_locked`
-
-看当前 repo bucket 里的 lock 是否还在:
+优先查看：
 
 ```bash
-BUCKET=~/.codex-self-evolution/projects/$(python3 -c "print('$REPO'.replace('/', '-'))")
-cat $BUCKET/compiler/compile.lock
+codex-self-evolution session-reflect --status | python3 -m json.tool
+tail -50 ~/.codex-self-evolution/logs/plugin.log
 ```
 
-有 pid:
+常见原因：
+
+- `codex app-server proxy` 当前不可用
+- child thread 没写 `receipt.json`
+- receipt 声明的写入路径越界
+- skill 前缀不是 `csep-reflect-`
+
+### `csep recall` 没结果
+
+确认归档是否打开：
 
 ```bash
-ps -p <pid> -o pid,etime,command
+codex-self-evolution config show | python3 -m json.tool
+codex-self-evolution status | python3 -m json.tool
 ```
 
-pid 不存在 → lock 本应立即视为 stale,下一次 preflight 自动清。**如果一直没清,看:**
-
-- 系统时钟是否回拨(会触发 `negative_age` 路径,照样清)
-- `age_seconds` 是否 < 30 分钟(硬上限),在窗口内 + pid 还活 = 正常不清
-
-### 4. `suggestion_count == 0`
-
-reviewer 认为本轮没什么可沉淀的。换个更具体、更有"干了啥"的 `transcript` 重试。或用 `dummy` provider + 手工 `provider_stub_response` 直接注入内容。
-
-### 5. `agent_invoke_failed` 在 receipt 的 discarded_items 里
-
-说明 `agent:pi` 调用没跑成,自动 fallback 到 script 了 —— compile 不会整体失败,但语义合并这一层丢了。常见原因:
-
-- `pi` 不在 PATH。装好或把路径塞进环境,然后重装 scheduler 让 plist 带上路径
-- provider key 缺失或配额耗尽。检查 `~/.codex-self-evolution/.env.provider` 和 `config show`
-- `agent_output_invalid` / `no assistant text`: 模型返回不是合法 JSON。可临时切换 `CODEX_SELF_EVOLUTION_PI_MODEL=<更强的模型>` 或改用 `--backend script` 排障
-
-手动重现看看 pi 本身 OK 不:`pi -p --mode json --no-session --no-context-files --no-extensions --no-skills --no-prompt-templates --no-themes --tools read --provider kimi --model kimi-k2.6 "reply with {\"ok\":true}"`。
-
-### 6. 想重置所有状态从头来一次
+如果是新安装，先跑几次真实 Codex 会话，或者手动回填：
 
 ```bash
-# 重置单个 repo 的 state
-BUCKET=~/.codex-self-evolution/projects/$(python3 -c "print('$REPO'.replace('/', '-'))")
-rm -rf $BUCKET
-
-# 或者,重置所有 repo 的 state(不删 .env.provider)
-rm -rf ~/.codex-self-evolution/projects/
+csep session-ingest --backfill --root ~/.codex/sessions --limit-files 50
 ```
 
-runtime state 全部在 `~/.codex-self-evolution/projects/<mangled-repo>/` 下,没有数据库、没有外部状态。
+### 想重置本地状态
 
----
+重置当前 repo bucket：
 
-## 下一步
+```bash
+BUCKET=~/.codex-self-evolution/projects/$(python3 -c "import os; print(os.getcwd().replace('/', '-'))")
+rm -rf "$BUCKET"
+```
 
-- 跑通阶段 2 后,看 `README.md` / `README_zh.md` 的 **Configuration** 章节挑选适合你的默认配置
-- 有兴趣改锁机制 / 改 backend / 接真 opencode:看 `docs/specs/` 和 `docs/2026-04-20-compiler-existing-assets-handoff.md`
+重置 session 级运行状态：
+
+```bash
+rm -rf ~/.codex-self-evolution/session_reflection
+rm -rf ~/.codex-self-evolution/session_recall
+```
+
+不会删除 `~/.codex-self-evolution/config.toml` 和 `.env.provider`。

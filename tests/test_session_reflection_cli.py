@@ -25,7 +25,7 @@ def _codex_payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
-def test_stop_review_from_stdin_spawns_session_reflect_job(
+def test_session_stop_from_stdin_spawns_session_reflect_job(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -50,7 +50,7 @@ def test_stop_review_from_stdin_spawns_session_reflect_job(
     monkeypatch.setattr(cli.subprocess, "Popen", FakePopen)
     monkeypatch.setattr(sys, "stdin", StringIO(json.dumps(_codex_payload())))
 
-    exit_code = cli.main(["stop-review", "--from-stdin", "--state-dir", "/tmp/csep-home"])
+    exit_code = cli.main(["session-stop", "--from-stdin", "--state-dir", "/tmp/csep-home"])
 
     assert exit_code == 0
     assert json.loads(capsys.readouterr().out) == {"continue": True}
@@ -71,7 +71,7 @@ def test_stop_review_from_stdin_spawns_session_reflect_job(
     assert captured["kwargs"]["stdout"].name.startswith("/tmp/codex-self-evolution/")
 
 
-def test_stop_review_from_stdin_skipped_enqueue_does_not_spawn(
+def test_session_stop_from_stdin_skipped_enqueue_does_not_spawn(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -89,13 +89,13 @@ def test_stop_review_from_stdin_skipped_enqueue_does_not_spawn(
     )
     monkeypatch.setattr(sys, "stdin", StringIO(json.dumps(_codex_payload())))
 
-    exit_code = cli.main(["stop-review", "--from-stdin"])
+    exit_code = cli.main(["session-stop", "--from-stdin"])
 
     assert exit_code == 0
     assert json.loads(capsys.readouterr().out) == {"continue": True}
 
 
-def test_stop_review_from_stdin_archive_only_does_not_spawn_reflection(
+def test_session_stop_from_stdin_archive_only_does_not_spawn_reflection(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -113,7 +113,7 @@ def test_stop_review_from_stdin_archive_only_does_not_spawn_reflection(
     )
     monkeypatch.setattr(sys, "stdin", StringIO(json.dumps(_codex_payload())))
 
-    exit_code = cli.main(["stop-review", "--from-stdin"])
+    exit_code = cli.main(["session-stop", "--from-stdin"])
 
     assert exit_code == 0
     assert json.loads(capsys.readouterr().out) == {"continue": True}
@@ -195,7 +195,7 @@ def test_session_reflect_hook_payload_enqueues_and_runs_foreground(
     assert json.loads(capsys.readouterr().out) == {"job_id": "job-456", "status": "succeeded"}
 
 
-def test_stop_review_from_stdin_malformed_json_is_non_blocking_without_enqueue_or_spawn(
+def test_session_stop_from_stdin_malformed_json_is_non_blocking_without_enqueue_or_spawn(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -212,9 +212,27 @@ def test_stop_review_from_stdin_malformed_json_is_non_blocking_without_enqueue_o
     )
     monkeypatch.setattr(sys, "stdin", StringIO("not json"))
 
-    exit_code = cli.main(["stop-review", "--from-stdin"])
+    exit_code = cli.main(["session-stop", "--from-stdin"])
 
     assert exit_code == 0
     out = json.loads(capsys.readouterr().out)
     assert out["continue"] is True
     assert "warning" in out
+
+
+def test_legacy_cli_commands_are_removed() -> None:
+    """Legacy reviewer/compiler/synthesis/old recall commands are not registered."""
+    removed = [
+        "stop-review",
+        "compile",
+        "compile-preflight",
+        "scan",
+        "skill-synthesize",
+        "eval-compiler",
+        "recall",
+        "recall-trigger",
+    ]
+    for command in removed:
+        with pytest.raises(SystemExit) as exc:
+            cli.main([command])
+        assert exc.value.code == 2

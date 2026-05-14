@@ -29,7 +29,6 @@ def test_session_reflection_defaults_are_enabled(tmp_path: Path) -> None:
     assert cfg.skill_prefix == "csep-reflect-"
     assert cfg.timeout_seconds == 900.0
     assert cfg.max_concurrent_jobs == 1
-    assert cfg.replace_stop_reviewer is True
     assert loaded.sources["session_reflection.model"] == "default"
 
 
@@ -45,7 +44,6 @@ approval_policy = "never"
 skill_prefix = "csep-reflect-"
 timeout_seconds = 1200
 max_concurrent_jobs = 1
-replace_stop_reviewer = true
 """)
 
     loaded = load_config(home=tmp_path, env={})
@@ -87,6 +85,7 @@ def test_session_reflection_template_contains_defaults() -> None:
     assert 'backend = "codex-app-server"' in CONFIG_TEMPLATE
     assert 'model = "gpt-5.3-codex-spark"' in CONFIG_TEMPLATE
     assert 'skill_generation_mode = "one_shot_active"' in CONFIG_TEMPLATE
+    assert "replace_stop_reviewer" not in CONFIG_TEMPLATE
     assert 'threadSource = "memory_consolidation"' not in CONFIG_TEMPLATE
 
 

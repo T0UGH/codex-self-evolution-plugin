@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .logging_setup import configure as configure_logging, get_logger
-from .recall.workflow import build_focused_recall, render_focused_recall_markdown
+from .session_recall.workflow import build_focused_recall, render_focused_recall_markdown
 from .session_recall.archive import archive_from_hook_payload, archive_transcript, backfill_sessions, default_db_path
 
 

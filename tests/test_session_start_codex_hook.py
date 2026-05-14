@@ -20,8 +20,7 @@ from io import StringIO
 
 import pytest
 
-from codex_self_evolution import cli
-from codex_self_evolution.compiler.engine import apply_compiler_outputs
+from codex_self_evolution import cli, csep
 from codex_self_evolution.hooks.session_start import (
     format_session_start_for_codex,
     session_start,
@@ -32,20 +31,11 @@ from codex_self_evolution.hooks.session_start import (
 
 
 def _seed_state(tmp_path, *, user="Prefer concise answers.", memory="Focused tests first."):
+    """Seed retained memory files for SessionStart tests."""
     state = tmp_path / "state"
-    apply_compiler_outputs(
-        memory_dir=state / "memory",
-        recall_dir=state / "recall",
-        skills_dir=state / "skills",
-        memory_records={
-            "user": [{"summary": "User pref", "content": user}],
-            "global": [{"summary": "Repo fact", "content": memory}],
-        },
-        recall_records=[],
-        compiled_skills=[],
-        manifest_entries=[],
-        existing_entries=[],
-    )
+    (state / "memory").mkdir(parents=True)
+    (state / "memory" / "USER.md").write_text(f"# USER\n\n{user}\n", encoding="utf-8")
+    (state / "memory" / "MEMORY.md").write_text(f"# MEMORY\n\n{memory}\n", encoding="utf-8")
     return state
 
 
@@ -138,15 +128,32 @@ def test_from_stdin_reads_cwd_from_codex_payload(monkeypatch, capsys, tmp_path):
     assert "Prefer concise" in out["hookSpecificOutput"]["additionalContext"]
 
 
-def test_recall_trigger_defaults_to_markdown(monkeypatch, capsys, tmp_path):
+def test_csep_recall_defaults_to_markdown(monkeypatch, capsys, tmp_path):
     state = _seed_state(tmp_path)
     repo = tmp_path / "repo"
     repo.mkdir()
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        json.dumps({"role": "user", "content": "remember previous workflow from session recall"}) + "\n",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
 
-    exit_code = cli.main([
-        "recall-trigger",
-        "--query",
+    assert csep.main([
+        "session-archive",
+        "--transcript-path",
+        str(transcript),
+        "--cwd",
+        str(repo),
+        "--session-id",
+        "s1",
+        "--state-dir",
+        str(state),
+    ]) == 0
+    capsys.readouterr()
+
+    exit_code = csep.main([
+        "recall",
         "remember previous workflow",
         "--cwd",
         str(repo),
@@ -157,18 +164,36 @@ def test_recall_trigger_defaults_to_markdown(monkeypatch, capsys, tmp_path):
     assert exit_code == 0
     out = capsys.readouterr().out
     assert out.startswith("## Focused Recall")
-    assert "Status: no_match" in out
+    assert "Status: matched" in out
+    assert "remember previous workflow from session recall" in out
 
 
-def test_recall_trigger_json_format(monkeypatch, capsys, tmp_path):
+def test_csep_recall_json_format(monkeypatch, capsys, tmp_path):
     state = _seed_state(tmp_path)
     repo = tmp_path / "repo"
     repo.mkdir()
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        json.dumps({"role": "user", "content": "remember previous workflow json"}) + "\n",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
 
-    cli.main([
-        "recall-trigger",
-        "--query",
+    assert csep.main([
+        "session-archive",
+        "--transcript-path",
+        str(transcript),
+        "--cwd",
+        str(repo),
+        "--session-id",
+        "s1",
+        "--state-dir",
+        str(state),
+    ]) == 0
+    capsys.readouterr()
+
+    csep.main([
+        "recall",
         "remember previous workflow",
         "--cwd",
         str(repo),
@@ -180,7 +205,8 @@ def test_recall_trigger_json_format(monkeypatch, capsys, tmp_path):
 
     out = json.loads(capsys.readouterr().out)
     assert out["triggered"] is True
-    assert out["count"] == 0
+    assert out["count"] == 1
+    assert out["results"][0]["messages"][0]["content"] == "remember previous workflow json"
 
 
 def test_from_stdin_falls_back_to_cli_cwd_when_payload_missing_cwd(monkeypatch, capsys, tmp_path):
