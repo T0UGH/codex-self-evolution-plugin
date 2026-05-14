@@ -174,6 +174,17 @@ max_concurrent_jobs = 1
 replace_stop_reviewer = true
 
 
+# [session_reflection.trigger] — deterministic Stop-hook nudge policy
+[session_reflection.trigger]
+enabled = true
+memory_stop_interval = 3
+memory_context_chars = 16000
+skill_tool_call_interval = 15
+high_signal_immediate = true
+skill_generation_mode = "one_shot_active"
+active_job_stale_seconds = 1800
+
+
 # ===========================================================================
 # [log] — plugin.log rotation
 # ===========================================================================

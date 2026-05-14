@@ -25,7 +25,7 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from .config import REFLECT_SKILL_PREFIX
+from .config import DEFAULT_LOCK_STALE_SECONDS, REFLECT_SKILL_PREFIX
 
 
 # ---- Dataclasses --------------------------------------------------------
@@ -109,6 +109,25 @@ class SkillSynthesisConfig:
 
 
 @dataclass
+class SessionReflectionTriggerConfig:
+    """Deterministic Stop-hook trigger policy configuration."""
+
+    enabled: bool = True
+    # Number of Stop events between memory-reflection nudges.
+    memory_stop_interval: int = 3
+    # Maximum transcript context sent to the memory-reflection decision path.
+    memory_context_chars: int = 16000
+    # Number of tool calls between skill-generation nudges.
+    skill_tool_call_interval: int = 15
+    # Whether high-signal events may bypass interval counters.
+    high_signal_immediate: bool = True
+    # Skill generation policy name consumed by the trigger evaluator.
+    skill_generation_mode: str = "one_shot_active"
+    # Staleness window for an active reflection job before trigger deferral expires.
+    active_job_stale_seconds: int = DEFAULT_LOCK_STALE_SECONDS
+
+
+@dataclass
 class SessionReflectionConfig:
     """Session-level reflection worker configuration."""
 
@@ -122,6 +141,7 @@ class SessionReflectionConfig:
     timeout_seconds: float = 900.0
     max_concurrent_jobs: int = 1
     replace_stop_reviewer: bool = True
+    trigger: SessionReflectionTriggerConfig = field(default_factory=SessionReflectionTriggerConfig)
 
 
 @dataclass
@@ -203,6 +223,7 @@ ALLOWED_SKILL_SYNTHESIS_MODES = {"incremental", "full"}
 ALLOWED_SESSION_REFLECTION_BACKENDS = {"codex-app-server"}
 ALLOWED_SESSION_REFLECTION_SANDBOXES = {"read-only", "workspace-write", "danger-full-access"}
 ALLOWED_SESSION_REFLECTION_APPROVAL_POLICIES = {"untrusted", "on-failure", "on-request", "never"}
+ALLOWED_SESSION_REFLECTION_TRIGGER_MODES = {"one_shot_active", "evidence_first"}
 
 # Map new-style CODEX_SELF_EVOLUTION_* env vars to dotted config paths.
 _NEW_ENV_MAP: dict[str, str] = {
@@ -757,6 +778,65 @@ def load_config(
     else:
         sources["session_reflection.replace_stop_reviewer"] = "default"
 
+    trigger_toml = reflection_toml.get("trigger", {}) or {}
+    if not isinstance(trigger_toml, dict):
+        warnings.append("session_reflection.trigger must be a table")
+        trigger_toml = {}
+
+    trigger_enabled = trigger_toml.get("enabled")
+    if isinstance(trigger_enabled, bool):
+        config.session_reflection.trigger.enabled = trigger_enabled
+        sources["session_reflection.trigger.enabled"] = "config.toml"
+    else:
+        sources["session_reflection.trigger.enabled"] = "default"
+
+    def _positive_trigger_int(field: str, default: int) -> int:
+        """Resolve a trigger interval/limit that must be a positive integer."""
+        value = trigger_toml.get(field)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            sources[f"session_reflection.trigger.{field}"] = "config.toml"
+            return value
+        sources[f"session_reflection.trigger.{field}"] = "default"
+        if field in trigger_toml:
+            warnings.append(f"session_reflection.trigger.{field} must be a positive integer")
+        return default
+
+    config.session_reflection.trigger.memory_stop_interval = _positive_trigger_int(
+        "memory_stop_interval",
+        config.session_reflection.trigger.memory_stop_interval,
+    )
+    config.session_reflection.trigger.memory_context_chars = _positive_trigger_int(
+        "memory_context_chars",
+        config.session_reflection.trigger.memory_context_chars,
+    )
+    config.session_reflection.trigger.skill_tool_call_interval = _positive_trigger_int(
+        "skill_tool_call_interval",
+        config.session_reflection.trigger.skill_tool_call_interval,
+    )
+    config.session_reflection.trigger.active_job_stale_seconds = _positive_trigger_int(
+        "active_job_stale_seconds",
+        config.session_reflection.trigger.active_job_stale_seconds,
+    )
+
+    high_signal = trigger_toml.get("high_signal_immediate")
+    if isinstance(high_signal, bool):
+        config.session_reflection.trigger.high_signal_immediate = high_signal
+        sources["session_reflection.trigger.high_signal_immediate"] = "config.toml"
+    else:
+        sources["session_reflection.trigger.high_signal_immediate"] = "default"
+
+    mode = trigger_toml.get("skill_generation_mode")
+    if mode in ALLOWED_SESSION_REFLECTION_TRIGGER_MODES:
+        config.session_reflection.trigger.skill_generation_mode = str(mode)
+        sources["session_reflection.trigger.skill_generation_mode"] = "config.toml"
+    else:
+        sources["session_reflection.trigger.skill_generation_mode"] = "default"
+        if mode not in (None, ""):
+            warnings.append(
+                "session_reflection.trigger.skill_generation_mode must be "
+                "'one_shot_active' or 'evidence_first'"
+            )
+
     if (
         "timeout_seconds" in reflection_toml
         and sources["session_reflection.timeout_seconds"] == "default"
@@ -984,6 +1064,13 @@ _RECOGNIZED_PATHS: frozenset[str] = frozenset([
     "session_reflection.approval_policy", "session_reflection.skill_prefix",
     "session_reflection.timeout_seconds", "session_reflection.max_concurrent_jobs",
     "session_reflection.replace_stop_reviewer",
+    "session_reflection.trigger", "session_reflection.trigger.enabled",
+    "session_reflection.trigger.memory_stop_interval",
+    "session_reflection.trigger.memory_context_chars",
+    "session_reflection.trigger.skill_tool_call_interval",
+    "session_reflection.trigger.high_signal_immediate",
+    "session_reflection.trigger.skill_generation_mode",
+    "session_reflection.trigger.active_job_stale_seconds",
     "session_recall", "session_recall.enabled",
     "session_recall.stop_hook_archive",
     "log", "log.retention_days",
