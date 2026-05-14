@@ -46,7 +46,11 @@ def test_missing_config_returns_defaults(tmp_path: Path) -> None:
     assert loaded.config.compile.pi.provider == "kimi"
     assert loaded.config.compile.pi.model == "kimi-k2.6"
     assert loaded.config.compile.pi.mode == "edit"
+    assert loaded.config.session_recall.enabled is True
+    assert loaded.config.session_recall.stop_hook_archive is True
     assert loaded.sources["reviewer.provider"] == "default"
+    assert loaded.sources["session_recall.enabled"] == "default"
+    assert loaded.sources["session_recall.stop_hook_archive"] == "default"
     assert loaded.warnings == []
 
 
@@ -89,6 +93,10 @@ mode = "json"
 backend = "script"
 interval_seconds = 600
 
+[session_recall]
+enabled = false
+stop_hook_archive = false
+
 [log]
 retention_days = 7
 """)
@@ -107,10 +115,14 @@ retention_days = 7
     assert c.compile.pi.mode == "json"
     assert c.scheduler.backend == "script"
     assert c.scheduler.interval_seconds == 600
+    assert c.session_recall.enabled is False
+    assert c.session_recall.stop_hook_archive is False
     assert c.log.retention_days == 7
     # Sources reflect toml
     assert loaded.sources["reviewer.provider"] == "config.toml"
     assert loaded.sources["compile.allow_fallback"] == "config.toml"
+    assert loaded.sources["session_recall.enabled"] == "config.toml"
+    assert loaded.sources["session_recall.stop_hook_archive"] == "config.toml"
 
 
 # ---- env var precedence -------------------------------------------------
@@ -337,12 +349,13 @@ def test_config_to_dict_serializes_whole_tree(tmp_path: Path) -> None:
     # active_profile + profile_names).
     assert set(data.keys()) == {
         "schema_version", "active_profile", "profile_names",
-        "reviewer", "compile", "scheduler", "skill_synthesis", "log",
+        "reviewer", "compile", "scheduler", "skill_synthesis", "session_recall", "log",
     }
     assert "subprocess" in data["reviewer"]
     assert "opencode" in data["compile"]
     assert "pi" in data["compile"]
     assert "agent" in data["skill_synthesis"]
+    assert data["session_recall"]["enabled"] is True
 
 
 # ---- allowed providers list stays in sync ------------------------------

@@ -107,6 +107,12 @@ class SkillSynthesisConfig:
 
 
 @dataclass
+class SessionRecallConfig:
+    enabled: bool = True
+    stop_hook_archive: bool = True
+
+
+@dataclass
 class LogConfig:
     retention_days: int = 14
 
@@ -125,6 +131,7 @@ class PluginConfig:
     compile: CompileConfig = field(default_factory=CompileConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     skill_synthesis: SkillSynthesisConfig = field(default_factory=SkillSynthesisConfig)
+    session_recall: SessionRecallConfig = field(default_factory=SessionRecallConfig)
     log: LogConfig = field(default_factory=LogConfig)
 
 
@@ -650,6 +657,22 @@ def load_config(
         if config.skill_synthesis.agent.timeout_seconds <= 0:
             warnings.append("skill_synthesis.agent.timeout_seconds must be positive")
 
+    # --- session_recall ---
+    session_recall_toml = raw_toml.get("session_recall", {}) or {}
+    sr_enabled = session_recall_toml.get("enabled")
+    if isinstance(sr_enabled, bool):
+        config.session_recall.enabled = sr_enabled
+        sources["session_recall.enabled"] = "config.toml"
+    else:
+        sources["session_recall.enabled"] = "default"
+
+    sr_stop_hook = session_recall_toml.get("stop_hook_archive")
+    if isinstance(sr_stop_hook, bool):
+        config.session_recall.stop_hook_archive = sr_stop_hook
+        sources["session_recall.stop_hook_archive"] = "config.toml"
+    else:
+        sources["session_recall.stop_hook_archive"] = "default"
+
     # --- log ---
     log_toml = raw_toml.get("log", {}) or {}
     config.log.retention_days, sources["log.retention_days"] = _resolve_number(
@@ -810,6 +833,8 @@ _RECOGNIZED_PATHS: frozenset[str] = frozenset([
     "skill_synthesis.agent", "skill_synthesis.agent.backend",
     "skill_synthesis.agent.provider", "skill_synthesis.agent.model",
     "skill_synthesis.agent.timeout_seconds",
+    "session_recall", "session_recall.enabled",
+    "session_recall.stop_hook_archive",
     "log", "log.retention_days",
 ])
 

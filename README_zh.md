@@ -88,6 +88,10 @@ codex-self-evolution status                               # 只读诊断快照
 codex-self-evolution recall --query "context" --cwd /path/to/repo
 codex-self-evolution recall-trigger --query "remember previous flow" --cwd /path/to/repo --format json
 csep recall "focused query for prior repo context"       # 给模型读的 Markdown recall
+csep recall --recent                                     # 当前 repo 最近归档 session
+csep recall "hermes OR recall" --global                  # 跨 repo/worktree 检索
+csep session-archive --transcript-path /path/to/session.jsonl --cwd /path/to/repo --session-id <id>
+csep session-ingest --backfill --root ~/.codex/sessions
 ```
 
 等价的模块调用形式：
@@ -114,6 +118,19 @@ python -m codex_self_evolution.cli session-start --cwd /path/to/repo
 | `--explicit` | `recall-trigger` 可选 | 关闭 | 标记该 recall 触发为用户显式发起。 |
 | `--format` | `recall-trigger` / `csep recall` 可选 | `markdown` | 测试/调试用 `json`；Markdown 面向模型直接阅读。 |
 | `--top-k` | `recall-trigger` / `csep recall` 可选 | `3` | 聚焦召回最多返回几条。 |
+| `--global` | `csep recall` 可选 | 关闭 | 跨 repo/worktree 检索 session recall；默认只查当前 repo。 |
+| `--recent` | `csep recall` 可选 | 关闭 | 不需要 query，返回当前 scope 最近归档的 session。 |
+| `--budget-chars` | `csep recall` 可选 | `12000` | 控制一次 recall 输出的总字符预算，避免把历史上下文带得太大。 |
+
+Session recall 默认开启。Stop hook 会把 Codex transcript 归档到本机
+SQLite/FTS；`csep recall` 会优先从 session 库返回受预算控制的原始消息窗口，
+找不到时再软 fallback 到旧 `recall/index.json`：
+
+```toml
+[session_recall]
+enabled = true
+stop_hook_archive = true
+```
 
 `--state-dir` 下的目录布局(默认 `~/.codex-self-evolution/projects/<mangled-cwd>/`):
 
@@ -380,5 +397,5 @@ make preflight      # 对 data/ 跑一次 compile-preflight
 - 最终写入归属 `src/codex_self_evolution/compiler/engine.py`（不再是单独的 `writer.py`）。
 - Managed skills 的源文件仍在 `skills/managed/` 下，需要 plugin-owned manifest 条目（owner = `codex-self-evolution-plugin`）。可发布的 active skill 会投影到 `~/.codex/skills/csep-managed/csep-*/SKILL.md`；compiler 拒绝改非此 owner 的 skill。
 - review snapshot 被标准化后保存在 `review/snapshots/` 下，便于调试与审计。
-- recall 使用 repo/cwd-first 排序策略。`SessionStart` 注入 Recall Contract，要求 Codex 在非平凡 repo/workspace 任务可能依赖历史上下文时自行运行 `csep recall "<focused query>"`；空结果软失败继续。
+- recall 优先使用本机 session archive 的 SQLite/FTS；同一个 git common dir 下的多个 worktree 会按同一个 repo scope 处理。`SessionStart` 注入 Recall Contract，要求 Codex 在非平凡 repo/workspace 任务可能依赖历史上下文时自行运行 `csep recall "<focused query>"`；空结果软失败继续。
 - 改动 compile 行为前建议先读 `docs/2026-04-20-compiler-existing-assets-handoff.md`，了解当前 existing-assets 流水线背后的设计依据。

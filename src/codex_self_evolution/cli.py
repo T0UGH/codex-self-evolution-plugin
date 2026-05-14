@@ -252,6 +252,75 @@ def _run_stop_review(args: argparse.Namespace) -> dict:
                 pass
 
 
+def _spawn_session_archive_from_stop_payload(
+    codex_payload: dict,
+    args: argparse.Namespace,
+    logger,
+) -> None:
+    """Spawn a detached session archive child from the raw Codex Stop payload."""
+    try:
+        session_recall = load_config().config.session_recall
+    except ConfigError as exc:
+        logger.warning(
+            "session recall config unavailable; skipping stop-hook archive",
+            extra={"kind": "session_recall_archive_skipped", "error": str(exc)[:400]},
+        )
+        return
+    if not session_recall.enabled or not session_recall.stop_hook_archive:
+        return
+
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        prefix="codex-self-evolution-session-archive-",
+        suffix=".json",
+        delete=False,
+    ) as handle:
+        json.dump(codex_payload, handle)
+        tmp_path = handle.name
+
+    child_argv = [
+        sys.executable,
+        "-m",
+        "codex_self_evolution.csep",
+        "session-archive",
+        "--from-hook-payload",
+        tmp_path,
+        "--cleanup-payload",
+    ]
+    if args.state_dir:
+        child_argv.extend(["--state-dir", args.state_dir])
+
+    log_dir = Path(tempfile.gettempdir()) / "codex-self-evolution"
+    log_dir.mkdir(exist_ok=True)
+    log_path = log_dir / f"session-archive-{os.getpid()}-{int(os.times()[4])}.log"
+    try:
+        log_handle = open(log_path, "w", encoding="utf-8")
+    except OSError:
+        log_handle = subprocess.DEVNULL  # type: ignore[assignment]
+
+    try:
+        subprocess.Popen(  # noqa: S603 — trusted argv
+            child_argv,
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except OSError as exc:
+        if hasattr(log_handle, "close"):
+            log_handle.close()
+        try:
+            Path(tmp_path).unlink()
+        except OSError:
+            pass
+        logger.warning(
+            "failed to spawn session archive",
+            extra={"kind": "session_recall_archive_spawn_failed", "error": str(exc)[:400]},
+        )
+
+
 def _handle_session_start_from_stdin(args: argparse.Namespace) -> int:
     """Codex SessionStart hook entry point.
 
@@ -328,6 +397,7 @@ def _handle_stop_from_stdin(args: argparse.Namespace) -> int:
         print(json.dumps({"continue": True, "warning": "codex payload is not an object"}))
         return 0
 
+    _spawn_session_archive_from_stop_payload(codex_payload, args, get_logger())
     mapped = map_codex_stop_payload(codex_payload)
 
     with tempfile.NamedTemporaryFile(
