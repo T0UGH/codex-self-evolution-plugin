@@ -129,6 +129,26 @@ interval_seconds = 300
 
 
 # ===========================================================================
+# [skill_synthesis] — periodic global synthesized skills
+# ===========================================================================
+
+[skill_synthesis]
+enabled = true
+default_mode = "incremental"
+lookback_hours = 24
+lookback_days = 30
+skills_prefix = "csep-synth-"
+
+
+[skill_synthesis.agent]
+# v1 supports only agent:pi. This config is independent from [compile.pi].
+backend = "agent:pi"
+provider = "minimax"
+model = "MiniMax-M2.7"
+timeout_seconds = 1800
+
+
+# ===========================================================================
 # [log] — plugin.log rotation
 # ===========================================================================
 

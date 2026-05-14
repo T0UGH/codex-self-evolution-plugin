@@ -89,6 +89,24 @@ class SchedulerConfig:
 
 
 @dataclass
+class SkillSynthesisAgentConfig:
+    backend: str = "agent:pi"
+    provider: str = "minimax"
+    model: str = "MiniMax-M2.7"
+    timeout_seconds: float = 1800.0
+
+
+@dataclass
+class SkillSynthesisConfig:
+    enabled: bool = True
+    default_mode: str = "incremental"
+    lookback_hours: int = 24
+    lookback_days: int = 30
+    skills_prefix: str = "csep-synth-"
+    agent: SkillSynthesisAgentConfig = field(default_factory=SkillSynthesisAgentConfig)
+
+
+@dataclass
 class LogConfig:
     retention_days: int = 14
 
@@ -106,6 +124,7 @@ class PluginConfig:
     profile_names: list[str] = field(default_factory=list)
     compile: CompileConfig = field(default_factory=CompileConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    skill_synthesis: SkillSynthesisConfig = field(default_factory=SkillSynthesisConfig)
     log: LogConfig = field(default_factory=LogConfig)
 
 
@@ -151,6 +170,8 @@ ALLOWED_PROVIDERS = {
 ALLOWED_PAYLOAD_MODES = {"stdin", "file", "inline"}
 ALLOWED_RESPONSE_FORMATS = {"codex-events", "opencode-events", "raw-json"}
 ALLOWED_COMPILE_BACKENDS = {"script", "agent:opencode", "agent:pi"}
+ALLOWED_SKILL_SYNTHESIS_BACKENDS = {"agent:pi"}
+ALLOWED_SKILL_SYNTHESIS_MODES = {"incremental", "full"}
 
 # Map new-style CODEX_SELF_EVOLUTION_* env vars to dotted config paths.
 _NEW_ENV_MAP: dict[str, str] = {
@@ -544,6 +565,91 @@ def load_config(
         cast=int,
     )
 
+    # --- skill_synthesis ---
+    synth_toml = raw_toml.get("skill_synthesis", {}) or {}
+    synth_enabled = synth_toml.get("enabled")
+    if isinstance(synth_enabled, bool):
+        config.skill_synthesis.enabled = synth_enabled
+        sources["skill_synthesis.enabled"] = "config.toml"
+    else:
+        sources["skill_synthesis.enabled"] = "default"
+
+    config.skill_synthesis.default_mode, sources["skill_synthesis.default_mode"] = _resolve(
+        field_path="skill_synthesis.default_mode",
+        new_env=None,
+        env_map=env_map,
+        toml_value=synth_toml.get("default_mode"),
+        default=config.skill_synthesis.default_mode,
+        validator=lambda v: v in ALLOWED_SKILL_SYNTHESIS_MODES,
+    )
+    config.skill_synthesis.lookback_hours, sources["skill_synthesis.lookback_hours"] = _resolve_number(
+        "skill_synthesis.lookback_hours",
+        new_env=None,
+        env_map=env_map,
+        toml_value=synth_toml.get("lookback_hours"),
+        default=config.skill_synthesis.lookback_hours,
+        cast=int,
+    )
+    config.skill_synthesis.lookback_days, sources["skill_synthesis.lookback_days"] = _resolve_number(
+        "skill_synthesis.lookback_days",
+        new_env=None,
+        env_map=env_map,
+        toml_value=synth_toml.get("lookback_days"),
+        default=config.skill_synthesis.lookback_days,
+        cast=int,
+    )
+    config.skill_synthesis.skills_prefix, sources["skill_synthesis.skills_prefix"] = _resolve(
+        field_path="skill_synthesis.skills_prefix",
+        new_env=None,
+        env_map=env_map,
+        toml_value=synth_toml.get("skills_prefix"),
+        default=config.skill_synthesis.skills_prefix,
+    )
+
+    synth_agent_toml = synth_toml.get("agent", {}) or {}
+    config.skill_synthesis.agent.backend, sources["skill_synthesis.agent.backend"] = _resolve(
+        field_path="skill_synthesis.agent.backend",
+        new_env=None,
+        env_map=env_map,
+        toml_value=synth_agent_toml.get("backend"),
+        default=config.skill_synthesis.agent.backend,
+    )
+    config.skill_synthesis.agent.provider, sources["skill_synthesis.agent.provider"] = _resolve(
+        field_path="skill_synthesis.agent.provider",
+        new_env=None,
+        env_map=env_map,
+        toml_value=synth_agent_toml.get("provider"),
+        default=config.skill_synthesis.agent.provider,
+    )
+    config.skill_synthesis.agent.model, sources["skill_synthesis.agent.model"] = _resolve(
+        field_path="skill_synthesis.agent.model",
+        new_env=None,
+        env_map=env_map,
+        toml_value=synth_agent_toml.get("model"),
+        default=config.skill_synthesis.agent.model,
+    )
+    config.skill_synthesis.agent.timeout_seconds, sources["skill_synthesis.agent.timeout_seconds"] = _resolve_number(
+        "skill_synthesis.agent.timeout_seconds",
+        new_env=None,
+        env_map=env_map,
+        toml_value=synth_agent_toml.get("timeout_seconds"),
+        default=config.skill_synthesis.agent.timeout_seconds,
+        cast=float,
+    )
+
+    if config.skill_synthesis.enabled:
+        if config.skill_synthesis.agent.backend not in ALLOWED_SKILL_SYNTHESIS_BACKENDS:
+            warnings.append(
+                "skill_synthesis.agent.backend must be agent:pi in v1; "
+                f"got {config.skill_synthesis.agent.backend!r}"
+            )
+        if not str(config.skill_synthesis.agent.provider).strip():
+            warnings.append("skill_synthesis.agent.provider is required when skill synthesis is enabled")
+        if not str(config.skill_synthesis.agent.model).strip():
+            warnings.append("skill_synthesis.agent.model is required when skill synthesis is enabled")
+        if config.skill_synthesis.agent.timeout_seconds <= 0:
+            warnings.append("skill_synthesis.agent.timeout_seconds must be positive")
+
     # --- log ---
     log_toml = raw_toml.get("log", {}) or {}
     config.log.retention_days, sources["log.retention_days"] = _resolve_number(
@@ -698,6 +804,12 @@ _RECOGNIZED_PATHS: frozenset[str] = frozenset([
     "compile.pi", "compile.pi.provider", "compile.pi.model", "compile.pi.mode",
     "compile.pi.timeout_seconds",
     "scheduler", "scheduler.backend", "scheduler.interval_seconds",
+    "skill_synthesis", "skill_synthesis.enabled",
+    "skill_synthesis.default_mode", "skill_synthesis.lookback_hours",
+    "skill_synthesis.lookback_days", "skill_synthesis.skills_prefix",
+    "skill_synthesis.agent", "skill_synthesis.agent.backend",
+    "skill_synthesis.agent.provider", "skill_synthesis.agent.model",
+    "skill_synthesis.agent.timeout_seconds",
     "log", "log.retention_days",
 ])
 
