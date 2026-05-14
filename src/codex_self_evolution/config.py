@@ -23,6 +23,8 @@ DEFAULT_LOCK_STALE_SECONDS = 30 * 60
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PLUGIN_OWNER = "codex-self-evolution-plugin"
 MANAGED_SKILLS_DIRNAME = "managed"
+SKILL_SYNTHESIS_SUBDIR = "skill_synthesis"
+SYNTH_SKILL_PREFIX = "csep-synth-"
 
 # Where per-project state (suggestions, memory, recall, review) lives by default.
 # Mirrors Claude Code's `~/.claude/projects/<mangled-path>/` convention so each
