@@ -192,6 +192,7 @@ def session_reflection_status(*, home: str | Path | None = None) -> dict[str, An
         "exists": paths.root.exists(),
         "latest": latest,
         "global_lock": global_lock_status(home=resolved_home),
+        "trigger": _trigger_status_summary(paths),
     }
 
 
@@ -226,6 +227,40 @@ def _compact_validation(validation: dict[str, Any]) -> dict[str, Any]:
         if value is not None:
             compact[key] = value
     return compact
+
+
+def _trigger_status_summary(paths: Any) -> dict[str, Any]:
+    """Return compact status for session trigger sidecars."""
+    triggers_dir = paths.triggers_dir
+    if not triggers_dir.is_dir():
+        return {"exists": False, "session_count": 0}
+    state_files = sorted(triggers_dir.glob("*/state.json"))
+    latest_state: dict[str, Any] | None = None
+    latest_decision: dict[str, Any] | None = None
+    if state_files:
+        latest_path = max(state_files, key=lambda item: item.stat().st_mtime)
+        try:
+            loaded = load_json(latest_path)
+            if isinstance(loaded, dict):
+                latest_state = {
+                    "session_id": loaded.get("session_id"),
+                    "stops_since_memory_review": loaded.get("stops_since_memory_review"),
+                    "readable_chars_since_memory_review": loaded.get("readable_chars_since_memory_review"),
+                    "tool_calls_since_skill_review": loaded.get("tool_calls_since_skill_review"),
+                    "active_job_id": loaded.get("active_job_id"),
+                    "active_job_reserved_at": loaded.get("active_job_reserved_at"),
+                    "last_decision": loaded.get("last_decision"),
+                }
+                if isinstance(loaded.get("last_decision"), dict):
+                    latest_decision = loaded["last_decision"]
+        except Exception:
+            latest_state = {"unreadable": True, "path": str(latest_path)}
+    return {
+        "exists": True,
+        "session_count": len(state_files),
+        "latest_state": latest_state,
+        "latest_decision": latest_decision,
+    }
 
 
 def _build_project_paths_for_home(repo_root: str | Path, *, home: Path | None) -> Paths:

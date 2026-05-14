@@ -701,3 +701,35 @@ def test_session_reflection_status_reports_failure_details(
         "reason": "missing_receipt",
         "error": "receipt missing",
     }
+
+
+def test_session_reflection_status_includes_trigger_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Status includes trigger sidecar summary for debugging."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    from codex_self_evolution.session_reflection.trigger import (
+        append_decision,
+        load_trigger_state,
+        trigger_paths_for_payload,
+        write_trigger_state,
+    )
+
+    trigger_paths = trigger_paths_for_payload(payload, home=home)
+    state = load_trigger_state(trigger_paths, session_id="parent-1")
+    state["stops_since_memory_review"] = 2
+    state["last_decision"] = {"status": "archive_only", "skip_reason": "below_threshold"}
+    write_trigger_state(trigger_paths, state)
+    append_decision(trigger_paths, state["last_decision"])
+
+    status = session_reflection_status(home=home)
+
+    assert status["trigger"]["exists"] is True
+    assert status["trigger"]["session_count"] == 1
+    assert status["trigger"]["latest_decision"]["status"] == "archive_only"
+    assert status["trigger"]["latest_state"]["stops_since_memory_review"] == 2
