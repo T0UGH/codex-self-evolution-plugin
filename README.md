@@ -167,11 +167,12 @@ Stop
   -> codex-self-evolution stop-review --from-stdin
 ```
 
-Stop hook 仍保持快速返回：它会先创建 session reflection job，再启动后台 worker。
-后台 worker 通过 Codex app-server fork 当前 thread，child thread 只负责写入长期
-memory、`csep-reflect-*` skill 和 `receipt.json`；parent 只读取 receipt，并校验写入
-边界、状态和失败原因。传统 stop-review 仍会生成 pending suggestions，scheduler 或
-手动 compile 会把它们晋升成长期资产。
+Stop hook 仍保持快速返回：`stop-review --from-stdin` 只创建 session reflection
+job，再启动后台 worker。后台 worker 通过 Codex app-server fork 当前 thread，child
+thread 只负责写入长期 memory、`csep-reflect-*` skill 和 `receipt.json`；parent
+只读取 receipt，并校验写入边界、状态和失败原因。传统 reviewer 只保留在
+`stop-review --hook-payload <file>` 手动调试路径；scheduler 或手动 compile 仍会处理
+已有的 pending suggestions。
 
 ### 3. 手动触发 recall
 

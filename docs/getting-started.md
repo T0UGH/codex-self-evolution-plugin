@@ -209,7 +209,7 @@ ls $STATE/suggestions/done/
 
 ### 3.2 验证
 
-#### Stop hook(reviewer)
+#### Stop hook(session reflection)
 
 新开一个终端,跑:
 
@@ -217,15 +217,17 @@ ls $STATE/suggestions/done/
 codex exec 'Say one sentence in Chinese to test my Stop hook.'
 ```
 
-等约 15-30 秒(Codex 回复 → Stop hook 触发 → 后台 MiniMax 调用完成):
+Codex 回复后,Stop hook 会快速返回,并把 session reflection worker 放到后台跑。
+等约 15-30 秒后检查最新 job:
 
 ```bash
-# 每个 repo 自动分到 ~/.codex-self-evolution/projects/<mangled-path>/
-ls ~/.codex-self-evolution/projects/
-ls -t ~/.codex-self-evolution/projects/*/suggestions/pending/ | head -3
+codex-self-evolution session-reflect --status | python3 -m json.tool
+codex-self-evolution status | python3 -m json.tool
 ```
 
-有新 envelope 文件就说明端到端闭环通了。
+`latest.status` 为 `succeeded` 说明 app-server fork、child 写入和 receipt 校验都已通过。
+如果是 `failed` 或 `skipped`,先看后面的
+[Session Reflection 调试](#session-reflection-调试)路径。
 
 #### SessionStart hook(stable background 注入)
 
@@ -266,7 +268,7 @@ JSON 丢弃(不会报错,就是"悄悄没效果")。如果模型答不出 XANADU
 
 ## 阶段 4:挂 launchd 自动调度(一键脚本)
 
-**目的**:让 `scan`(preflight + compile,across all buckets)每 5 分钟自动跑一次,消化 Stop hook 积累的 pending envelope,不用你手动触发。
+**目的**:让 `scan`(preflight + compile,across all buckets)每 5 分钟自动跑一次,消化 legacy reviewer、手动调试或历史版本留下的 pending envelope,不用你手动触发。
 
 ### 4.1 装载
 
