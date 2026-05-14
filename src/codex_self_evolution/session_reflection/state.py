@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from ..config import DEFAULT_LOCK_STALE_SECONDS
 from ..storage import _pid_alive, atomic_write_json, compute_stable_id, load_json, utc_now
@@ -187,35 +188,21 @@ def acquire_global_lock(
     owner_token = uuid.uuid4().hex
     payload = {"created_at": utc_timestamp(), "pid": os.getpid(), "owner_token": owner_token}
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with path.open("x", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-    except FileExistsError as exc:
+    with _global_lock_acquire_guard(path):
         try:
-            stale_candidate = path.read_text(encoding="utf-8")
-        except OSError as read_exc:
-            raise ReflectionLockError(f"failed to read existing reflection lock: {read_exc}") from read_exc
-        status = global_lock_status(home=home, stale_after_seconds=stale_after_seconds)
-        if status["locked"] and not status["stale"]:
-            raise ReflectionLockError(f"global reflection lock is active: {status['path']}") from exc
-        try:
-            if path.read_text(encoding="utf-8") != stale_candidate:
-                raise ReflectionLockError(f"global reflection lock changed during stale replacement: {path}")
-        except OSError as read_exc:
-            raise ReflectionLockError(f"failed to verify stale reflection lock: {read_exc}") from read_exc
-        try:
-            removed = _remove_lock_if_same_file(path, stale_candidate, owner_token=owner_token)
-        except OSError as unlink_exc:
-            raise ReflectionLockError(f"failed to remove stale reflection lock: {unlink_exc}") from unlink_exc
-        if not removed:
-            raise ReflectionLockError(f"global reflection lock changed during stale replacement: {path}")
-        try:
-            with path.open("x", encoding="utf-8") as handle:
-                json.dump(payload, handle, indent=2, sort_keys=True)
-                handle.write("\n")
-        except FileExistsError as second_exc:
-            raise ReflectionLockError(f"global reflection lock is active: {path}") from second_exc
+            _write_lock_exclusive(path, payload)
+        except FileExistsError as exc:
+            status = global_lock_status(home=home, stale_after_seconds=stale_after_seconds)
+            if status["locked"] and not status["stale"]:
+                raise ReflectionLockError(f"global reflection lock is active: {status['path']}") from exc
+            try:
+                path.unlink()
+            except OSError as unlink_exc:
+                raise ReflectionLockError(f"failed to remove stale reflection lock: {unlink_exc}") from unlink_exc
+            try:
+                _write_lock_exclusive(path, payload)
+            except FileExistsError as second_exc:
+                raise ReflectionLockError(f"global reflection lock is active: {path}") from second_exc
     return {"path": str(path), "owner_token": owner_token}
 
 
@@ -251,27 +238,28 @@ class ReflectionLockError(RuntimeError):
     """Raised when the reflection global lock cannot be acquired."""
 
 
-def _remove_lock_if_same_file(path: Path, expected_text: str, *, owner_token: str) -> bool:
-    """Remove `path` only when it still points at the stale file we claimed."""
-    claim_path = path.with_name(f"{path.name}.{owner_token}.stale")
-    try:
-        os.link(path, claim_path)
-    except FileNotFoundError:
-        return False
-    try:
-        claimed = claim_path.stat()
-        current = path.stat()
-        if (current.st_dev, current.st_ino) != (claimed.st_dev, claimed.st_ino):
-            return False
-        if claim_path.read_text(encoding="utf-8") != expected_text:
-            return False
-        path.unlink()
-        return True
-    finally:
+@contextmanager
+def _global_lock_acquire_guard(path: Path) -> Iterator[None]:
+    """Serialize lock acquisition so stale replacement cannot race itself."""
+    import fcntl
+
+    guard_path = path.with_name(f"{path.name}.acquire")
+    with guard_path.open("a+", encoding="utf-8") as handle:
         try:
-            claim_path.unlink()
-        except FileNotFoundError:
-            pass
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ReflectionLockError(f"global reflection lock acquisition is active: {guard_path}") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _write_lock_exclusive(path: Path, payload: dict[str, str | int]) -> None:
+    """Write a lock payload only when the target path does not already exist."""
+    with path.open("x", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
 
 
 def _new_job_id(created_at: str) -> str:
