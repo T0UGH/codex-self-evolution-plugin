@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 
 from codex_self_evolution.storage import atomic_write_json, utc_now
 from codex_self_evolution.session_reflection.runner import (
+    _build_project_paths_for_home,
     enqueue_reflection_from_payload,
     run_reflection_job,
     session_reflection_status,
@@ -29,11 +31,15 @@ class FakeReflectionClient:
         *,
         fail_start: bool = False,
         receipt_child_thread_id: str = "child-1",
+        memory_changes: list[dict[str, Any]] | None = None,
+        skill_changes: list[dict[str, Any]] | None = None,
         steal_lock_home: Path | None = None,
     ) -> None:
         """Configure whether turn/start raises after fork registration."""
         self.fail_start = fail_start
         self.receipt_child_thread_id = receipt_child_thread_id
+        self.memory_changes = memory_changes if memory_changes is not None else []
+        self.skill_changes = skill_changes if skill_changes is not None else []
         self.steal_lock_home = steal_lock_home
         self.fork_calls: list[dict[str, Any]] = []
         self.start_calls: list[dict[str, Any]] = []
@@ -58,8 +64,8 @@ class FakeReflectionClient:
                     "parent_session_id": _line_value(str(kwargs["prompt"]), "Parent session id: "),
                     "child_thread_id": self.receipt_child_thread_id,
                     "status": "succeeded",
-                    "memory_changes": [],
-                    "skill_changes": [],
+                    "memory_changes": self.memory_changes,
+                    "skill_changes": self.skill_changes,
                     "skipped_candidates": [],
                     "validation_notes": [],
                     "errors": [],
@@ -101,6 +107,11 @@ def _write_config(home: Path, text: str) -> None:
     """Write a config.toml fixture."""
     home.mkdir(parents=True, exist_ok=True)
     (home / "config.toml").write_text(text, encoding="utf-8")
+
+
+def _sha(path: Path) -> str:
+    """Return a sha256 digest for a receipt fixture file."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _receipt_path_from_prompt(prompt: str) -> Path:
@@ -486,6 +497,111 @@ def test_run_reflection_job_failed_validation_clears_active_job_without_counter_
     updated = load_trigger_state(trigger_paths, session_id="parent-1")
     assert updated["stops_since_memory_review"] == 4
     assert updated["readable_chars_since_memory_review"] == 12000
+    assert updated["tool_calls_since_skill_review"] == 7
+    assert updated["active_job_id"] is None
+
+
+def test_run_reflection_job_exception_clears_active_job_without_counter_subtraction(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Pre-validation runner exceptions release active job reservation only."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setenv("CSEP_CODEX_SKILLS_DIR", str(tmp_path / "skills"))
+    payload = _payload(repo)
+    decision = {
+        "status": "queued",
+        "review_memory": True,
+        "review_skills": True,
+        "trigger_reasons": ["memory_stop_interval", "skill_tool_call_interval"],
+        "counters": {
+            "stops_since_memory_review": 3,
+            "readable_chars_since_memory_review": 9000,
+            "tool_calls_since_skill_review": 5,
+        },
+    }
+    job = create_job_from_payload(payload, home=home, trigger_decision=decision)
+    from codex_self_evolution.session_reflection.trigger import (
+        load_trigger_state,
+        trigger_paths_for_payload,
+        write_trigger_state,
+    )
+
+    trigger_paths = trigger_paths_for_payload(payload, home=home)
+    state = load_trigger_state(trigger_paths, session_id="parent-1")
+    state["active_job_id"] = job["job_id"]
+    state["stops_since_memory_review"] = 4
+    state["readable_chars_since_memory_review"] = 12000
+    state["tool_calls_since_skill_review"] = 7
+    write_trigger_state(trigger_paths, state)
+
+    run_reflection_job(str(job["job_id"]), home=home, client=FakeReflectionClient(fail_start=True))
+
+    updated = load_trigger_state(trigger_paths, session_id="parent-1")
+    assert updated["stops_since_memory_review"] == 4
+    assert updated["readable_chars_since_memory_review"] == 12000
+    assert updated["tool_calls_since_skill_review"] == 7
+    assert updated["active_job_id"] is None
+
+
+def test_run_reflection_job_partial_invalid_skill_does_not_reset_skill_counter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Invalid generated skills keep skill counters while successful memory resets."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setenv("CSEP_CODEX_SKILLS_DIR", str(tmp_path / "skills"))
+    payload = _payload(repo)
+    memory = _build_project_paths_for_home(repo, home=home).memory_dir / "MEMORY.md"
+    memory.parent.mkdir(parents=True)
+    memory.write_text("Remember the scoped rule.\n", encoding="utf-8")
+    skill = tmp_path / "skills" / "csep-reflect-alpha" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("# Alpha\n\n## Skill Decision\n\nMissing required sections.\n", encoding="utf-8")
+    decision = {
+        "status": "queued",
+        "review_memory": True,
+        "review_skills": True,
+        "trigger_reasons": ["memory_stop_interval", "skill_tool_call_interval"],
+        "counters": {
+            "stops_since_memory_review": 3,
+            "readable_chars_since_memory_review": 9000,
+            "tool_calls_since_skill_review": 5,
+        },
+    }
+    job = create_job_from_payload(payload, home=home, trigger_decision=decision)
+    from codex_self_evolution.session_reflection.trigger import (
+        load_trigger_state,
+        trigger_paths_for_payload,
+        write_trigger_state,
+    )
+
+    trigger_paths = trigger_paths_for_payload(payload, home=home)
+    state = load_trigger_state(trigger_paths, session_id="parent-1")
+    state["active_job_id"] = job["job_id"]
+    state["stops_since_memory_review"] = 4
+    state["readable_chars_since_memory_review"] = 12000
+    state["tool_calls_since_skill_review"] = 7
+    write_trigger_state(trigger_paths, state)
+
+    run_reflection_job(
+        str(job["job_id"]),
+        home=home,
+        client=FakeReflectionClient(
+            memory_changes=[{"path": str(memory), "action": "add", "after_hash": _sha(memory)}],
+            skill_changes=[{"skill_id": "csep-reflect-alpha", "path": str(skill), "action": "create", "after_hash": _sha(skill)}],
+        ),
+    )
+
+    updated = load_trigger_state(trigger_paths, session_id="parent-1")
+    assert updated["stops_since_memory_review"] == 1
+    assert updated["readable_chars_since_memory_review"] == 3000
     assert updated["tool_calls_since_skill_review"] == 7
     assert updated["active_job_id"] is None
 

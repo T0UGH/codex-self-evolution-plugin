@@ -252,12 +252,15 @@ def _reset_trigger_state_for_job(job: dict[str, Any], validation: dict[str, Any]
     status = str(validation.get("status") or "")
     reason = str(validation.get("reason") or "")
     succeeded = status in {"succeeded", "skipped_empty"}
-    partial = status == "partial"
     job_for_reset = dict(job)
     job_for_reset["review_memory"] = bool(job.get("review_memory", True))
     job_for_reset["review_skills"] = bool(job.get("review_skills", True))
-    memory_succeeded = bool(job_for_reset["review_memory"]) and (succeeded or partial)
-    skill_succeeded = bool(job_for_reset["review_skills"]) and (succeeded or partial) and reason != "skill_invalid"
+    memory_succeeded = bool(job_for_reset["review_memory"]) and (
+        succeeded or (status == "partial" and not _validation_scope_has_issue(validation, "memory"))
+    )
+    skill_succeeded = bool(job_for_reset["review_skills"]) and (
+        succeeded or (status == "partial" and not _validation_scope_has_issue(validation, "skill"))
+    )
     updated = reset_counters_after_job(
         state,
         job_for_reset,
@@ -266,6 +269,27 @@ def _reset_trigger_state_for_job(job: dict[str, Any], validation: dict[str, Any]
         now=utc_timestamp(),
     )
     write_trigger_state(paths, updated)
+
+
+def _validation_scope_has_issue(validation: dict[str, Any], scope: str) -> bool:
+    """Return whether validation contains a memory or skill scoped issue."""
+    for item in validation.get("boundary_violations") or []:
+        if isinstance(item, dict) and str(item.get("reason") or "").startswith(f"{scope}_"):
+            return True
+    for item in validation.get("hash_mismatches") or []:
+        if isinstance(item, dict) and _path_scope(item.get("path")) == scope:
+            return True
+    return scope == "skill" and bool(validation.get("invalid_skills"))
+
+
+def _path_scope(path: object) -> str:
+    """Classify a validation path as memory, skill, or unknown."""
+    name = Path(str(path or "")).name
+    if name in {"USER.md", "MEMORY.md"}:
+        return "memory"
+    if name == "SKILL.md":
+        return "skill"
+    return ""
 
 
 def _clear_trigger_active_job_on_failure(job_id: str, job: dict[str, Any] | None, *, home: Path | None) -> None:
