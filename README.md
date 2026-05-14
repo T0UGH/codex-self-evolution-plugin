@@ -4,7 +4,7 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![python: 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-Codex 自我进化插件 | Memory / Recall / Skills 自动沉淀 | 面向重度 Codex 工作流
+Codex 自我进化插件 | Memory / Recall / Synthesized Skills 自动沉淀 | 面向重度 Codex 工作流
 
 ![Codex Self Evolution runtime architecture](docs/assets/readme-runtime-architecture.png)
 
@@ -33,7 +33,7 @@ SessionStart 注入背景
 | --- | --- | --- |
 | Codex CLI 最新源码版 | 已验证 | 支持 `plugins` / `codex_hooks` / `plugin_hooks` 后可原生加载插件 hooks。 |
 | Codex CLI 0.125.0 | 部分可用 | 可加载生成的 skills；`plugin_hooks` feature 尚不可用，需要升级 Codex。 |
-| Pi / Kimi | 已接入 | 默认 compiler agent backend，使用 `pi --provider kimi --model kimi-k2.6` 归纳 memory / recall / skills。 |
+| Pi agent backends | 已接入 | compiler 默认使用 `pi --provider kimi --model kimi-k2.6` 归纳 memory / recall；skill synthesis 默认使用 `pi --provider minimax --model MiniMax-M2.7` 合成 `csep-synth-*` skills。 |
 | OpenCode / opencode | 可选 | 保留为 `agent:opencode` backend，便于回退或对比。 |
 | 手动 CLI | 已支持 | 不依赖 Codex hooks，可直接跑 reviewer / compile / recall 调试闭环。 |
 
@@ -269,12 +269,12 @@ Phase 2 之后，生成好的 skill 不需要手动搬运。
 
 ![Generated skills projection](docs/assets/readme-skill-projection.png)
 
-Compiler 会维护两份内容：
+Skill Synthesis 会维护独立运行状态，并把通过门禁的 skill 投影给 Codex：
 
 | 位置 | 角色 |
 | --- | --- |
-| `~/.codex-self-evolution/projects/<bucket>/skills/managed/` | 插件自己的 source of truth。 |
-| `~/.codex/skills/csep-<skill-id>/SKILL.md` | 投影给 Codex 原生 skill loader 使用。 |
+| `~/.codex-self-evolution/skill_synthesis/` | 全局合成状态、候选、废弃项和 receipt。 |
+| `~/.codex/skills/csep-synth-<skill-id>/SKILL.md` | 投影给 Codex 原生 skill loader 使用。 |
 
 发布规则：
 
@@ -282,7 +282,7 @@ Compiler 会维护两份内容：
 - skill 必须有有效 YAML frontmatter
 - `description` 必须包含明确触发语义
 - 低信号、空壳、只有事实摘要的候选不会发布
-- 只会修改 `csep-` 前缀下的托管目录，不碰用户自己写的 skills
+- 只会修改 `csep-synth-` 前缀下的托管目录，不碰用户自己写的 skills
 
 ## CLI 命令
 
@@ -363,10 +363,11 @@ uvx twine upload dist/*
 - Codex-first `SessionStart` / `Stop` 生命周期接入
 - provider-backed reviewer
 - per-repo runtime bucket
-- memory / recall / generated skills 晋升
-- generated skills 自动投影到 `~/.codex/skills/csep-*`
+- memory / recall 晋升
+- independent skill synthesis 自动投影到 `~/.codex/skills/csep-synth-*`
 - launchd scheduler
 - `agent:pi` compiler backend，默认 `kimi/kimi-k2.6` + direct-edit workspace
+- `agent:pi` skill synthesis backend，默认 `minimax/MiniMax-M2.7`
 
 仍在演进：
 

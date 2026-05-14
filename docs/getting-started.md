@@ -25,8 +25,8 @@
 # Python 3.11+
 python3 --version
 
-# opencode 可选,但推荐装上
-which opencode && opencode --version
+# pi 用于生产默认 agent backend
+which pi && pi --version
 
 # 至少配一个 reviewer provider 的 API key(任选)
 env | grep -E '^(MINIMAX|OPENAI|ANTHROPIC)_API_KEY' | sed 's/=.*/=<set>/'
@@ -149,12 +149,12 @@ EOF
 
 ```bash
 .venv/bin/python -m codex_self_evolution.cli compile \
-  --once --state-dir $STATE --backend agent:opencode
+  --once --state-dir $STATE --backend agent:pi
 ```
 
-> **两种 backend 的取舍**:`agent:opencode` 会真正调 opencode CLI 做一次语义级合并(dedupe + 改写更流畅,约 20–40 秒),需要本地 `opencode` 可用且已登录。`script` 走纯规则拼装(< 100ms,确定性),不依赖 LLM。调试和 CI 用 `--backend script`;生产/定时任务默认用 `agent:opencode`。
+> **两种 backend 的取舍**:`agent:pi` 会真正调 pi CLI 做一次语义级合并(dedupe + 改写更流畅,约 20–40 秒),默认走 `kimi/kimi-k2.6`,需要本地 `pi` 可用且 provider key 已配置。`script` 走纯规则拼装(< 100ms,确定性),不依赖 LLM。调试和 CI 用 `--backend script`;生产/定时任务默认用 `agent:pi`。
 >
-> 如果 opencode 不在 PATH 或调用失败,agent backend 会在 receipt 的 `discarded_items` 里记 `agent_invoke_failed` / `opencode_unavailable`,然后**自动 fallback 到 script**,compile 不会整个失败。
+> 如果 pi 不在 PATH 或调用失败,agent backend 会在 receipt 的 `discarded_items` 里记 `agent_invoke_failed`,然后**自动 fallback 到 script**,compile 不会整个失败。
 
 **期望**:
 - `"status": "success"` + `processed_count >= 1`
@@ -277,9 +277,9 @@ JSON 丢弃(不会报错,就是"悄悄没效果")。如果模型答不出 XANADU
 脚本行为:
 
 1. 前置检查:`codex-self-evolution` 在 PATH。若找不到,先运行 `./scripts/install.sh`。
-2. 自动探测本地 CLI + `opencode` 路径,相关 dir 都写进 plist `EnvironmentVariables.PATH`(launchd 默认 PATH 不含 Homebrew/usr/local/~/.local/bin,**不做这步 scheduler 要么起不来,要么永远 fallback 到 script backend**)
+2. 自动探测本地 CLI + `pi` 路径,相关 dir 都写进 plist `EnvironmentVariables.PATH`(launchd 默认 PATH 不含 Homebrew/usr/local/~/.local/bin,**不做这步 scheduler 要么起不来,要么永远 fallback 到 script backend**)
 3. 写 `~/Library/LaunchAgents/com.codex-self-evolution.preflight.plist`,`ProgramArguments` 是
-   `[<absolute codex-self-evolution>, scan, --backend, agent:opencode]`(`ProgramArguments[0]` launchd 要求绝对路径,install 时探测)
+   `[<absolute codex-self-evolution>, scan, --backend, agent:pi, --max-runs-per-project, 3]`(`ProgramArguments[0]` launchd 要求绝对路径,install 时探测)
 4. `launchctl bootout`(清老的,容错)→ `bootstrap`(新 API)加载
 5. 幂等:再跑一次会 bootout 后重装,仍然只有一条 job
 
@@ -288,7 +288,7 @@ JSON 丢弃(不会报错,就是"悄悄没效果")。如果模型答不出 XANADU
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `CSEP_SCHEDULER_INTERVAL` | `300` | 秒。改成 `60` 更激进,`900` 更省电 |
-| `CSEP_SCHEDULER_BACKEND` | `agent:opencode` | `script` 禁掉语义合并(testing/debug 用) |
+| `CSEP_SCAN_MAX_RUNS_PER_PROJECT` | `3` | 每个 bucket 单次最多连续 drain 的 pending 数 |
 
 ### 4.1.1 独立 Skill Synthesis 调度
 
@@ -353,7 +353,7 @@ codex-self-evolution status | python3 -m json.tool
 | `legacy_user_hooks.stop_installed` / `session_start_installed` | 旧版 user-level hook 诊断；Phase 2 正常不需要它们为 `true` |
 | `scheduler.loaded` / `plist_exists` | 两个都是 `true` 说明 install-scheduler.sh 装成功 + launchd 已注册 |
 | `env_provider.keys_set` | 至少 `["MINIMAX_API_KEY"]`(或其它你用的 provider)。**永远不打印 key 值**,只报 set/unset |
-| `tools.codex.version` / `opencode.version` | 两个 CLI 版本。opencode 没装 → scheduler 会 fallback 到 script backend |
+| `tools.codex.version` / `pi.version` | 两个 CLI 版本。pi 没装 → agent backend 会失败并 fallback 到 script backend |
 | `buckets[].counts` | 每个 repo 的 pending/done/failed 统计。正常状态:pending 应该短时间内变 0(scheduler 5 分钟内消化),done 稳步增长 |
 | `buckets[].last_receipt` | 最后一次 compile 的 run_status / backend / processed_count。**pending > 0 但 last_receipt 很久没更新 = scheduler 没跑** |
 
@@ -466,15 +466,15 @@ pid 不存在 → lock 本应立即视为 stale,下一次 preflight 自动清。
 
 reviewer 认为本轮没什么可沉淀的。换个更具体、更有"干了啥"的 `transcript` 重试。或用 `dummy` provider + 手工 `provider_stub_response` 直接注入内容。
 
-### 5. `agent_invoke_failed` / `opencode_unavailable` 在 receipt 的 discarded_items 里
+### 5. `agent_invoke_failed` 在 receipt 的 discarded_items 里
 
-说明 `agent:opencode` 调用没跑成,自动 fallback 到 script 了 —— compile 不会整体失败,但语义合并这一层丢了。常见原因:
+说明 `agent:pi` 调用没跑成,自动 fallback 到 script 了 —— compile 不会整体失败,但语义合并这一层丢了。常见原因:
 
-- `opencode_unavailable`: `opencode` 不在 PATH。装一下(`npm i -g opencode-ai` 等)或把路径塞进环境
-- `agent_invoke_failed` + `exit=1 ... authentication required`: `opencode` 没登录。跑 `opencode auth login` 后再试
-- `agent_output_invalid` / `no assistant text`: 模型返回不是合法 JSON。设 `CODEX_SELF_EVOLUTION_OPENCODE_MODEL=<更强的模型>` 再试(默认 build 速模型偶尔会漏字段)
+- `pi` 不在 PATH。装好或把路径塞进环境,然后重装 scheduler 让 plist 带上路径
+- provider key 缺失或配额耗尽。检查 `~/.codex-self-evolution/.env.provider` 和 `config show`
+- `agent_output_invalid` / `no assistant text`: 模型返回不是合法 JSON。可临时切换 `CODEX_SELF_EVOLUTION_PI_MODEL=<更强的模型>` 或改用 `--backend script` 排障
 
-手动重现看看 opencode 本身 OK 不:`opencode run --format json -- "reply with {\"ok\":true}"`。
+手动重现看看 pi 本身 OK 不:`pi -p --mode json --no-session --no-context-files --no-extensions --no-skills --no-prompt-templates --no-themes --tools read --provider kimi --model kimi-k2.6 "reply with {\"ok\":true}"`。
 
 ### 6. 想重置所有状态从头来一次
 
