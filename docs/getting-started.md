@@ -2,7 +2,7 @@
 
 > 适用环境:macOS + bash + Python 3.11+。
 >
-> 目标:在**不改任何插件代码**的前提下,按阶段把 reviewer → compile → memory/recall/skills 的整条循环在你本机跑通,然后再选择是否挂到 launchd 自动调度。
+> 目标:在**不改任何插件代码**的前提下,按阶段把 reviewer → compile → memory/recall → skill-synthesize 的整条循环在你本机跑通,然后再选择是否挂到 launchd 自动调度。
 
 全文档结构:
 
@@ -160,7 +160,7 @@ EOF
 - `"status": "success"` + `processed_count >= 1`
 - `$STATE/memory/USER.md`、`MEMORY.md`、`memory.json` 写好
 - `$STATE/recall/index.json`、`compiled.md` 写好
-- `$STATE/skills/managed/*.md`(如果 reviewer 给了 skill_action)
+- compiler 不再写 `$STATE/skills/managed/*.md`; 历史 `skill_action` 会被记为 `skill_action_disabled`
 - `$STATE/compiler/last_receipt.json` 记录这次的结果
 - 对应 `pending/*.json` 被移到 `done/*.json`
 
@@ -289,6 +289,23 @@ JSON 丢弃(不会报错,就是"悄悄没效果")。如果模型答不出 XANADU
 | --- | --- | --- |
 | `CSEP_SCHEDULER_INTERVAL` | `300` | 秒。改成 `60` 更激进,`900` 更省电 |
 | `CSEP_SCHEDULER_BACKEND` | `agent:opencode` | `script` 禁掉语义合并(testing/debug 用) |
+
+### 4.1.1 独立 Skill Synthesis 调度
+
+Compiler 只晋升 memory / recall。可复用 workflow skills 由独立全局命令处理:
+
+```bash
+codex-self-evolution skill-synthesize --mode full --lookback-days 30 --dry-run
+codex-self-evolution skill-synthesize --mode incremental --lookback-hours 24
+```
+
+安装独立 4 小时 launchd 任务:
+
+```bash
+./scripts/install-skill-synthesis-scheduler.sh
+```
+
+生成的 skill 只会写到 `~/.codex/skills/csep-synth-*`。既有 `csep-*` compiler skills 保留为 legacy read-only artifacts。
 
 ### 4.2 观察
 

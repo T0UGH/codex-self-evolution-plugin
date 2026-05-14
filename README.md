@@ -14,7 +14,7 @@ Codex Self-Evolution Plugin 是一个本地优先的 Codex 自我进化层。
 
 它解决的问题很直接：Codex 能完成当前任务，但默认不会把这次任务里学到的用户偏好、项目经验、排查路径和可复用流程带到下一次会话。
 
-这个插件通过 Codex lifecycle hooks、后台 reviewer、定时 compiler 和标准 Codex Skills，把一次会话里的有效经验沉淀为下一次会话可以直接使用的上下文。
+这个插件通过 Codex lifecycle hooks、后台 reviewer、定时 compiler、独立 skill synthesis 和标准 Codex Skills，把一次会话里的有效经验沉淀为下一次会话可以直接使用的上下文。
 
 核心闭环：
 
@@ -22,7 +22,8 @@ Codex Self-Evolution Plugin 是一个本地优先的 Codex 自我进化层。
 SessionStart 注入背景
   -> Codex 正常工作
   -> Stop 阶段复盘会话
-  -> Compiler 晋升 memory / recall / skills
+  -> Compiler 晋升 memory / recall
+  -> Skill Synthesis 生成 csep-synth-* skills
   -> 下一次 Codex 会话自动获得更好的上下文
 ```
 
@@ -115,6 +116,23 @@ scripts/uninstall-scheduler.sh
 scripts/uninstall-codex-hook.sh
 ```
 
+### 安装 Skill Synthesis 调度器
+
+Compiler 不再创建 generated skills，只负责晋升 memory 和 recall。可复用流程 skill 由独立全局命令合成：
+
+```bash
+codex-self-evolution skill-synthesize --mode full --lookback-days 30 --dry-run
+codex-self-evolution skill-synthesize --mode incremental --lookback-hours 24
+```
+
+安装独立的 4 小时 launchd 任务：
+
+```bash
+scripts/install-skill-synthesis-scheduler.sh
+```
+
+Synthesized skills 只写入 `~/.codex/skills/csep-synth-*`。既有 `csep-*` compiler skills 是 legacy read-only artifacts。
+
 ## 快速开始
 
 ### 1. 检查运行状态
@@ -179,7 +197,8 @@ bucket 连续 drain 几轮，避免 5 分钟定时造成积压。如需回退旧
 | --- | --- | --- |
 | SessionStart | 读取稳定背景和 recall contract，注入当前会话 | `USER.md`、`MEMORY.md`、recall policy |
 | Stop Review | 对本次会话做结构化复盘 | pending `SuggestionEnvelope` |
-| Compile | 批量归纳并晋升建议 | memory、recall、managed skills、receipt |
+| Compile | 批量归纳并晋升建议 | memory、recall、receipt |
+| Skill Synthesis | 周期性扫描历史证据并合成可复用流程 | `~/.codex/skills/csep-synth-*`、synthesis receipt |
 | Next Session | 下次会话自动读取有效资产 | 更准的背景、更少重复解释 |
 
 ![Codex Self Evolution promotion pipeline](docs/assets/readme-compiler-promotion.png)
@@ -189,12 +208,17 @@ bucket 连续 drain 几轮，避免 5 分钟定时造成积压。如需回退旧
 ```text
 ~/.codex-self-evolution/
 ├── .env.provider
+├── skill_synthesis/
+│   ├── runs/
+│   ├── receipts/
+│   ├── evidence_index.json
+│   └── last_receipt.json
 └── projects/
     └── -Users-you-code-repo/
         ├── suggestions/{pending,processing,done,failed,discarded}/
         ├── memory/
         ├── recall/
-        ├── skills/managed/
+        ├── skills/managed/        # legacy compiler skill artifacts
         ├── compiler/
         ├── review/snapshots/
         └── scheduler/
@@ -208,7 +232,7 @@ bucket 连续 drain 几轮，避免 5 分钟定时造成积压。如需回退旧
 | --- | --- |
 | Memory | 长期稳定事实，例如用户偏好、环境约束、项目习惯。 |
 | Recall | 与具体项目 / 任务相关的历史经验，用于按需召回。 |
-| Generated Skills | 可复用操作流程，会投影到 `~/.codex/skills/csep-<skill-id>/SKILL.md`，让 Codex 像普通 skill 一样加载。 |
+| Generated Skills | 可复用操作流程，由 `skill-synthesize` 写入 `~/.codex/skills/csep-synth-*`，让 Codex 像普通 skill 一样加载。 |
 | Receipts | compiler 执行记录，用于审计和排查。 |
 | Review snapshots | Stop 阶段的标准化输入快照，用于复盘 reviewer 质量。 |
 

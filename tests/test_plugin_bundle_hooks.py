@@ -49,6 +49,7 @@ def test_plugin_manifest_commands_use_local_cli_not_uvx():
             "--backend agent:pi"
         ),
         "scan": "codex-self-evolution scan --backend agent:pi --max-runs-per-project 3",
+        "skill-synthesize": "codex-self-evolution skill-synthesize",
         "status": "codex-self-evolution status",
         "recall": (
             'csep recall "$CODEX_RECALL_QUERY" --cwd "$CODEX_CWD" '
@@ -63,6 +64,9 @@ def test_plugin_manifest_commands_use_local_cli_not_uvx():
     scheduler = manifest["scheduler"]
     assert scheduler["scan_command"] == (
         "codex-self-evolution scan --backend agent:pi --max-runs-per-project 3"
+    )
+    assert scheduler["skill_synthesis_command"] == (
+        "codex-self-evolution skill-synthesize --mode incremental --lookback-hours 24"
     )
     assert scheduler["preflight_command"] == (
         'codex-self-evolution compile-preflight --state-dir "$CODEX_STATE_DIR"'
@@ -87,6 +91,16 @@ def test_packaged_plugin_copy_matches_root_hook_bundle():
 
     assert packaged_manifest == root_manifest
     assert packaged_hooks == root_hooks
+
+
+def test_plugin_manifest_exposes_skill_synthesize_command():
+    manifest = _load_json(ROOT / "src" / "codex_self_evolution" / "plugin_bundle" / ".codex-plugin" / "plugin.json")
+    commands = {entry["name"]: entry["command"] for entry in manifest["commands"]}
+
+    assert commands["skill-synthesize"] == "codex-self-evolution skill-synthesize"
+    assert manifest["scheduler"]["skill_synthesis_command"] == (
+        "codex-self-evolution skill-synthesize --mode incremental --lookback-hours 24"
+    )
 
 
 def test_default_plugin_root_falls_back_to_package_bundle(tmp_path, monkeypatch):
