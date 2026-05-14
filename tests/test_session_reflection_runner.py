@@ -350,7 +350,7 @@ def test_run_reflection_job_marks_failed_and_cleans_lock_on_exception(
     assert not global_lock_path(home=home).exists()
 
 
-def test_run_reflection_job_exception_clears_active_job_without_counter_subtraction(
+def test_run_reflection_job_turn_exception_clears_active_job_without_counter_subtraction(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
