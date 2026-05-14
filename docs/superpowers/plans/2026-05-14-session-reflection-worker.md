@@ -36,23 +36,23 @@ Assumptions for MVP:
 
 Create these files:
 
-- `src/codex_self_evolution/session_reflection/__init__.py`  
+- `src/codex_self_evolution/session_reflection/__init__.py`
   Package marker and public exports.
-- `src/codex_self_evolution/session_reflection/paths.py`  
+- `src/codex_self_evolution/session_reflection/paths.py`
   Resolve global session reflection directories under `<home>/session_reflection/`.
-- `src/codex_self_evolution/session_reflection/models.py`  
+- `src/codex_self_evolution/session_reflection/models.py`
   Dataclasses and JSON serialization helpers for jobs, receipts, and skip reasons.
-- `src/codex_self_evolution/session_reflection/state.py`  
+- `src/codex_self_evolution/session_reflection/state.py`
   Create/update jobs, child registry, parent job lookup, lock state, and latest status.
-- `src/codex_self_evolution/session_reflection/guard.py`  
+- `src/codex_self_evolution/session_reflection/guard.py`
   Recursion guard at hook entry: thread source, child registry, transcript markers, existing parent job, global lock.
-- `src/codex_self_evolution/session_reflection/prompt.py`  
+- `src/codex_self_evolution/session_reflection/prompt.py`
   Build the reflection child prompt and fixed marker contract.
-- `src/codex_self_evolution/session_reflection/app_server.py`  
+- `src/codex_self_evolution/session_reflection/app_server.py`
   Minimal JSON-RPC client around `codex app-server proxy`, plus injectable fake transport tests.
-- `src/codex_self_evolution/session_reflection/validation.py`  
+- `src/codex_self_evolution/session_reflection/validation.py`
   Validate receipt schema, memory path boundaries, hash consistency, skill namespace/frontmatter/sections, and invalid markers.
-- `src/codex_self_evolution/session_reflection/runner.py`  
+- `src/codex_self_evolution/session_reflection/runner.py`
   Orchestrate enqueue, background worker run, app-server fork/start, receipt validation, and status output.
 - `tests/test_session_reflection_config.py`
 - `tests/test_session_reflection_state.py`
@@ -65,24 +65,24 @@ Create these files:
 
 Modify these files:
 
-- `src/codex_self_evolution/config.py`  
+- `src/codex_self_evolution/config.py`
   Add session reflection constants.
-- `src/codex_self_evolution/config_file.py`  
+- `src/codex_self_evolution/config_file.py`
   Add `[session_reflection]` config dataclass, loader, source tracking, and validation warnings.
-- `src/codex_self_evolution/config_file_template.py`  
+- `src/codex_self_evolution/config_file_template.py`
   Add default session reflection config.
-- `src/codex_self_evolution/cli.py`  
+- `src/codex_self_evolution/cli.py`
   Add `session-reflect` subcommand and change `stop-review --from-stdin` to spawn it.
-- `src/codex_self_evolution/hooks/codex_bridge.py`  
+- `src/codex_self_evolution/hooks/codex_bridge.py`
   Preserve raw `threadSource` / `source` passthrough for recursion guard diagnostics if present.
-- `src/codex_self_evolution/diagnostics.py`  
+- `src/codex_self_evolution/diagnostics.py`
   Add session reflection status summary and recent activity kind.
 - `src/codex_self_evolution/plugin_bundle/.codex-plugin/plugin.json`
-- `plugins/codex-self-evolution/.codex-plugin/plugin.json`  
+- `plugins/codex-self-evolution/.codex-plugin/plugin.json`
   Add manual `session-reflect status` command.
-- `README.md`  
+- `README.md`
   Update lifecycle wording from Stop reviewer to session reflection worker.
-- `docs/getting-started.md`  
+- `docs/getting-started.md`
   Add debug / status commands and failure inspection paths.
 
 ## Task 1: Config And Paths
