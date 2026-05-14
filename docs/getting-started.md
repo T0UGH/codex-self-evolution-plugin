@@ -356,6 +356,7 @@ codex-self-evolution status | python3 -m json.tool
 | `tools.codex.version` / `pi.version` | 两个 CLI 版本。pi 没装 → agent backend 会失败并 fallback 到 script backend |
 | `buckets[].counts` | 每个 repo 的 pending/done/failed 统计。正常状态:pending 应该短时间内变 0(scheduler 5 分钟内消化),done 稳步增长 |
 | `buckets[].last_receipt` | 最后一次 compile 的 run_status / backend / processed_count。**pending > 0 但 last_receipt 很久没更新 = scheduler 没跑** |
+| `session_reflection.exists` / `latest` | session reflection 根目录是否存在,以及最新 job 的 `job_id` / `status` / `updated_at` |
 
 常用诊断流程:
 
@@ -368,6 +369,30 @@ codex-self-evolution status | python3 -m json.tool
 launchctl kickstart "gui/$(id -u)/com.codex-self-evolution.preflight"
 tail -5 ~/.codex-self-evolution/logs/launchd.stdout.log
 ```
+
+### Session Reflection 调试
+
+Stop hook 会快速创建 session reflection job,再让后台 worker 通过 Codex app-server
+fork 当前 thread。child thread 负责写 memory、`csep-reflect-*` skill 和
+`receipt.json`;parent 只校验 receipt、写入边界和失败状态。手动看当前状态:
+
+```bash
+codex-self-evolution session-reflect --status | python3 -m json.tool
+codex-self-evolution status | python3 -m json.tool
+```
+
+排查失败时先看这些路径:
+
+```text
+~/.codex-self-evolution/session_reflection/latest.json
+~/.codex-self-evolution/session_reflection/runs/<job_id>/receipt.json
+~/.codex-self-evolution/session_reflection/runs/<job_id>/validation.json
+/tmp/codex-self-evolution/session-reflect-*.log
+```
+
+`latest.json` 只回答最新 job 是谁和状态是什么;`receipt.json` 是 child 写入结果;
+`validation.json` 是 parent 的边界校验结果;`/tmp/codex-self-evolution/session-reflect-*.log`
+记录后台 worker 的 stdout/stderr。
 
 **结构化日志**:每次 CLI 调用(hook、scheduler、手动)都往
 `~/.codex-self-evolution/logs/plugin.log` 追加一行 JSON(按天滚动,保留 14 天)。

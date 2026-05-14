@@ -51,6 +51,7 @@ def test_plugin_manifest_commands_use_local_cli_not_uvx():
         "scan": "codex-self-evolution scan --backend agent:pi --max-runs-per-project 3",
         "skill-synthesize": "codex-self-evolution skill-synthesize",
         "status": "codex-self-evolution status",
+        "session-reflect-status": "codex-self-evolution session-reflect --status",
         "recall": (
             'csep recall "$CODEX_RECALL_QUERY" --cwd "$CODEX_CWD" '
             '--state-dir "$CODEX_STATE_DIR"'

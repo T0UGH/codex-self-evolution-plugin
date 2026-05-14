@@ -29,6 +29,7 @@ from typing import Any
 
 from .config import PROJECTS_SUBDIR, get_home_dir, is_archived_bucket
 from .managed_skills.publish import codex_skills_dir
+from .session_reflection.runner import session_reflection_status
 from .skill_synthesis.inventory import read_skills_inventory
 
 HOOK_MARKER = "codex-self-evolution-plugin managed"
@@ -69,6 +70,7 @@ def collect_status(
         "legacy_user_hooks": legacy_hooks,
         "plugin_hooks": _check_plugin_hook_bundle(),
         "scheduler": _check_scheduler(),
+        "session_reflection": session_reflection_status(home=home_dir),
         "skill_synthesis": _check_skill_synthesis(home_dir),
         "skills": _check_skill_counts(),
         "env_provider": _check_env_provider(home_dir),
@@ -489,7 +491,15 @@ def _read_skill_synthesis_receipt(receipt_path: Path) -> dict[str, Any] | None:
 
 # Fields we actually care about when rolling up the log. Anything outside
 # this set is ignored so new log shapes don't silently distort the metrics.
-_LOG_KINDS = {"stop-review", "scan", "compile", "migrate-worktrees", "session-start", "status"}
+_LOG_KINDS = {
+    "stop-review",
+    "scan",
+    "compile",
+    "migrate-worktrees",
+    "session-start",
+    "session-reflect",
+    "status",
+}
 
 
 def _recent_activity(home_dir: Path, window_hours: float = 24.0) -> dict[str, Any]:

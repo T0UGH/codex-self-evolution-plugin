@@ -21,7 +21,10 @@ Codex Self-Evolution Plugin 是一个本地优先的 Codex 自我进化层。
 ```text
 SessionStart 注入背景
   -> Codex 正常工作
-  -> Stop 阶段复盘会话
+  -> Stop 快速创建 session reflection job
+  -> 后台通过 Codex app-server fork 当前 thread
+  -> child 写 memory / csep-reflect-* skill / receipt
+  -> parent 校验 receipt 和写入边界
   -> Compiler 晋升 memory / recall
   -> Skill Synthesis 生成 csep-synth-* skills
   -> 下一次 Codex 会话自动获得更好的上下文
@@ -164,7 +167,11 @@ Stop
   -> codex-self-evolution stop-review --from-stdin
 ```
 
-Stop 阶段会生成 pending suggestions，scheduler 或手动 compile 会把它们晋升成长期资产。
+Stop hook 仍保持快速返回：它会先创建 session reflection job，再启动后台 worker。
+后台 worker 通过 Codex app-server fork 当前 thread，child thread 只负责写入长期
+memory、`csep-reflect-*` skill 和 `receipt.json`；parent 只读取 receipt，并校验写入
+边界、状态和失败原因。传统 stop-review 仍会生成 pending suggestions，scheduler 或
+手动 compile 会把它们晋升成长期资产。
 
 ### 3. 手动触发 recall
 
@@ -290,6 +297,8 @@ Skill Synthesis 会维护独立运行状态，并把通过门禁的 skill 投影
 | --- | --- |
 | `codex-self-evolution session-start --from-stdin` | Codex SessionStart hook 入口。 |
 | `codex-self-evolution stop-review --from-stdin` | Codex Stop hook 入口。 |
+| `codex-self-evolution session-reflect --status` | 查看 session reflection 最新 job、全局锁和根目录状态。 |
+| `codex-self-evolution session-reflect --hook-payload <file>` | 用保存的 Stop payload 手动创建并执行 session reflection job。 |
 | `codex-self-evolution compile-preflight` | 检查是否需要 compile，处理空队列 / 锁 / stale lock。 |
 | `codex-self-evolution compile --once` | 单次 compile。 |
 | `codex-self-evolution scan --backend agent:pi --max-runs-per-project 3` | 扫描所有项目 bucket，并在每个 bucket 内最多连续编译 3 轮 pending suggestions。 |
@@ -302,6 +311,7 @@ Skill Synthesis 会维护独立运行状态，并把通过门禁的 skill 投影
 
 ```bash
 codex-self-evolution status | python3 -m json.tool
+codex-self-evolution session-reflect --status | python3 -m json.tool
 codex-self-evolution scan --backend agent:pi --max-runs-per-project 3
 csep recall "这个 repo 的上线检查流程"
 ```

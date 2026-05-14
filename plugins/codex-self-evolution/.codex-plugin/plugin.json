@@ -38,6 +38,10 @@
       "command": "codex-self-evolution status"
     },
     {
+      "name": "session-reflect-status",
+      "command": "codex-self-evolution session-reflect --status"
+    },
+    {
       "name": "recall",
       "command": "csep recall \"$CODEX_RECALL_QUERY\" --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
     },
