@@ -180,7 +180,7 @@ ls $STATE/suggestions/done/
 
 ## 阶段 3:安装本地 CLI + 启用 Codex plugin hooks(1 分钟)
 
-**目的**:让 Codex 通过 plugin manifest 加载 `SessionStart` / `Stop` hooks,并让 hooks 调用本地 `codex-self-evolution` CLI。完成这一步后,你正常用 `codex` / `codex exec` 就自动产出 pending suggestion。
+**目的**:让 Codex 通过 plugin manifest 加载 `SessionStart` / `Stop` hooks,并让 hooks 调用本地 `codex-self-evolution` CLI。完成这一步后,你正常用 `codex` / `codex exec` 会自动注入稳定背景,并在 Stop 时创建 session reflection job；pending suggestion 只来自阶段 2 那种手动 `stop-review --hook-payload` legacy 调试路径。
 
 ### 3.1 运行安装脚本
 

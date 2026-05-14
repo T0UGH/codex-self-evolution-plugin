@@ -204,8 +204,9 @@ bucket 连续 drain 几轮，避免 5 分钟定时造成积压。如需回退旧
 | 层级 | 作用 | 产物 |
 | --- | --- | --- |
 | SessionStart | 读取稳定背景和 recall contract，注入当前会话 | `USER.md`、`MEMORY.md`、recall policy |
-| Stop Review | 对本次会话做结构化复盘 | pending `SuggestionEnvelope` |
-| Compile | 批量归纳并晋升建议 | memory、recall、receipt |
+| Session Reflection | Stop hook 快速排队，后台 fork 当前 thread 做复盘 | `session_reflection` job、`receipt.json`、`csep-reflect-*` skill |
+| Legacy Stop Review | 手动 `stop-review --hook-payload` 调试旧 reviewer | pending `SuggestionEnvelope` |
+| Compile | 批量归纳并晋升 pending suggestions | memory、recall、receipt |
 | Skill Synthesis | 周期性扫描历史证据并合成可复用流程 | `~/.codex/skills/csep-synth-*`、synthesis receipt |
 | Next Session | 下次会话自动读取有效资产 | 更准的背景、更少重复解释 |
 
@@ -221,6 +222,12 @@ bucket 连续 drain 几轮，避免 5 分钟定时造成积压。如需回退旧
 │   ├── receipts/
 │   ├── evidence_index.json
 │   └── last_receipt.json
+├── session_reflection/
+│   ├── jobs/
+│   ├── runs/
+│   ├── child_threads/
+│   ├── locks/
+│   └── latest.json
 └── projects/
     └── -Users-you-code-repo/
         ├── suggestions/{pending,processing,done,failed,discarded}/
@@ -240,9 +247,10 @@ bucket 连续 drain 几轮，避免 5 分钟定时造成积压。如需回退旧
 | --- | --- |
 | Memory | 长期稳定事实，例如用户偏好、环境约束、项目习惯。 |
 | Recall | 与具体项目 / 任务相关的历史经验，用于按需召回。 |
+| Session Reflection Receipts | app-server child thread 的写入声明和父进程校验结果。 |
 | Generated Skills | 可复用操作流程，由 `skill-synthesize` 写入 `~/.codex/skills/csep-synth-*`，让 Codex 像普通 skill 一样加载。 |
 | Receipts | compiler 执行记录，用于审计和排查。 |
-| Review snapshots | Stop 阶段的标准化输入快照，用于复盘 reviewer 质量。 |
+| Review snapshots | legacy reviewer 的标准化输入快照，用于复盘旧 `stop-review --hook-payload` 质量。 |
 
 ![Supported artifacts and file roles](docs/assets/readme-supported-artifacts.png)
 
@@ -297,12 +305,12 @@ Skill Synthesis 会维护独立运行状态，并把通过门禁的 skill 投影
 | 命令 | 说明 |
 | --- | --- |
 | `codex-self-evolution session-start --from-stdin` | Codex SessionStart hook 入口。 |
-| `codex-self-evolution stop-review --from-stdin` | Codex Stop hook 入口。 |
+| `codex-self-evolution stop-review --from-stdin` | Codex Stop hook 入口：快速创建 session reflection job 并启动后台 worker。 |
 | `codex-self-evolution session-reflect --status` | 查看 session reflection 最新 job、全局锁和根目录状态。 |
 | `codex-self-evolution session-reflect --hook-payload <file>` | 用保存的 Stop payload 手动创建并执行 session reflection job。 |
 | `codex-self-evolution compile-preflight` | 检查是否需要 compile，处理空队列 / 锁 / stale lock。 |
 | `codex-self-evolution compile --once` | 单次 compile。 |
-| `codex-self-evolution scan --backend agent:pi --max-runs-per-project 3` | 扫描所有项目 bucket，并在每个 bucket 内最多连续编译 3 轮 pending suggestions。 |
+| `codex-self-evolution scan --backend agent:pi --max-runs-per-project 3` | 扫描所有项目 bucket，并在每个 bucket 内最多连续编译 3 轮 legacy/manual pending suggestions。 |
 | `codex-self-evolution eval-compiler --fixture tests/fixtures/compiler_replay/commerce_membership_api.json` | 回放编译质量样本，输出 pass/fail 和 memory/recall/discard 指标。 |
 | `codex-self-evolution recall-trigger --query "..."` | 触发一次聚焦 recall。 |
 | `codex-self-evolution status` | 输出只读诊断快照。 |
