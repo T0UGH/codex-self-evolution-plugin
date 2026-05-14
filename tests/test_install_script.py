@@ -94,13 +94,18 @@ def test_install_script_uses_uv_tool_and_cleans_only_managed_hooks(tmp_path):
     ]
     assert commands == ["third-party stop"]
 
+    expected_version = json.loads(
+        (ROOT / "plugins" / "codex-self-evolution" / ".codex-plugin" / "plugin.json").read_text(
+            encoding="utf-8"
+        )
+    )["version"]
     plugin_manifest = (
         fake_codex
         / "plugins"
         / "cache"
         / "codex-self-evolution"
         / "codex-self-evolution"
-        / "0.7.8"
+        / expected_version
         / ".codex-plugin"
         / "plugin.json"
     )
