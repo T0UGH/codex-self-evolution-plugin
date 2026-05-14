@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -140,3 +141,48 @@ def test_release_global_lock_requires_owner_token(tmp_path: Path) -> None:
 
     assert release_global_lock(owner_token=lock["owner_token"], home=tmp_path) is False
     assert json.loads(global_lock_path(home=tmp_path).read_text(encoding="utf-8"))["owner_token"] == "other-owner"
+
+
+def test_acquire_global_lock_does_not_remove_fresh_owner_during_stale_race(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A stale removal race preserves a fresh owner and reports contention."""
+    path = global_lock_path(home=tmp_path)
+    stale_created_at = utc_now() - timedelta(hours=2)
+    atomic_write_json(
+        path,
+        {
+            "created_at": stale_created_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "pid": os.getpid(),
+            "owner_token": "stale-owner",
+        },
+    )
+    real_link = os.link
+    raced = False
+
+    def racing_link(
+        src: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        dst: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+    ) -> None:
+        """Replace the stale lock with a fresh owner just before claim link."""
+        nonlocal raced
+        if not raced:
+            raced = True
+            atomic_write_json(
+                path,
+                {
+                    "created_at": utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                    "pid": os.getpid(),
+                    "owner_token": "fresh-owner",
+                },
+            )
+        real_link(src, dst)
+
+    monkeypatch.setattr("codex_self_evolution.session_reflection.state.os.link", racing_link)
+
+    with pytest.raises(ReflectionLockError, match="changed during stale replacement"):
+        acquire_global_lock(home=tmp_path, stale_after_seconds=60)
+
+    lock = json.loads(path.read_text(encoding="utf-8"))
+    assert lock["owner_token"] == "fresh-owner"

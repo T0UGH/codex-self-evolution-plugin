@@ -205,11 +205,11 @@ def acquire_global_lock(
         except OSError as read_exc:
             raise ReflectionLockError(f"failed to verify stale reflection lock: {read_exc}") from read_exc
         try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
+            removed = _remove_lock_if_same_file(path, stale_candidate, owner_token=owner_token)
         except OSError as unlink_exc:
             raise ReflectionLockError(f"failed to remove stale reflection lock: {unlink_exc}") from unlink_exc
+        if not removed:
+            raise ReflectionLockError(f"global reflection lock changed during stale replacement: {path}")
         try:
             with path.open("x", encoding="utf-8") as handle:
                 json.dump(payload, handle, indent=2, sort_keys=True)
@@ -249,6 +249,29 @@ def write_global_lock(*, home: str | Path | None = None) -> Path:
 
 class ReflectionLockError(RuntimeError):
     """Raised when the reflection global lock cannot be acquired."""
+
+
+def _remove_lock_if_same_file(path: Path, expected_text: str, *, owner_token: str) -> bool:
+    """Remove `path` only when it still points at the stale file we claimed."""
+    claim_path = path.with_name(f"{path.name}.{owner_token}.stale")
+    try:
+        os.link(path, claim_path)
+    except FileNotFoundError:
+        return False
+    try:
+        claimed = claim_path.stat()
+        current = path.stat()
+        if (current.st_dev, current.st_ino) != (claimed.st_dev, claimed.st_ino):
+            return False
+        if claim_path.read_text(encoding="utf-8") != expected_text:
+            return False
+        path.unlink()
+        return True
+    finally:
+        try:
+            claim_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _new_job_id(created_at: str) -> str:
