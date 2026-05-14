@@ -17,6 +17,7 @@ from .state import (
     find_active_parent_job,
     global_lock_status,
     latest_job_path,
+    load_job,
     release_global_lock,
     register_child_thread,
     update_job_status,
@@ -94,6 +95,7 @@ def run_reflection_job(
     config = load_config(home=resolved_home).config.session_reflection
     paths = build_session_reflection_paths(home=resolved_home, job_id=job_id)
     lock_owner_token = ""
+    job: dict[str, Any] | None = None
     try:
         lock = acquire_global_lock(home=resolved_home)
         lock_owner_token = lock["owner_token"]
@@ -164,6 +166,7 @@ def run_reflection_job(
             validation=validation,
         )
     except Exception as exc:
+        _clear_trigger_active_job_on_failure(job_id, job, home=resolved_home)
         return update_job_status(job_id, "failed", home=resolved_home, error=str(exc))
     finally:
         if lock_owner_token:
@@ -263,3 +266,9 @@ def _reset_trigger_state_for_job(job: dict[str, Any], validation: dict[str, Any]
         now=utc_timestamp(),
     )
     write_trigger_state(paths, updated)
+
+
+def _clear_trigger_active_job_on_failure(job_id: str, job: dict[str, Any] | None, *, home: Path | None) -> None:
+    """Clear this job's trigger reservation after a terminal exception without resetting counters."""
+    failed_job = job if job is not None else load_job(job_id, home=home)
+    _reset_trigger_state_for_job(failed_job, {"status": "failed"}, home=home)

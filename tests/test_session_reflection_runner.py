@@ -339,6 +339,57 @@ def test_run_reflection_job_marks_failed_and_cleans_lock_on_exception(
     assert not global_lock_path(home=home).exists()
 
 
+def test_run_reflection_job_exception_clears_active_job_without_counter_subtraction(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Pre-validation exceptions release the active job reservation without resetting counters."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setenv("CSEP_CODEX_SKILLS_DIR", str(tmp_path / "skills"))
+    payload = _payload(repo)
+    decision = {
+        "status": "queued",
+        "review_memory": True,
+        "review_skills": True,
+        "trigger_reasons": ["memory_stop_interval", "skill_tool_interval"],
+        "counters": {
+            "stops_since_memory_review": 3,
+            "readable_chars_since_memory_review": 9000,
+            "tool_calls_since_skill_review": 5,
+        },
+    }
+    job = create_job_from_payload(
+        payload,
+        home=home,
+        trigger_decision=decision,
+        skill_generation_mode="one_shot_active",
+    )
+    from codex_self_evolution.session_reflection.trigger import (
+        load_trigger_state,
+        trigger_paths_for_payload,
+        write_trigger_state,
+    )
+
+    trigger_paths = trigger_paths_for_payload(payload, home=home)
+    state = load_trigger_state(trigger_paths, session_id="parent-1")
+    state["active_job_id"] = job["job_id"]
+    state["stops_since_memory_review"] = 4
+    state["readable_chars_since_memory_review"] = 12000
+    state["tool_calls_since_skill_review"] = 7
+    write_trigger_state(trigger_paths, state)
+
+    run_reflection_job(str(job["job_id"]), home=home, client=FakeReflectionClient(fail_start=True))
+
+    updated = load_trigger_state(trigger_paths, session_id="parent-1")
+    assert updated["stops_since_memory_review"] == 4
+    assert updated["readable_chars_since_memory_review"] == 12000
+    assert updated["tool_calls_since_skill_review"] == 7
+    assert updated["active_job_id"] is None
+
+
 def test_run_reflection_job_uses_explicit_home_for_memory_paths(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
