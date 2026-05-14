@@ -13,7 +13,6 @@ from ..storage import _pid_alive, atomic_write_json, compute_stable_id, load_jso
 from .paths import build_session_reflection_paths
 
 ACTIVE_PARENT_STATUSES = {"queued", "running"}
-FINDABLE_PARENT_STATUSES = ACTIVE_PARENT_STATUSES | {"succeeded"}
 SESSION_REFLECTION_MODEL = "gpt-5.3-codex-spark"
 
 
@@ -78,15 +77,26 @@ def global_lock_status(
     }
 
 
-def create_job_from_payload(payload: dict[str, Any], *, home: str | Path | None = None) -> dict[str, Any]:
+def create_job_from_payload(
+    payload: dict[str, Any],
+    *,
+    home: str | Path | None = None,
+    trigger_decision: dict[str, Any] | None = None,
+    covered_byte_offset: int = 0,
+    covered_message_index: int = 0,
+    covered_event_uid: str = "",
+    skill_generation_mode: str = "one_shot_active",
+) -> dict[str, Any]:
     """Create and persist a queued reflection job from a raw Stop payload."""
     created_at = utc_timestamp()
     parent_session_id = _payload_text(payload, "session_id", "thread_id", default="unknown-session")
     parent_turn_id = _payload_text(payload, "turn_id")
     job_id = _new_job_id(created_at)
     paths = build_session_reflection_paths(home=home, job_id=job_id)
+    decision = trigger_decision or {}
+    counters = decision.get("counters") if isinstance(decision.get("counters"), dict) else {}
     job = {
-        "schema_version": 1,
+        "schema_version": 2 if decision else 1,
         "job_id": job_id,
         "parent_session_id": parent_session_id,
         "parent_turn_id": parent_turn_id,
@@ -98,6 +108,24 @@ def create_job_from_payload(payload: dict[str, Any], *, home: str | Path | None 
         "updated_at": created_at,
         "raw_payload": payload,
     }
+    if decision:
+        job.update(
+            {
+                "review_memory": bool(decision.get("review_memory")),
+                "review_skills": bool(decision.get("review_skills")),
+                "trigger_reasons": list(decision.get("trigger_reasons") or []),
+                "skill_generation_mode": skill_generation_mode,
+                "covered_byte_offset": int(covered_byte_offset),
+                "covered_message_index": int(covered_message_index),
+                "covered_event_uid": str(covered_event_uid or ""),
+                "counter_snapshot": {
+                    "stops_since_memory_review": int(counters.get("stops_since_memory_review") or 0),
+                    "readable_chars_since_memory_review": int(counters.get("readable_chars_since_memory_review") or 0),
+                    "tool_calls_since_skill_review": int(counters.get("tool_calls_since_skill_review") or 0),
+                },
+                "trigger_decision": decision,
+            }
+        )
     atomic_write_json(paths.job_path, job)
     atomic_write_json(latest_job_path(home=home), job)
     return job
@@ -139,14 +167,36 @@ def list_jobs(*, home: str | Path | None = None) -> list[dict[str, Any]]:
     return jobs
 
 
-def find_existing_parent_job(parent_session_id: str, *, home: str | Path | None = None) -> dict[str, Any] | None:
-    """Find active or succeeded reflection job for one parent session."""
+def find_active_parent_job(
+    parent_session_id: str,
+    *,
+    home: str | Path | None = None,
+    stale_after_seconds: int = DEFAULT_LOCK_STALE_SECONDS,
+) -> dict[str, Any] | None:
+    """Find a non-stale queued or running reflection job for one parent session."""
     for job in reversed(list_jobs(home=home)):
         if job.get("parent_session_id") != parent_session_id:
             continue
-        if job.get("status") in FINDABLE_PARENT_STATUSES:
+        if job.get("status") in ACTIVE_PARENT_STATUSES and not _job_is_stale(job, stale_after_seconds):
             return job
     return None
+
+
+def find_existing_parent_job(parent_session_id: str, *, home: str | Path | None = None) -> dict[str, Any] | None:
+    """Find the newest persisted reflection job for diagnostics."""
+    for job in reversed(list_jobs(home=home)):
+        if job.get("parent_session_id") == parent_session_id:
+            return job
+    return None
+
+
+def _job_is_stale(job: dict[str, Any], stale_after_seconds: int) -> bool:
+    """Return whether a job updated_at is old enough to ignore as active."""
+    try:
+        updated_at = datetime.fromisoformat(str(job["updated_at"]).replace("Z", "+00:00"))
+        return (utc_now() - updated_at).total_seconds() > stale_after_seconds
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def register_child_thread(

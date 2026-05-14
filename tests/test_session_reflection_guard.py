@@ -139,7 +139,7 @@ def test_guard_skips_alternate_transcript_marker(tmp_path: Path) -> None:
     assert decision.reason == "reflection_marker"
 
 
-def test_guard_skips_existing_parent_job(tmp_path: Path) -> None:
+def test_recursion_guard_does_not_skip_existing_parent_job(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     payload = _payload(repo)
@@ -147,8 +147,7 @@ def test_guard_skips_existing_parent_job(tmp_path: Path) -> None:
 
     decision = evaluate_recursion_guard(payload, home=tmp_path)
 
-    assert decision.skip is True
-    assert decision.reason == "parent_job_exists"
+    assert decision.skip is False
 
 
 def test_guard_skips_live_current_global_lock(tmp_path: Path) -> None:

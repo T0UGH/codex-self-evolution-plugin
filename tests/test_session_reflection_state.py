@@ -14,6 +14,7 @@ from codex_self_evolution.session_reflection.state import (
     acquire_global_lock,
     child_thread_registry_path,
     create_job_from_payload,
+    find_active_parent_job,
     find_existing_parent_job,
     global_lock_path,
     latest_job_path,
@@ -57,28 +58,93 @@ def test_create_job_from_payload_writes_job_and_latest(tmp_path: Path) -> None:
     assert json.loads(latest_job_path(home=tmp_path).read_text(encoding="utf-8"))["job_id"] == job["job_id"]
 
 
-def test_find_existing_parent_job_detects_queued_and_succeeded(tmp_path: Path) -> None:
+def test_find_active_parent_job_detects_only_queued_and_running(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     created = create_job_from_payload(_payload(repo), home=tmp_path)
 
-    assert find_existing_parent_job("parent-1", home=tmp_path)["job_id"] == created["job_id"]
+    assert find_active_parent_job("parent-1", home=tmp_path)["job_id"] == created["job_id"]
 
-    updated = update_job_status(created["job_id"], "succeeded", home=tmp_path, receipt_path="receipt.json")
+    update_job_status(created["job_id"], "running", home=tmp_path)
 
-    found = find_existing_parent_job("parent-1", home=tmp_path)
-    assert found["status"] == "succeeded"
-    assert found["receipt_path"] == "receipt.json"
-    assert json.loads(latest_job_path(home=tmp_path).read_text(encoding="utf-8"))["status"] == updated["status"]
+    assert find_active_parent_job("parent-1", home=tmp_path)["job_id"] == created["job_id"]
 
+    update_job_status(created["job_id"], "succeeded", home=tmp_path, receipt_path="receipt.json")
 
-def test_find_existing_parent_job_ignores_failed_jobs(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    created = create_job_from_payload(_payload(repo), home=tmp_path)
+    assert find_active_parent_job("parent-1", home=tmp_path) is None
+
     update_job_status(created["job_id"], "failed", home=tmp_path)
 
-    assert find_existing_parent_job("parent-1", home=tmp_path) is None
+    assert find_active_parent_job("parent-1", home=tmp_path) is None
+
+
+def test_find_active_parent_job_ignores_stale_active_jobs(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    created = create_job_from_payload(_payload(repo), home=tmp_path)
+    job_path = tmp_path / "session_reflection" / "jobs" / f"{created['job_id']}.json"
+    stale_job = {
+        **json.loads(job_path.read_text(encoding="utf-8")),
+        "updated_at": _timestamp(utc_now() - timedelta(seconds=61)),
+    }
+    atomic_write_json(job_path, stale_job)
+
+    assert find_active_parent_job("parent-1", home=tmp_path, stale_after_seconds=60) is None
+
+    stale_job["updated_at"] = "not-a-timestamp"
+    atomic_write_json(job_path, stale_job)
+
+    assert find_active_parent_job("parent-1", home=tmp_path, stale_after_seconds=60)["job_id"] == created["job_id"]
+
+
+def test_create_job_from_payload_accepts_trigger_decision_fields(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    decision = {
+        "status": "queued",
+        "review_memory": True,
+        "review_skills": True,
+        "trigger_reasons": ["high_signal_skill_keyword"],
+        "counters": {
+            "stops_since_memory_review": 2,
+            "readable_chars_since_memory_review": 9300,
+            "tool_calls_since_skill_review": 11,
+        },
+    }
+
+    job = create_job_from_payload(
+        _payload(repo),
+        home=tmp_path,
+        trigger_decision=decision,
+        covered_byte_offset=123,
+        covered_message_index=4,
+        covered_event_uid="event-1",
+        skill_generation_mode="one_shot_active",
+    )
+
+    assert job["schema_version"] == 2
+    assert job["review_memory"] is True
+    assert job["review_skills"] is True
+    assert job["trigger_reasons"] == ["high_signal_skill_keyword"]
+    assert job["skill_generation_mode"] == "one_shot_active"
+    assert job["covered_byte_offset"] == 123
+    assert job["covered_message_index"] == 4
+    assert job["covered_event_uid"] == "event-1"
+    assert job["counter_snapshot"]["tool_calls_since_skill_review"] == 11
+    assert job["trigger_decision"] == decision
+
+
+def test_find_existing_parent_job_returns_newest_persisted_job(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    created = create_job_from_payload(_payload(repo), home=tmp_path)
+    updated = update_job_status(created["job_id"], "failed", home=tmp_path, receipt_path="receipt.json")
+
+    found = find_existing_parent_job("parent-1", home=tmp_path)
+
+    assert found["status"] == "failed"
+    assert found["receipt_path"] == "receipt.json"
+    assert json.loads(latest_job_path(home=tmp_path).read_text(encoding="utf-8"))["status"] == updated["status"]
 
 
 def test_register_child_thread_writes_registry(tmp_path: Path) -> None:
@@ -182,3 +248,8 @@ def test_acquire_global_lock_refuses_while_acquisition_guard_is_held(tmp_path: P
 
     lock = acquire_global_lock(home=tmp_path, stale_after_seconds=60)
     assert json.loads(path.read_text(encoding="utf-8"))["owner_token"] == lock["owner_token"]
+
+
+def _timestamp(value) -> str:
+    """Format a timezone-aware datetime for persisted fixtures."""
+    return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")

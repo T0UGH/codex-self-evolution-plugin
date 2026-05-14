@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import GuardDecision
-from .state import child_thread_registry_path, find_existing_parent_job, global_lock_status
+from .state import child_thread_registry_path, global_lock_status
 
 REFLECTION_MARKERS = ("CSEP_REFLECTION_JOB_ID=", "CSEP_REFLECTION_CHILD=1")
 TRANSCRIPT_MARKER_CHUNK_SIZE = 64 * 1024
@@ -23,9 +23,6 @@ def evaluate_recursion_guard(payload: dict[str, Any], *, home: str | Path | None
     transcript_path = _payload_text(payload, "transcript_path", "codex_transcript_path")
     if transcript_path and _transcript_has_marker(Path(transcript_path)):
         return GuardDecision(True, "reflection_marker", transcript_path)
-
-    if session_id and find_existing_parent_job(session_id, home=home):
-        return GuardDecision(True, "parent_job_exists", session_id)
 
     lock = global_lock_status(home=home)
     if lock["locked"] and not lock["stale"]:
