@@ -157,15 +157,15 @@ def test_map_codex_stop_payload_handles_content_list_parts():
     assert "part two" in result["transcript"]
 
 
-def test_cli_from_stdin_spawns_reflection_worker_and_returns_continue(monkeypatch, capsys, tmp_path):
-    captured = {}
+def test_cli_from_stdin_spawns_archive_and_reflection_worker_and_returns_continue(monkeypatch, capsys, tmp_path):
+    calls = []
 
     class FakePopen:
         def __init__(self, argv, **kwargs):
-            captured["argv"] = argv
-            captured["kwargs"] = kwargs
+            calls.append((argv, kwargs))
 
     monkeypatch.setattr(cli.subprocess, "Popen", FakePopen)
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(
         cli,
         "enqueue_reflection_from_payload",
@@ -186,21 +186,40 @@ def test_cli_from_stdin_spawns_reflection_worker_and_returns_continue(monkeypatc
     out = capsys.readouterr().out.strip()
     assert json.loads(out) == {"continue": True}
 
-    argv = captured["argv"]
-    assert argv[0] == sys.executable
-    assert argv[1:4] == ["-m", "codex_self_evolution.cli", "session-reflect"]
-    assert argv[4:6] == ["--job", "job-1"]
-    # Subprocess must be detached so it outlives the hook caller.
-    assert captured["kwargs"].get("start_new_session") is True
+    assert len(calls) == 2
+    archive_argv, archive_kwargs = calls[0]
+    assert archive_argv[0] == sys.executable
+    assert archive_argv[1:4] == ["-m", "codex_self_evolution.csep", "session-archive"]
+    assert "--from-hook-payload" in archive_argv
+    assert "--cleanup-payload" in archive_argv
+    archive_payload_path = archive_argv[archive_argv.index("--from-hook-payload") + 1]
+
+    reflect_argv, reflect_kwargs = calls[1]
+    assert reflect_argv[0] == sys.executable
+    assert reflect_argv[1:4] == ["-m", "codex_self_evolution.cli", "session-reflect"]
+    assert reflect_argv[4:6] == ["--job", "job-1"]
+
+    # Subprocesses must be detached so they outlive the hook caller.
+    assert archive_kwargs.get("start_new_session") is True
+    assert reflect_kwargs.get("start_new_session") is True
+
+    # Archive receives the raw Codex payload; reflection uses the queued job id.
+    archive_payload = json.loads(open(archive_payload_path, encoding="utf-8").read())
+    assert archive_payload["session_id"] == "019da-session"
+    assert archive_payload["cwd"] == str(tmp_path)
+    assert "thread_id" not in archive_payload
 
 
-def test_cli_from_stdin_forwards_state_dir_to_child(monkeypatch, capsys):
-    captured_argv = []
-    monkeypatch.setattr(
-        cli.subprocess,
-        "Popen",
-        lambda argv, **_: captured_argv.extend(argv) or None,
-    )
+
+def test_cli_from_stdin_forwards_state_dir_to_children(monkeypatch, capsys, tmp_path):
+    calls = []
+
+    class FakePopen:
+        def __init__(self, argv, **kwargs):
+            calls.append(argv)
+
+    monkeypatch.setattr(cli.subprocess, "Popen", FakePopen)
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(
         cli,
         "enqueue_reflection_from_payload",
@@ -211,8 +230,44 @@ def test_cli_from_stdin_forwards_state_dir_to_child(monkeypatch, capsys):
     cli.main(["stop-review", "--from-stdin", "--state-dir", "/explicit/state"])
     capsys.readouterr()  # drain stdout so pytest doesn't complain
 
-    assert "--home" in captured_argv
-    assert captured_argv[captured_argv.index("--home") + 1] == "/explicit/state"
+    assert len(calls) == 2
+    archive_argv = calls[0]
+    reflect_argv = calls[1]
+    assert "--state-dir" in archive_argv
+    assert archive_argv[archive_argv.index("--state-dir") + 1] == "/explicit/state"
+    assert "--home" in reflect_argv
+    assert reflect_argv[reflect_argv.index("--home") + 1] == "/explicit/state"
+
+
+def test_cli_from_stdin_skips_archive_when_session_recall_disabled(monkeypatch, capsys, tmp_path):
+    calls = []
+
+    class FakePopen:
+        def __init__(self, argv, **kwargs):
+            calls.append(argv)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        "schema_version = 2\n\n"
+        "[session_recall]\n"
+        "stop_hook_archive = false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli.subprocess, "Popen", FakePopen)
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setattr(
+        cli,
+        "enqueue_reflection_from_payload",
+        lambda payload, *, home=None: {"status": "queued", "job_id": "job-1"},
+    )
+    monkeypatch.setattr(sys, "stdin", StringIO(json.dumps(_codex_payload())))
+
+    assert cli.main(["stop-review", "--from-stdin"]) == 0
+    capsys.readouterr()
+
+    assert len(calls) == 1
+    assert calls[0][1:4] == ["-m", "codex_self_evolution.cli", "session-reflect"]
 
 
 def test_cli_from_stdin_tolerates_malformed_json(monkeypatch, capsys):

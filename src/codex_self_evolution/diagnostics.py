@@ -30,6 +30,8 @@ from typing import Any
 from .config import PROJECTS_SUBDIR, get_home_dir, is_archived_bucket
 from .managed_skills.publish import codex_skills_dir
 from .session_reflection.runner import session_reflection_status
+from .session_recall.archive import default_db_path
+from .session_recall.store import SessionRecallStore
 from .skill_synthesis.inventory import read_skills_inventory
 
 HOOK_MARKER = "codex-self-evolution-plugin managed"
@@ -72,6 +74,7 @@ def collect_status(
         "scheduler": _check_scheduler(),
         "session_reflection": session_reflection_status(home=home_dir),
         "skill_synthesis": _check_skill_synthesis(home_dir),
+        "session_recall": _check_session_recall(home_dir),
         "skills": _check_skill_counts(),
         "env_provider": _check_env_provider(home_dir),
         "tools": _check_tools(),
@@ -216,6 +219,34 @@ def _commands_for_hook_event(entries: Any) -> list[str]:
             if isinstance(command, str) and command:
                 commands.append(command)
     return commands
+
+
+# ---------- session recall ----------------------------------------------
+
+
+def _check_session_recall(home: str | Path | None = None) -> dict[str, Any]:
+    db_path = default_db_path(home=home)
+    if not db_path.exists():
+        return {
+            "db_exists": False,
+            "db_path": str(db_path),
+            "session_count": 0,
+            "message_count": 0,
+            "ingest_error_count": 0,
+            "latest_error": None,
+        }
+    try:
+        store = SessionRecallStore(db_path)
+        try:
+            return store.stats()
+        finally:
+            store.close()
+    except Exception as exc:  # noqa: BLE001 - status must never crash.
+        return {
+            "db_exists": True,
+            "db_path": str(db_path),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 # ---------- launchd scheduler -------------------------------------------

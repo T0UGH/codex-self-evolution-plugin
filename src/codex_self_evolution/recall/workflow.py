@@ -3,7 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ..config_file import load_config
 from .search import search_recall
+from ..session_recall.archive import default_db_path
+from ..session_recall.render import budget_payload, render_markdown
+from ..session_recall.repo import collect_repo_metadata
+from ..session_recall.store import SessionRecallStore
 
 
 def evaluate_recall_trigger(query: str, policy: str | None = None, *, explicit: bool = False) -> dict[str, Any]:
@@ -22,7 +27,66 @@ def evaluate_recall_trigger(query: str, policy: str | None = None, *, explicit: 
     return {"triggered": triggered, "reasons": reasons, "policy": policy or ""}
 
 
-def build_focused_recall(query: str, cwd: str | Path, state_dir: str | Path | None = None, top_k: int = 3) -> dict[str, Any]:
+def build_focused_recall(
+    query: str,
+    cwd: str | Path,
+    state_dir: str | Path | None = None,
+    top_k: int = 3,
+    *,
+    global_scope: bool = False,
+    recent: bool = False,
+    before: int = 3,
+    after: int = 5,
+    budget_chars: int = 12000,
+    message_chars: int = 1200,
+    tool_message_chars: int = 600,
+    current_session_id: str = "",
+) -> dict[str, Any]:
+    config = load_config().config
+    if config.session_recall.enabled:
+        db_path = default_db_path(state_dir=state_dir)
+        if db_path.exists():
+            meta = collect_repo_metadata(cwd)
+            store = SessionRecallStore(db_path)
+            try:
+                if recent:
+                    session_results = store.recent(
+                        repo_fingerprint=meta["repo_fingerprint"],
+                        global_scope=global_scope,
+                        limit=top_k,
+                    )
+                    payload = budget_payload(
+                        query=query,
+                        scope="global" if global_scope else "repo",
+                        results=session_results,
+                        budget_chars=budget_chars,
+                        message_chars=message_chars,
+                        tool_message_chars=tool_message_chars,
+                        recent=True,
+                    )
+                    payload["recent"] = True
+                    return payload
+                session_results = store.search(
+                    query=query,
+                    repo_fingerprint=meta["repo_fingerprint"],
+                    global_scope=global_scope,
+                    limit=top_k,
+                    before=before,
+                    after=after,
+                    current_session_id=current_session_id,
+                )
+                if session_results:
+                    return budget_payload(
+                        query=query,
+                        scope="global" if global_scope else "repo",
+                        results=session_results,
+                        budget_chars=budget_chars,
+                        message_chars=message_chars,
+                        tool_message_chars=tool_message_chars,
+                    )
+            finally:
+                store.close()
+
     results = search_recall(query=query, cwd=cwd, state_dir=state_dir)[:top_k]
     bullets = [f"- {item['summary']}: {item['content']}" for item in results]
     return {
@@ -40,6 +104,12 @@ def render_focused_recall_markdown(payload: dict[str, Any]) -> str:
     short command's default because Codex can read it directly and continue
     when recall has no match.
     """
+    if payload.get("budget") is not None or any(
+        isinstance(item, dict) and "messages" in item
+        for item in (payload.get("results") or [])
+    ):
+        return render_markdown(payload)
+
     query = str(payload.get("query") or "").strip()
     triggered = payload.get("triggered")
     count = int(payload.get("count") or 0)

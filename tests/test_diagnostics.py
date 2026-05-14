@@ -427,6 +427,41 @@ def test_collect_status_runs_cleanly_with_no_home(monkeypatch, tmp_path):
     assert result["env_provider"]["exists"] is False
 
 
+def test_collect_status_includes_session_recall_counts(monkeypatch, tmp_path):
+    from codex_self_evolution.session_recall.models import ParsedMessage, ParsedSession
+    from codex_self_evolution.session_recall.store import SessionRecallStore
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda _: None)
+    db_path = tmp_path / "session_recall" / "state.db"
+    store = SessionRecallStore(db_path)
+    try:
+        store.archive(
+            ParsedSession(
+                session_id="s1",
+                session_path=tmp_path / "s1.jsonl",
+                cwd=str(tmp_path),
+                metadata={
+                    "repo_fingerprint": "repo-a",
+                    "repo_root": str(tmp_path),
+                    "worktree_root": str(tmp_path),
+                },
+                messages=[
+                    ParsedMessage("s1", "m1", 0, "user", "hermes recall", "{}", raw_event_type="message"),
+                ],
+            )
+        )
+    finally:
+        store.close()
+
+    result = collect_status(home=tmp_path)
+
+    assert result["session_recall"]["db_exists"] is True
+    assert result["session_recall"]["session_count"] == 1
+    assert result["session_recall"]["message_count"] == 1
+    assert result["session_recall"]["ingest_error_count"] == 0
+
+
 def test_cli_status_outputs_valid_json(tmp_path, capsys, monkeypatch):
     # Make every external probe deterministic so CI can assert on content.
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -441,6 +476,6 @@ def test_cli_status_outputs_valid_json(tmp_path, capsys, monkeypatch):
     # consumers (future monitoring scripts / install-verify CI) break silently.
     for section in (
         "timestamp", "home", "hooks", "legacy_user_hooks", "plugin_hooks",
-        "scheduler", "env_provider", "tools", "buckets",
+        "scheduler", "session_recall", "env_provider", "tools", "buckets",
     ):
         assert section in parsed

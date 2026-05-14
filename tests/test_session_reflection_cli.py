@@ -46,6 +46,7 @@ def test_stop_review_from_stdin_spawns_session_reflect_job(
             captured["kwargs"] = kwargs
 
     monkeypatch.setattr(cli, "enqueue_reflection_from_payload", fake_enqueue)
+    monkeypatch.setattr(cli, "_spawn_session_archive_from_stop_payload", lambda *args, **kwargs: None)
     monkeypatch.setattr(cli.subprocess, "Popen", FakePopen)
     monkeypatch.setattr(sys, "stdin", StringIO(json.dumps(_codex_payload())))
 
@@ -80,6 +81,7 @@ def test_stop_review_from_stdin_skipped_enqueue_does_not_spawn(
         "enqueue_reflection_from_payload",
         lambda payload, *, home=None: {"status": "skipped", "reason": "disabled"},
     )
+    monkeypatch.setattr(cli, "_spawn_session_archive_from_stop_payload", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         cli.subprocess,
         "Popen",

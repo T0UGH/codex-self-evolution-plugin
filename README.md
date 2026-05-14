@@ -178,12 +178,31 @@ thread 只负责写入长期 memory、`csep-reflect-*` skill 和 `receipt.json`�
 
 ```bash
 csep recall "这个仓库之前 phase2 hooks 怎么设计的"
+csep recall --recent
+csep recall "hermes OR recall" --global
 ```
 
 `csep recall` 默认输出 Markdown，适合模型直接阅读；调试时可以用 JSON：
 
 ```bash
 csep recall "focused query" --format json
+```
+
+启用 `[session_recall]` 后，Stop hook 会把 Codex transcript 归档到本机 SQLite/FTS。
+后续 recall 会优先从这个 session 库里按当前 repo 检索；同一个 git common dir 下的多个
+worktree 视为同一个 repo，并按预算裁剪原始消息窗口：
+
+```toml
+[session_recall]
+enabled = true
+stop_hook_archive = true
+```
+
+也可以手动归档或回填历史会话：
+
+```bash
+csep session-archive --transcript-path /path/to/session.jsonl --cwd /path/to/repo --session-id <id>
+csep session-ingest --backfill --root ~/.codex/sessions
 ```
 
 ### 4. 手动跑一次 compile
@@ -314,7 +333,11 @@ Skill Synthesis 会维护独立运行状态，并把通过门禁的 skill 投影
 | `codex-self-evolution eval-compiler --fixture tests/fixtures/compiler_replay/commerce_membership_api.json` | 回放编译质量样本，输出 pass/fail 和 memory/recall/discard 指标。 |
 | `codex-self-evolution recall-trigger --query "..."` | 触发一次聚焦 recall。 |
 | `codex-self-evolution status` | 输出只读诊断快照。 |
-| `csep recall "..."` | 面向模型使用的 recall wrapper。 |
+| `csep recall "..."` | 面向模型使用的 recall wrapper，默认 repo scope。 |
+| `csep recall --recent` | 返回当前 repo 最近归档的 session。 |
+| `csep recall "..." --global` | 跨 repo/worktree 检索 session recall。 |
+| `csep session-archive --transcript-path ... --cwd ... --session-id ...` | 手动归档一份 Codex transcript。 |
+| `csep session-ingest --backfill` | 回填历史 Codex session transcript。 |
 
 常用示例：
 
@@ -323,6 +346,7 @@ codex-self-evolution status | python3 -m json.tool
 codex-self-evolution session-reflect --status | python3 -m json.tool
 codex-self-evolution scan --backend agent:pi --max-runs-per-project 3
 csep recall "这个 repo 的上线检查流程"
+csep recall --recent
 ```
 
 ## 配置优先级
