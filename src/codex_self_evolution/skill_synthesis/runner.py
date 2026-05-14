@@ -17,7 +17,7 @@ from .evidence import (
     materialize_evidence_workspace,
     update_evidence_index,
 )
-from .inventory import changed_paths, read_skills_inventory, snapshot_synth_skills, write_published_index
+from .inventory import changed_paths, read_skills_inventory, snapshot_skill_docs, snapshot_synth_skills, write_published_index
 from .paths import build_skill_synthesis_paths, resolve_real_skills_root
 from .validation import clear_invalid_marker, mark_invalid, validate_synth_skill
 
@@ -106,8 +106,10 @@ def _run_locked(
         evidence_index=evidence_index,
     )
     real_before = snapshot_synth_skills(real_skills_root)
+    real_all_before = snapshot_skill_docs(real_skills_root)
     skills_root = Path(tempfile.mkdtemp(prefix=f"csep-skill-synthesis-{run_id}-")) / "skills" if dry_run else real_skills_root
     before = snapshot_synth_skills(skills_root)
+    all_before = snapshot_skill_docs(skills_root)
     inventory = read_skills_inventory(real_skills_root)
     materialize_evidence_workspace(
         paths,
@@ -141,15 +143,19 @@ def _run_locked(
 
     after = snapshot_synth_skills(skills_root)
     real_after = snapshot_synth_skills(real_skills_root)
+    all_after = snapshot_skill_docs(skills_root)
+    real_all_after = snapshot_skill_docs(real_skills_root)
     detected = changed_paths(before, after)
+    namespace_violations = _non_synth_changed_paths(changed_paths(all_before, all_after))
     changed_real = changed_paths(real_before, real_after) if dry_run else []
+    changed_real_all = changed_paths(real_all_before, real_all_after) if dry_run else []
     valid, invalid, retired = _validate_changed(run_id, detected)
     result_missing = bool(agent_result.get("result_missing"))
     result_invalid = bool(agent_result.get("result_invalid"))
     mismatch = _reported_written(agent_result) != detected
     dry_run_leak = dry_run and bool(changed_real)
     status = "success"
-    if error or dry_run_leak:
+    if error or dry_run_leak or namespace_violations:
         status = "error"
     elif invalid or mismatch or result_missing or result_invalid:
         status = "partial"
@@ -166,7 +172,8 @@ def _run_locked(
         "seen_before_count": sum(1 for item in evidence if item.get("seen_before")),
         "reported_written": _reported_written(agent_result),
         "detected_changed": detected,
-        "changed_real_paths": changed_real,
+        "changed_real_paths": changed_real_all or changed_real,
+        "namespace_violations": namespace_violations,
         "valid": valid,
         "invalid": invalid,
         "retired": retired,
@@ -191,6 +198,13 @@ def _reported_written(agent_result: dict[str, Any]) -> list[str]:
         if action.get("action") in {"create", "edit", "retire"} and action.get("path"):
             out.append(str(action["path"]))
     return sorted(out)
+
+
+def _non_synth_changed_paths(paths: list[str]) -> list[str]:
+    return sorted(
+        path for path in paths
+        if not Path(path).parent.name.startswith("csep-synth-")
+    )
 
 
 def _validate_changed(run_id: str, changed: list[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:

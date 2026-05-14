@@ -99,3 +99,23 @@ def test_run_skill_synthesis_detects_dry_run_leak(tmp_path: Path, monkeypatch) -
     assert result["status"] == "error"
     assert result["dry_run_leak"] is True
     assert result["changed_real_paths"] == [str(real_root / "csep-synth-leak" / "SKILL.md")]
+
+
+def test_run_skill_synthesis_rejects_non_synth_skill_writes(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+
+    def fake_agent(**kwargs):
+        skill = Path(kwargs["skills_root"]) / "manual-skill" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(
+            "---\nname: manual-skill\ndescription: Use when wrong namespace repeats.\n---\n\nBad write.\n",
+            encoding="utf-8",
+        )
+        out = Path(kwargs["run_output_dir"]) / "result.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"schema_version": 1, "run_id": kwargs["run_id"], "actions": []}), encoding="utf-8")
+
+    result = run_skill_synthesis(home=tmp_path, mode="incremental", lookback_hours=24, lookback_days=None, dry_run=True, agent_invoker=fake_agent)
+
+    assert result["status"] == "error"
+    assert result["namespace_violations"]

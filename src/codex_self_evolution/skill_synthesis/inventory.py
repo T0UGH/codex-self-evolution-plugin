@@ -91,6 +91,19 @@ def snapshot_synth_skills(skills_root: Path) -> dict[str, dict[str, Any]]:
     return snapshot
 
 
+def snapshot_skill_docs(skills_root: Path) -> dict[str, dict[str, Any]]:
+    snapshot: dict[str, dict[str, Any]] = {}
+    if not skills_root.is_dir():
+        return snapshot
+    for child in sorted(skills_root.iterdir()):
+        if not child.is_dir():
+            continue
+        meta = read_skill_metadata(child)
+        if meta is not None:
+            snapshot[str(child / "SKILL.md")] = meta
+    return snapshot
+
+
 def changed_paths(before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]) -> list[str]:
     paths = set(before) | set(after)
     return sorted(
