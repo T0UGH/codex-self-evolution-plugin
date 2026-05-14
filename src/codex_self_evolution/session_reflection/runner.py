@@ -68,6 +68,7 @@ def enqueue_reflection_from_payload(payload: dict[str, Any], *, home: str | Path
         skill_generation_mode=config.trigger.skill_generation_mode,
     )
     state["active_job_id"] = job["job_id"]
+    state["active_job_reserved_at"] = job["created_at"]
     write_trigger_state(trigger_result["paths"], state)
     trigger_result["state"] = state
     return {"status": "queued", "job_id": job["job_id"], "job": job, "decision": decision}

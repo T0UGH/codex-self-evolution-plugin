@@ -72,6 +72,7 @@ def default_trigger_state(session_id: str) -> dict[str, Any]:
         "last_memory_review_at": None,
         "last_skill_review_at": None,
         "active_job_id": None,
+        "active_job_reserved_at": None,
         "last_decision": {},
         "updated_at": now,
     }
@@ -173,6 +174,7 @@ def reset_counters_after_job(
         updated["last_skill_review_at"] = now
     if updated.get("active_job_id") == job.get("job_id"):
         updated["active_job_id"] = None
+        updated["active_job_reserved_at"] = None
     return updated
 
 
@@ -417,6 +419,7 @@ def evaluate_trigger_policy(
                 "counters": _counter_snapshot(state),
             }
             state["active_job_id"] = "pending"
+            state["active_job_reserved_at"] = _utc_timestamp()
         else:
             decision = {
                 "schema_version": 1,
@@ -450,13 +453,17 @@ def _state_has_fresh_active_reservation(state: dict[str, Any], config: Any) -> b
     """Return whether trigger state still reserves an active job slot."""
     if not state.get("active_job_id"):
         return False
+    reserved_at_raw = state.get("active_job_reserved_at") or state.get("updated_at")
+    if state.get("active_job_reserved_at") is None and reserved_at_raw:
+        state["active_job_reserved_at"] = str(reserved_at_raw)
     try:
-        updated_at = datetime.fromisoformat(str(state["updated_at"]).replace("Z", "+00:00"))
-        age_seconds = (utc_now() - updated_at).total_seconds()
+        reserved_at = datetime.fromisoformat(str(reserved_at_raw).replace("Z", "+00:00"))
+        age_seconds = (utc_now() - reserved_at).total_seconds()
     except (KeyError, TypeError, ValueError):
         return True
     stale_after_seconds = int(getattr(config, "active_job_stale_seconds", 1800))
     if age_seconds > stale_after_seconds:
         state["active_job_id"] = None
+        state["active_job_reserved_at"] = None
         return False
     return True

@@ -135,6 +135,7 @@ def test_reset_counters_after_job_uses_snapshot_subtraction(tmp_path: Path) -> N
     assert updated["last_memory_review_at"] == "2026-05-15T00:00:00Z"
     assert updated["last_skill_review_at"] is None
     assert updated["active_job_id"] is None
+    assert updated["active_job_reserved_at"] is None
 
 
 def test_evaluate_trigger_archive_only_updates_counters_and_offset(tmp_path: Path) -> None:
@@ -458,6 +459,7 @@ def test_evaluate_trigger_pending_reservation_defers_queue(tmp_path: Path) -> No
     assert result["decision"]["skip_reason"] == "active_job_running"
     assert result["decision"]["review_memory"] is True
     assert result["state"]["active_job_id"] == "pending"
+    assert result["state"]["active_job_reserved_at"] is not None
 
 
 def test_evaluate_trigger_stale_pending_reservation_allows_queue(tmp_path: Path) -> None:
@@ -468,8 +470,8 @@ def test_evaluate_trigger_stale_pending_reservation_allows_queue(tmp_path: Path)
     paths = trigger_paths_for_payload(payload, home=tmp_path)
     state = load_trigger_state(paths, session_id="parent-1")
     state["active_job_id"] = "pending"
+    state["active_job_reserved_at"] = "2000-01-01T00:00:00Z"
     state["stops_since_memory_review"] = 2
-    state["updated_at"] = "2000-01-01T00:00:00Z"
     paths.session_dir.mkdir(parents=True, exist_ok=True)
     paths.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
 
@@ -482,3 +484,26 @@ def test_evaluate_trigger_stale_pending_reservation_allows_queue(tmp_path: Path)
     assert result["status"] == "queued"
     assert result["decision"]["review_memory"] is True
     assert result["state"]["active_job_id"] == "pending"
+    assert result["state"]["active_job_reserved_at"] is not None
+
+
+def test_evaluate_trigger_deferred_pending_does_not_refresh_reservation_age(tmp_path: Path) -> None:
+    """Repeated deferred decisions do not extend pending reservation TTL."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    paths = trigger_paths_for_payload(payload, home=tmp_path)
+    state = load_trigger_state(paths, session_id="parent-1")
+    state["active_job_id"] = "pending"
+    state["active_job_reserved_at"] = "2026-05-15T00:00:00Z"
+    state["stops_since_memory_review"] = 2
+    write_trigger_state(paths, state)
+
+    first = evaluate_trigger_policy(payload, SessionReflectionTriggerConfig(), home=tmp_path)
+    before = first["state"]["active_job_reserved_at"]
+
+    second = evaluate_trigger_policy(payload, SessionReflectionTriggerConfig(), home=tmp_path)
+
+    assert first["status"] == "deferred_active_job"
+    assert second["status"] == "deferred_active_job"
+    assert second["state"]["active_job_reserved_at"] == before
