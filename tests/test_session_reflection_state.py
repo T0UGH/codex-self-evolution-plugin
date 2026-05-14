@@ -134,6 +134,28 @@ def test_create_job_from_payload_accepts_trigger_decision_fields(tmp_path: Path)
     assert job["trigger_decision"] == decision
 
 
+def test_create_job_from_payload_accepts_empty_trigger_decision(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    job = create_job_from_payload(_payload(repo), home=tmp_path, trigger_decision={})
+
+    assert job["schema_version"] == 2
+    assert job["review_memory"] is False
+    assert job["review_skills"] is False
+    assert job["trigger_reasons"] == []
+    assert job["skill_generation_mode"] == "one_shot_active"
+    assert job["covered_byte_offset"] == 0
+    assert job["covered_message_index"] == 0
+    assert job["covered_event_uid"] == ""
+    assert job["counter_snapshot"] == {
+        "stops_since_memory_review": 0,
+        "readable_chars_since_memory_review": 0,
+        "tool_calls_since_skill_review": 0,
+    }
+    assert job["trigger_decision"] == {}
+
+
 def test_find_existing_parent_job_returns_newest_persisted_job(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

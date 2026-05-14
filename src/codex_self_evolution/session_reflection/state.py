@@ -93,10 +93,11 @@ def create_job_from_payload(
     parent_turn_id = _payload_text(payload, "turn_id")
     job_id = _new_job_id(created_at)
     paths = build_session_reflection_paths(home=home, job_id=job_id)
-    decision = trigger_decision or {}
+    decision_provided = trigger_decision is not None
+    decision = trigger_decision if decision_provided else {}
     counters = decision.get("counters") if isinstance(decision.get("counters"), dict) else {}
     job = {
-        "schema_version": 2 if decision else 1,
+        "schema_version": 2 if decision_provided else 1,
         "job_id": job_id,
         "parent_session_id": parent_session_id,
         "parent_turn_id": parent_turn_id,
@@ -108,7 +109,7 @@ def create_job_from_payload(
         "updated_at": created_at,
         "raw_payload": payload,
     }
-    if decision:
+    if decision_provided:
         job.update(
             {
                 "review_memory": bool(decision.get("review_memory")),
