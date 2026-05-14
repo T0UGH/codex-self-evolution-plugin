@@ -16,6 +16,9 @@ REQUIRED_SKILL_SECTIONS = (
     "## Verification",
     "## Failure Handling",
 )
+VALID_RECEIPT_STATUSES = {"succeeded", "partial", "failed", "skipped"}
+REQUIRED_LIST_FIELDS = ("memory_changes", "skill_changes", "skipped_candidates", "validation_notes", "errors")
+REQUIRED_TEXT_FIELDS = ("job_id", "parent_session_id", "child_thread_id", "started_at", "finished_at")
 
 
 def validate_receipt(
@@ -36,6 +39,9 @@ def validate_receipt(
         return result
     if not isinstance(receipt, dict) or receipt.get("schema_version") != 1:
         return _failure("receipt_schema")
+    schema_reason = _receipt_schema_reason(receipt)
+    if schema_reason:
+        return _failure(schema_reason)
 
     memory_changes = receipt.get("memory_changes")
     skill_changes = receipt.get("skill_changes")
@@ -74,6 +80,19 @@ def _failure(reason: str) -> dict[str, Any]:
     }
 
 
+def _receipt_schema_reason(receipt: dict[str, Any]) -> str:
+    """Return a schema or status failure reason for required receipt fields."""
+    for field in REQUIRED_TEXT_FIELDS:
+        if not isinstance(receipt.get(field), str) or not receipt[field].strip():
+            return "receipt_schema"
+    if receipt.get("status") not in VALID_RECEIPT_STATUSES:
+        return "receipt_status"
+    for field in REQUIRED_LIST_FIELDS:
+        if not isinstance(receipt.get(field), list):
+            return "receipt_schema"
+    return ""
+
+
 def _memory_boundary_violations(changes: Any, memory_roots: list[Path]) -> list[dict[str, str]]:
     """Return memory changes outside allowed roots or filenames."""
     if not isinstance(changes, list):
@@ -84,7 +103,7 @@ def _memory_boundary_violations(changes: Any, memory_roots: list[Path]) -> list[
         path = _change_path(item)
         if path.name not in {"USER.md", "MEMORY.md"}:
             violations.append({"reason": "memory_filename", "path": str(path)})
-        elif not any(_under(path, root) for root in roots):
+        elif not any(path.expanduser().resolve(strict=False).parent == root for root in roots):
             violations.append({"reason": "memory_outside_root", "path": str(path)})
     return violations
 
@@ -117,10 +136,11 @@ def _hash_mismatches(changes: Any) -> list[dict[str, str]]:
             continue
         path = _change_path(item)
         if not path.is_file():
+            mismatches.append({"path": str(path), "expected": expected, "actual": "", "reason": "missing_file"})
             continue
         actual = hashlib.sha256(path.read_bytes()).hexdigest()
         if actual != expected:
-            mismatches.append({"path": str(path), "expected": expected, "actual": actual})
+            mismatches.append({"path": str(path), "expected": expected, "actual": actual, "reason": "hash_mismatch"})
     return mismatches
 
 

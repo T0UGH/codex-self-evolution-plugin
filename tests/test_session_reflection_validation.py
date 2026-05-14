@@ -34,25 +34,27 @@ def _sha(path: Path) -> str:
 
 def _write_receipt(path: Path, *, memory_changes: list[dict[str, object]], skill_changes: list[dict[str, object]]) -> None:
     """Write a schema-version 1 reflection receipt fixture."""
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "job_id": "job-1",
-                "parent_session_id": "parent-1",
-                "child_thread_id": "child-1",
-                "status": "succeeded",
-                "memory_changes": memory_changes,
-                "skill_changes": skill_changes,
-                "skipped_candidates": [],
-                "validation_notes": [],
-                "errors": [],
-                "started_at": "2026-05-14T12:00:00Z",
-                "finished_at": "2026-05-14T12:01:00Z",
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_receipt_payload(path, memory_changes=memory_changes, skill_changes=skill_changes)
+
+
+def _write_receipt_payload(path: Path, **overrides: object) -> None:
+    """Write a receipt fixture with optional top-level overrides."""
+    payload = {
+        "schema_version": 1,
+        "job_id": "job-1",
+        "parent_session_id": "parent-1",
+        "child_thread_id": "child-1",
+        "status": "succeeded",
+        "memory_changes": [],
+        "skill_changes": [],
+        "skipped_candidates": [],
+        "validation_notes": [],
+        "errors": [],
+        "started_at": "2026-05-14T12:00:00Z",
+        "finished_at": "2026-05-14T12:01:00Z",
+    }
+    payload.update(overrides)
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_validate_receipt_accepts_memory_and_reflect_skill(tmp_path: Path) -> None:
@@ -205,6 +207,109 @@ def test_validate_receipt_hash_mismatch_becomes_partial(tmp_path: Path) -> None:
 
     assert result["status"] == "partial"
     assert result["hash_mismatches"][0]["path"] == str(memory)
+
+
+def test_validate_receipt_missing_memory_with_hash_becomes_partial(tmp_path: Path) -> None:
+    """A claimed memory write with a non-blank hash must exist on disk."""
+    memory_root = tmp_path / "project" / "memory"
+    memory_root.mkdir(parents=True)
+    memory = memory_root / "USER.md"
+    receipt = tmp_path / "receipt.json"
+    _write_receipt(
+        receipt,
+        memory_changes=[{"path": str(memory), "action": "add", "after_hash": "1" * 64}],
+        skill_changes=[],
+    )
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[memory_root],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+    )
+
+    assert result["status"] == "partial"
+    assert result["hash_mismatches"][0]["reason"] == "missing_file"
+    assert result["hash_mismatches"][0]["path"] == str(memory)
+
+
+def test_validate_receipt_missing_skill_with_hash_becomes_partial(tmp_path: Path) -> None:
+    """A claimed in-namespace skill write with a non-blank hash must exist."""
+    skill = tmp_path / "skills" / "csep-reflect-alpha" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    receipt = tmp_path / "receipt.json"
+    _write_receipt(
+        receipt,
+        memory_changes=[],
+        skill_changes=[{"skill_id": "csep-reflect-alpha", "path": str(skill), "action": "create", "after_hash": "2" * 64}],
+    )
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[tmp_path / "project" / "memory"],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+    )
+
+    assert result["status"] == "partial"
+    assert result["hash_mismatches"][0]["reason"] == "missing_file"
+    assert result["hash_mismatches"][0]["path"] == str(skill)
+
+
+def test_validate_receipt_rejects_invalid_status_value(tmp_path: Path) -> None:
+    """Receipt status must be one of the known child outcomes."""
+    receipt = tmp_path / "receipt.json"
+    _write_receipt_payload(receipt, status="banana")
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[tmp_path / "project" / "memory"],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+    )
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "receipt_status"
+
+
+def test_validate_receipt_rejects_missing_required_field(tmp_path: Path) -> None:
+    """Required receipt fields must exist before validation trusts the payload."""
+    receipt = tmp_path / "receipt.json"
+    _write_receipt_payload(receipt, job_id="")
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[tmp_path / "project" / "memory"],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+    )
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "receipt_schema"
+
+
+def test_validate_receipt_rejects_nested_memory_under_allowed_root(tmp_path: Path) -> None:
+    """Memory path parent must exactly equal an allowed memory root."""
+    memory_root = tmp_path / "project" / "memory"
+    memory = memory_root / "nested" / "MEMORY.md"
+    memory.parent.mkdir(parents=True)
+    memory.write_text("Nested memory must not be accepted.\n", encoding="utf-8")
+    receipt = tmp_path / "receipt.json"
+    _write_receipt(
+        receipt,
+        memory_changes=[{"path": str(memory), "action": "add", "after_hash": _sha(memory)}],
+        skill_changes=[],
+    )
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[memory_root],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+    )
+
+    assert result["status"] == "failed"
+    assert result["boundary_violations"][0]["reason"] == "memory_outside_root"
 
 
 def test_validate_receipt_no_changes_becomes_skipped_empty(tmp_path: Path) -> None:
