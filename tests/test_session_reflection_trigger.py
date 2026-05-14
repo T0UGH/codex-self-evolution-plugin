@@ -439,3 +439,46 @@ def test_evaluate_trigger_active_job_defers_queue(tmp_path: Path) -> None:
     assert result["decision"]["skip_reason"] == "active_job_running"
     assert result["decision"]["review_skills"] is True
     assert result["state"]["active_job_id"] is None
+
+
+def test_evaluate_trigger_pending_reservation_defers_queue(tmp_path: Path) -> None:
+    """A pending reservation prevents duplicate queued jobs before job creation is visible."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    paths = trigger_paths_for_payload(payload, home=tmp_path)
+    state = load_trigger_state(paths, session_id="parent-1")
+    state["active_job_id"] = "pending"
+    state["stops_since_memory_review"] = 2
+    write_trigger_state(paths, state)
+
+    result = evaluate_trigger_policy(payload, SessionReflectionTriggerConfig(), home=tmp_path)
+
+    assert result["status"] == "deferred_active_job"
+    assert result["decision"]["skip_reason"] == "active_job_running"
+    assert result["decision"]["review_memory"] is True
+    assert result["state"]["active_job_id"] == "pending"
+
+
+def test_evaluate_trigger_stale_pending_reservation_allows_queue(tmp_path: Path) -> None:
+    """A stale pending reservation does not block future queueable decisions forever."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    paths = trigger_paths_for_payload(payload, home=tmp_path)
+    state = load_trigger_state(paths, session_id="parent-1")
+    state["active_job_id"] = "pending"
+    state["stops_since_memory_review"] = 2
+    state["updated_at"] = "2000-01-01T00:00:00Z"
+    paths.session_dir.mkdir(parents=True, exist_ok=True)
+    paths.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+    result = evaluate_trigger_policy(
+        payload,
+        SessionReflectionTriggerConfig(active_job_stale_seconds=60),
+        home=tmp_path,
+    )
+
+    assert result["status"] == "queued"
+    assert result["decision"]["review_memory"] is True
+    assert result["state"]["active_job_id"] == "pending"

@@ -6,6 +6,7 @@ import os
 import re
 import tempfile
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -389,7 +390,8 @@ def evaluate_trigger_policy(
             reasons.append("high_signal_skill_keyword")
 
         matched_keywords = sorted(set(matched_memory + matched_skill))
-        if active_job and (review_memory or review_skills):
+        active_or_reserved = active_job is not None or _state_has_fresh_active_reservation(state, config)
+        if active_or_reserved and (review_memory or review_skills):
             decision = {
                 "schema_version": 1,
                 "status": "deferred_active_job",
@@ -442,3 +444,19 @@ def _counter_snapshot(state: dict[str, Any]) -> dict[str, int]:
         "readable_chars_since_memory_review": int(state.get("readable_chars_since_memory_review") or 0),
         "tool_calls_since_skill_review": int(state.get("tool_calls_since_skill_review") or 0),
     }
+
+
+def _state_has_fresh_active_reservation(state: dict[str, Any], config: Any) -> bool:
+    """Return whether trigger state still reserves an active job slot."""
+    if not state.get("active_job_id"):
+        return False
+    try:
+        updated_at = datetime.fromisoformat(str(state["updated_at"]).replace("Z", "+00:00"))
+        age_seconds = (utc_now() - updated_at).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        return True
+    stale_after_seconds = int(getattr(config, "active_job_stale_seconds", 1800))
+    if age_seconds > stale_after_seconds:
+        state["active_job_id"] = None
+        return False
+    return True
