@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from codex_self_evolution.session_reflection.state import (
+    child_thread_registry_path,
     create_job_from_payload,
     find_existing_parent_job,
     latest_job_path,
@@ -71,16 +72,32 @@ def test_find_existing_parent_job_ignores_failed_jobs(tmp_path: Path) -> None:
 
 
 def test_register_child_thread_writes_registry(tmp_path: Path) -> None:
-    register_child_thread(
+    registry = register_child_thread(
         child_thread_id="child-1",
         parent_session_id="parent-1",
         job_id="job-1",
         home=tmp_path,
     )
 
-    registry = tmp_path / "session_reflection" / "child_threads" / "child-1.json"
     data = json.loads(registry.read_text(encoding="utf-8"))
     assert data["child_thread_id"] == "child-1"
     assert data["parent_session_id"] == "parent-1"
     assert data["job_id"] == "job-1"
     assert data["thread_source"] == "memory_consolidation"
+
+
+def test_register_child_thread_uses_path_safe_filename(tmp_path: Path) -> None:
+    child_threads_dir = tmp_path / "session_reflection" / "child_threads"
+    unsafe_id = "../nested/thread/1"
+
+    registry = register_child_thread(
+        child_thread_id=unsafe_id,
+        parent_session_id="parent-1",
+        job_id="job-1",
+        home=tmp_path,
+    )
+
+    assert registry.parent == child_threads_dir
+    assert registry == child_thread_registry_path(unsafe_id, home=tmp_path)
+    assert registry.name != f"{unsafe_id}.json"
+    assert json.loads(registry.read_text(encoding="utf-8"))["child_thread_id"] == unsafe_id

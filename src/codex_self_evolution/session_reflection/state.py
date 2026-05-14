@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..storage import atomic_write_json, load_json
+from ..config import DEFAULT_LOCK_STALE_SECONDS
+from ..storage import _pid_alive, atomic_write_json, compute_stable_id, load_json, utc_now
 from .paths import build_session_reflection_paths
 
 ACTIVE_PARENT_STATUSES = {"queued", "running"}
@@ -17,7 +18,7 @@ SESSION_REFLECTION_MODEL = "gpt-5.3-codex-spark"
 
 def utc_timestamp() -> str:
     """Return a UTC timestamp suitable for persisted job metadata."""
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def latest_job_path(*, home: str | Path | None = None) -> Path:
@@ -28,6 +29,51 @@ def latest_job_path(*, home: str | Path | None = None) -> Path:
 def global_lock_path(*, home: str | Path | None = None) -> Path:
     """Return the global session reflection lock path."""
     return build_session_reflection_paths(home=home).locks_dir / "global.lock"
+
+
+def global_lock_status(
+    *,
+    home: str | Path | None = None,
+    stale_after_seconds: int = DEFAULT_LOCK_STALE_SECONDS,
+) -> dict[str, object]:
+    """Return whether the global reflection lock exists and is stale."""
+    path = global_lock_path(home=home)
+    if not path.exists():
+        return {"locked": False, "stale": False, "path": str(path)}
+    try:
+        raw = load_json(path)
+        if not isinstance(raw, dict):
+            raise ValueError("lock payload is not a JSON object")
+        created_at = datetime.fromisoformat(str(raw["created_at"]).replace("Z", "+00:00"))
+        owner_pid = raw.get("pid")
+    except (KeyError, OSError, ValueError):
+        return {
+            "locked": True,
+            "stale": False,
+            "stale_reason": "unreadable_lock",
+            "path": str(path),
+        }
+    age = (utc_now() - created_at).total_seconds()
+    pid_alive = _pid_alive(owner_pid)
+    # Future timestamps are treated as active locks; old timestamps and dead pids
+    # are stale so a crashed worker cannot permanently disable reflection.
+    stale = (not pid_alive) or age > stale_after_seconds
+    stale_reason: str | None = None
+    if not pid_alive:
+        stale_reason = "pid_not_alive"
+    elif age > stale_after_seconds:
+        stale_reason = "exceeded_max_age"
+    elif age < 0:
+        stale_reason = "future_timestamp"
+    return {
+        "locked": True,
+        "stale": stale,
+        "stale_reason": stale_reason,
+        "path": str(path),
+        "age_seconds": age,
+        "owner_pid": owner_pid,
+        "pid_alive": pid_alive,
+    }
 
 
 def create_job_from_payload(payload: dict[str, Any], *, home: str | Path | None = None) -> dict[str, Any]:
@@ -126,7 +172,8 @@ def register_child_thread(
 
 def child_thread_registry_path(child_thread_id: str, *, home: str | Path | None = None) -> Path:
     """Return the registry path for a possible child thread id."""
-    return build_session_reflection_paths(home=home).child_threads_dir / f"{child_thread_id}.json"
+    filename = f"{compute_stable_id(child_thread_id)}.json"
+    return build_session_reflection_paths(home=home).child_threads_dir / filename
 
 
 def write_global_lock(*, home: str | Path | None = None) -> Path:

@@ -4,10 +4,10 @@ from pathlib import Path
 from typing import Any
 
 from .models import GuardDecision
-from .state import child_thread_registry_path, find_existing_parent_job, global_lock_path
+from .state import child_thread_registry_path, find_existing_parent_job, global_lock_status
 
 REFLECTION_MARKERS = ("CSEP_REFLECTION_JOB_ID=", "CSEP_REFLECTION_CHILD=1")
-TRANSCRIPT_MARKER_READ_BYTES = 1024 * 1024
+TRANSCRIPT_MARKER_CHUNK_SIZE = 64 * 1024
 
 
 def evaluate_recursion_guard(payload: dict[str, Any], *, home: str | Path | None = None) -> GuardDecision:
@@ -27,21 +27,29 @@ def evaluate_recursion_guard(payload: dict[str, Any], *, home: str | Path | None
     if session_id and find_existing_parent_job(session_id, home=home):
         return GuardDecision(True, "parent_job_exists", session_id)
 
-    lock_path = global_lock_path(home=home)
-    if lock_path.exists():
-        return GuardDecision(True, "global_lock", str(lock_path))
+    lock = global_lock_status(home=home)
+    if lock["locked"] and not lock["stale"]:
+        return GuardDecision(True, "global_lock", str(lock["path"]))
 
     return GuardDecision(False)
 
 
 def _transcript_has_marker(path: Path) -> bool:
-    """Check a bounded transcript prefix for reflection guard markers."""
+    """Scan a transcript for reflection guard markers without loading it all."""
+    overlap = max(len(marker) for marker in REFLECTION_MARKERS) - 1
+    tail = ""
     try:
         with path.open("r", encoding="utf-8", errors="replace") as handle:
-            text = handle.read(TRANSCRIPT_MARKER_READ_BYTES)
+            while True:
+                chunk = handle.read(TRANSCRIPT_MARKER_CHUNK_SIZE)
+                if not chunk:
+                    return False
+                text = tail + chunk
+                if any(marker in text for marker in REFLECTION_MARKERS):
+                    return True
+                tail = text[-overlap:]
     except OSError:
         return False
-    return any(marker in text for marker in REFLECTION_MARKERS)
 
 
 def _payload_text(payload: dict[str, Any], *keys: str) -> str:
