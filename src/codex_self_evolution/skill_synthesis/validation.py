@@ -12,6 +12,21 @@ from .redaction import contains_secret_like_text
 
 RETIRED_DESCRIPTION = "Retired generated skill. Do not use."
 RETIRED_BODY_LINE = "Do not use this skill. It is kept only for audit history."
+_BLOCK_SCALAR_MARKERS = {"|", "|-", "|+", ">", ">-", ">+"}
+_ACTIVE_DESCRIPTION_PREFIXES = ("use when ", "this skill should be used when ")
+_WORKFLOW_HEADINGS = (
+    "## when to use",
+    "## inputs",
+    "## workflow",
+    "## verification",
+    "## failure handling",
+)
+_SKILL_DECISION_MARKERS = (
+    "## skill decision",
+    "why this is a skill",
+    "why not memory",
+    "existing skill boundary",
+)
 
 
 def _now() -> str:
@@ -19,6 +34,7 @@ def _now() -> str:
 
 
 def validate_synth_skill(skill_path: Path) -> dict[str, Any]:
+    """Validate one generated csep-synth SKILL.md without rewriting its body."""
     if skill_path.name != "SKILL.md":
         return {"path": str(skill_path), "valid": False, "reason": "not_skill_md"}
     if not skill_path.parent.name.startswith(SYNTH_SKILL_PREFIX):
@@ -31,17 +47,32 @@ def validate_synth_skill(skill_path: Path) -> dict[str, Any]:
     meta = _frontmatter(text)
     if not meta.get("name") or not meta.get("description"):
         return {"path": str(skill_path), "valid": False, "reason": "missing_frontmatter"}
+    if meta.get("name") != skill_path.parent.name:
+        return {"path": str(skill_path), "valid": False, "reason": "name_mismatch"}
+    description_raw = meta.get("description", "").strip()
+    if description_raw in _BLOCK_SCALAR_MARKERS:
+        return {"path": str(skill_path), "valid": False, "reason": "unsupported_description_format"}
+    status = meta.get("csep_status", "")
+    if status not in {"", "active", "retired"}:
+        return {"path": str(skill_path), "valid": False, "reason": "invalid_status"}
     if contains_secret_like_text(text):
         return {"path": str(skill_path), "valid": False, "reason": "secret_like_content"}
-    if meta.get("csep_status") == "retired":
-        if meta.get("description") != RETIRED_DESCRIPTION:
+    if status == "retired":
+        if description_raw != RETIRED_DESCRIPTION:
             return {"path": str(skill_path), "valid": False, "reason": "invalid_retired_description"}
         if RETIRED_BODY_LINE not in text:
             return {"path": str(skill_path), "valid": False, "reason": "invalid_retired_body"}
         return {"path": str(skill_path), "valid": True, "status": "retired", "reason": None}
-    description = meta.get("description", "").lower()
-    if "use" not in description or "when" not in description:
+    if RETIRED_BODY_LINE in text:
+        return {"path": str(skill_path), "valid": False, "reason": "retired_body_without_status"}
+    description = description_raw.lower()
+    if not description.startswith(_ACTIVE_DESCRIPTION_PREFIXES):
         return {"path": str(skill_path), "valid": False, "reason": "weak_description"}
+    body = text.lower()
+    if not all(marker in body for marker in _SKILL_DECISION_MARKERS):
+        return {"path": str(skill_path), "valid": False, "reason": "missing_skill_decision"}
+    if not all(heading in body for heading in _WORKFLOW_HEADINGS):
+        return {"path": str(skill_path), "valid": False, "reason": "missing_workflow_contract"}
     words = [word for word in re.split(r"\s+", text) if word]
     if len(words) < 24:
         return {"path": str(skill_path), "valid": False, "reason": "low_signal"}

@@ -149,10 +149,16 @@ def _run_locked(
     namespace_violations = _non_synth_changed_paths(changed_paths(all_before, all_after))
     changed_real = changed_paths(real_before, real_after) if dry_run else []
     changed_real_all = changed_paths(real_all_before, real_all_after) if dry_run else []
-    valid, invalid, retired = _validate_changed(run_id, detected)
+    reported_written = _reported_written(agent_result)
+    validation_targets = _validation_targets(
+        skills_root=skills_root,
+        changed=detected,
+        reported=reported_written,
+    )
+    valid, invalid, retired = _validate_changed(run_id, validation_targets)
     result_missing = bool(agent_result.get("result_missing"))
     result_invalid = bool(agent_result.get("result_invalid"))
-    mismatch = _reported_written(agent_result) != detected
+    mismatch = reported_written != detected
     dry_run_leak = dry_run and bool(changed_real)
     status = "success"
     if error or dry_run_leak or namespace_violations:
@@ -170,7 +176,7 @@ def _run_locked(
         "evidence_count": len(evidence),
         "new_evidence_count": sum(1 for item in evidence if not item.get("seen_before")),
         "seen_before_count": sum(1 for item in evidence if item.get("seen_before")),
-        "reported_written": _reported_written(agent_result),
+        "reported_written": reported_written,
         "detected_changed": detected,
         "changed_real_paths": changed_real_all or changed_real,
         "namespace_violations": namespace_violations,
@@ -193,6 +199,7 @@ def _run_locked(
 
 
 def _reported_written(agent_result: dict[str, Any]) -> list[str]:
+    """Return sorted SKILL.md paths the agent claims to have written."""
     out: list[str] = []
     for action in agent_result.get("actions", []):
         if action.get("action") in {"create", "edit", "retire"} and action.get("path"):
@@ -200,7 +207,31 @@ def _reported_written(agent_result: dict[str, Any]) -> list[str]:
     return sorted(out)
 
 
+def _validation_targets(*, skills_root: Path, changed: list[str], reported: list[str]) -> list[str]:
+    """Select generated skill files that should receive post-run validation."""
+    root = skills_root.expanduser().resolve(strict=False)
+    out = {
+        str(Path(raw).expanduser())
+        for raw in [*changed, *reported]
+        if _under_root(Path(raw).expanduser(), root)
+    }
+    if skills_root.is_dir():
+        for child in sorted(skills_root.iterdir()):
+            if child.is_dir() and child.name.startswith("csep-synth-"):
+                out.add(str(child / "SKILL.md"))
+    return sorted(out)
+
+
+def _under_root(path: Path, root: Path) -> bool:
+    """Return whether path is under the current writable skills root."""
+    try:
+        return path.resolve(strict=False).is_relative_to(root)
+    except OSError:
+        return False
+
+
 def _non_synth_changed_paths(paths: list[str]) -> list[str]:
+    """Return changed skill docs outside the csep-synth namespace."""
     return sorted(
         path for path in paths
         if not Path(path).parent.name.startswith("csep-synth-")
@@ -208,6 +239,7 @@ def _non_synth_changed_paths(paths: list[str]) -> list[str]:
 
 
 def _validate_changed(run_id: str, changed: list[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Validate generated skill docs and maintain their invalid markers."""
     valid: list[dict[str, Any]] = []
     invalid: list[dict[str, Any]] = []
     retired: list[dict[str, Any]] = []
