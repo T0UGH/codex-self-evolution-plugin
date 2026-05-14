@@ -95,6 +95,30 @@ def test_stop_review_from_stdin_skipped_enqueue_does_not_spawn(
     assert json.loads(capsys.readouterr().out) == {"continue": True}
 
 
+def test_stop_review_from_stdin_archive_only_does_not_spawn_reflection(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Archive-only trigger decisions do not spawn session-reflect."""
+    monkeypatch.setattr(
+        cli,
+        "enqueue_reflection_from_payload",
+        lambda payload, *, home=None: {"status": "archive_only", "decision": {"skip_reason": "below_threshold"}},
+    )
+    monkeypatch.setattr(cli, "_spawn_session_archive_from_stop_payload", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli.subprocess,
+        "Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not spawn reflection")),
+    )
+    monkeypatch.setattr(sys, "stdin", StringIO(json.dumps(_codex_payload())))
+
+    exit_code = cli.main(["stop-review", "--from-stdin"])
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out) == {"continue": True}
+
+
 def test_session_reflect_job_dispatches_worker_with_home(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

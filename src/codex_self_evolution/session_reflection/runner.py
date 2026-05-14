@@ -14,27 +14,63 @@ from .prompt import build_reflection_prompt
 from .state import (
     create_job_from_payload,
     acquire_global_lock,
+    find_active_parent_job,
     global_lock_status,
     latest_job_path,
     release_global_lock,
     register_child_thread,
     update_job_status,
 )
+from .trigger import TriggerLockBusy, evaluate_trigger_policy, payload_session_id, write_trigger_state
 from .validation import validate_receipt
 
 
 def enqueue_reflection_from_payload(payload: dict[str, Any], *, home: str | Path | None = None) -> dict[str, Any]:
-    """Create a queued reflection job unless config or guard rules skip it."""
+    """Evaluate trigger policy and create a queued reflection job when needed."""
     config = load_config(home=Path(home).expanduser().resolve() if home else None).config.session_reflection
     if not config.enabled:
         return {"status": "skipped", "reason": "disabled"}
 
-    decision = evaluate_recursion_guard(payload, home=home)
-    if decision.skip:
-        return {"status": "skipped", "reason": decision.reason, "detail": decision.detail}
+    guard_decision = evaluate_recursion_guard(payload, home=home)
+    if guard_decision.skip:
+        return {"status": "skipped", "reason": guard_decision.reason, "detail": guard_decision.detail}
 
-    job = create_job_from_payload(payload, home=home)
-    return {"status": "queued", "job_id": job["job_id"], "job": job}
+    if not config.trigger.enabled:
+        decision = {
+            "status": "archive_only",
+            "skip_reason": "trigger_disabled",
+        }
+        return {"status": "archive_only", "reason": "trigger_disabled", "decision": decision}
+
+    parent_session_id = payload_session_id(payload)
+    active_job = find_active_parent_job(
+        parent_session_id,
+        home=home,
+        stale_after_seconds=config.trigger.active_job_stale_seconds,
+    )
+    try:
+        trigger_result = evaluate_trigger_policy(payload, config.trigger, home=home, active_job=active_job)
+    except TriggerLockBusy as exc:
+        return {"status": "archive_only", "reason": "trigger_lock_busy", "detail": str(exc)}
+
+    if trigger_result["status"] != "queued":
+        return trigger_result
+
+    state = trigger_result["state"]
+    decision = trigger_result["decision"]
+    job = create_job_from_payload(
+        payload,
+        home=home,
+        trigger_decision=decision,
+        covered_byte_offset=int(state.get("last_counted_byte_offset") or 0),
+        covered_message_index=int(state.get("last_counted_message_index") or 0),
+        covered_event_uid=str(state.get("last_counted_event_uid") or ""),
+        skill_generation_mode=config.trigger.skill_generation_mode,
+    )
+    state["active_job_id"] = job["job_id"]
+    write_trigger_state(trigger_result["paths"], state)
+    trigger_result["state"] = state
+    return {"status": "queued", "job_id": job["job_id"], "job": job, "decision": decision}
 
 
 def run_reflection_job(

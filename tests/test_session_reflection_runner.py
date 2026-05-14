@@ -116,18 +116,70 @@ def _line_value(text: str, prefix: str) -> str:
     raise AssertionError(f"missing prompt line prefix: {prefix}")
 
 
-def test_enqueue_reflection_from_payload_creates_job(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """A normal Stop payload becomes a queued reflection job."""
+def test_enqueue_reflection_from_payload_archives_only_below_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Low-signal Stop payloads update trigger state without creating a job."""
+    home = tmp_path / "home"
     repo = tmp_path / "repo"
     repo.mkdir()
-    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
 
-    result = enqueue_reflection_from_payload(_payload(repo), home=tmp_path / "home")
+    result = enqueue_reflection_from_payload(_payload(repo), home=home)
+
+    assert result["status"] == "archive_only"
+    assert result["decision"]["skip_reason"] == "below_threshold"
+    assert not (home / "session_reflection" / "jobs").exists()
+
+
+def test_enqueue_reflection_from_payload_queues_when_trigger_hits(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """High-signal user keywords create a trigger-scoped reflection job."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    Path(str(payload["transcript_path"])).write_text(
+        json.dumps({"type": "response_item", "payload": {"role": "user", "content": "请把这个工作流沉淀成 skill"}}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+
+    result = enqueue_reflection_from_payload(payload, home=home)
 
     assert result["status"] == "queued"
     job = result["job"]
     assert job["status"] == "queued"
     assert job["parent_session_id"] == "parent-1"
+    assert job["schema_version"] == 2
+    assert job["review_skills"] is True
+    assert job["skill_generation_mode"] == "one_shot_active"
+    assert job["trigger_decision"]["matched_keywords"] == ["skill", "工作流", "沉淀"]
+
+
+def test_enqueue_reflection_from_payload_defers_when_active_job_exists(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Active parent jobs prevent a second fork but do not skip trigger accounting."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    create_job_from_payload(payload, home=home)
+    Path(str(payload["transcript_path"])).write_text(
+        json.dumps({"type": "response_item", "payload": {"role": "user", "content": "记住这个规则"}}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+
+    result = enqueue_reflection_from_payload(payload, home=home)
+
+    assert result["status"] == "deferred_active_job"
+    assert result["decision"]["skip_reason"] == "active_job_running"
 
 
 def test_enqueue_reflection_from_payload_skips_when_disabled(tmp_path: Path) -> None:
@@ -140,6 +192,25 @@ def test_enqueue_reflection_from_payload_skips_when_disabled(tmp_path: Path) -> 
     result = enqueue_reflection_from_payload(_payload(repo), home=home)
 
     assert result == {"status": "skipped", "reason": "disabled"}
+    assert not (home / "session_reflection" / "jobs").exists()
+
+
+def test_enqueue_reflection_from_payload_archives_when_trigger_disabled(tmp_path: Path) -> None:
+    """Disabled trigger policy archives Stop payloads without evaluating or queuing."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_config(home, "[session_reflection.trigger]\nenabled = false\n")
+    payload = _payload(repo)
+    Path(str(payload["transcript_path"])).write_text(
+        json.dumps({"type": "response_item", "payload": {"role": "user", "content": "请把这个工作流沉淀成 skill"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    result = enqueue_reflection_from_payload(payload, home=home)
+
+    assert result["status"] == "archive_only"
+    assert result["decision"]["skip_reason"] == "trigger_disabled"
     assert not (home / "session_reflection" / "jobs").exists()
 
 
