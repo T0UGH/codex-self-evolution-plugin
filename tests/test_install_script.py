@@ -84,6 +84,8 @@ def test_install_script_uses_uv_tool_and_cleans_only_managed_hooks(tmp_path):
 
     assert proc.returncode == 0, proc.stderr
     assert "tool install --force" in uv_log.read_text(encoding="utf-8")
+    assert "codex_hooks" not in proc.stdout
+    assert "plugins, hooks, and plugin_hooks features" in proc.stdout
 
     data = json.loads(hooks_json.read_text(encoding="utf-8"))
     commands = [

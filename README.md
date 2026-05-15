@@ -63,7 +63,7 @@ scripts/install.sh
 ```toml
 [features]
 plugins = true
-codex_hooks = true
+hooks = true
 plugin_hooks = true
 
 [plugins."codex-self-evolution@codex-self-evolution"]

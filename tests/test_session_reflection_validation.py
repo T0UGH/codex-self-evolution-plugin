@@ -106,6 +106,32 @@ def test_validate_receipt_accepts_memory_and_reflect_skill(tmp_path: Path) -> No
     assert result["hash_mismatches"] == []
 
 
+def test_validate_receipt_accepts_string_change_paths(tmp_path: Path) -> None:
+    """Receipt change arrays may contain literal paths from model-written receipts."""
+    memory = tmp_path / "project" / "memory" / "MEMORY.md"
+    memory.parent.mkdir(parents=True)
+    memory.write_text("Use stable config.\n", encoding="utf-8")
+    skill = tmp_path / "skills" / "csep-reflect-alpha" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text(_active_skill_text(), encoding="utf-8")
+    receipt = tmp_path / "receipt.json"
+    _write_receipt_payload(
+        receipt,
+        memory_changes=[str(memory)],
+        skill_changes=[str(skill)],
+    )
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[memory.parent],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["boundary_violations"] == []
+
+
 def test_validate_receipt_rejects_skill_outside_namespace(tmp_path: Path) -> None:
     """A SKILL.md outside csep-reflect-* is a hard boundary failure."""
     skill = tmp_path / "skills" / "manual-skill" / "SKILL.md"

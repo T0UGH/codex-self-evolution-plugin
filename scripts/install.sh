@@ -104,4 +104,4 @@ PY
 fi
 
 info "done"
-echo "Enable the Codex plugin with plugins, codex_hooks, and plugin_hooks features."
+echo "Enable the Codex plugin with plugins, hooks, and plugin_hooks features."

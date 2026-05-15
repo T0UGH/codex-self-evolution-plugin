@@ -181,8 +181,6 @@ def _invalid_skills(changes: Any, skills_root: Path, skill_prefix: str) -> list[
     root = skills_root.expanduser().resolve(strict=False)
     invalid: list[dict[str, str]] = []
     for item in changes:
-        if not isinstance(item, dict):
-            continue
         path = _change_path(item)
         if not path.is_file() or not _under(path, root):
             continue
@@ -233,6 +231,8 @@ def _write_invalid_markers(invalid_skills: list[dict[str, str]], job_id: object)
 
 def _change_path(item: object) -> Path:
     """Read a receipt change path without trusting unrelated item shape."""
+    if isinstance(item, str):
+        return Path(item).expanduser()
     if not isinstance(item, dict):
         return Path("")
     return Path(str(item.get("path") or "")).expanduser()

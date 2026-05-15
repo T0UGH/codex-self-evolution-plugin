@@ -85,7 +85,7 @@ retention_days = 14
 ```toml
 [features]
 plugins = true
-codex_hooks = true
+hooks = true
 plugin_hooks = true
 
 [plugins."codex-self-evolution@codex-self-evolution"]

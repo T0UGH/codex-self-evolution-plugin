@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,8 @@ class FakeReflectionClient:
         memory_changes: list[dict[str, Any]] | None = None,
         skill_changes: list[dict[str, Any]] | None = None,
         steal_lock_home: Path | None = None,
+        receipt_after_return: bool = False,
+        empty_receipt_before_return: bool = False,
     ) -> None:
         """Configure whether turn/start raises after fork registration."""
         self.fail_start = fail_start
@@ -41,6 +44,8 @@ class FakeReflectionClient:
         self.memory_changes = memory_changes if memory_changes is not None else []
         self.skill_changes = skill_changes if skill_changes is not None else []
         self.steal_lock_home = steal_lock_home
+        self.receipt_after_return = receipt_after_return
+        self.empty_receipt_before_return = empty_receipt_before_return
         self.fork_calls: list[dict[str, Any]] = []
         self.start_calls: list[dict[str, Any]] = []
 
@@ -54,14 +59,37 @@ class FakeReflectionClient:
         self.start_calls.append(kwargs)
         if self.fail_start:
             raise RuntimeError("turn failed")
-        receipt_path = _receipt_path_from_prompt(str(kwargs["prompt"]))
+        prompt = str(kwargs["prompt"])
+        if self.empty_receipt_before_return:
+            receipt_path = _receipt_path_from_prompt(prompt)
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_text("", encoding="utf-8")
+            threading.Timer(0.05, self._write_receipt, args=(prompt,)).start()
+        elif self.receipt_after_return:
+            threading.Timer(0.05, self._write_receipt, args=(prompt,)).start()
+        else:
+            self._write_receipt(prompt)
+        if self.steal_lock_home is not None:
+            atomic_write_json(
+                global_lock_path(home=self.steal_lock_home),
+                {
+                    "created_at": utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                    "pid": os.getpid(),
+                    "owner_token": "other-owner",
+                },
+            )
+        return "turn-1", {"turnId": "turn-1"}
+
+    def _write_receipt(self, prompt: str) -> None:
+        """Write the receipt expected by runner validation."""
+        receipt_path = _receipt_path_from_prompt(prompt)
         receipt_path.parent.mkdir(parents=True, exist_ok=True)
         receipt_path.write_text(
             json.dumps(
                 {
                     "schema_version": 1,
-                    "job_id": _line_value(str(kwargs["prompt"]), "CSEP_REFLECTION_JOB_ID="),
-                    "parent_session_id": _line_value(str(kwargs["prompt"]), "Parent session id: "),
+                    "job_id": _line_value(prompt, "CSEP_REFLECTION_JOB_ID="),
+                    "parent_session_id": _line_value(prompt, "Parent session id: "),
                     "child_thread_id": self.receipt_child_thread_id,
                     "status": "succeeded",
                     "memory_changes": self.memory_changes,
@@ -75,16 +103,6 @@ class FakeReflectionClient:
             ),
             encoding="utf-8",
         )
-        if self.steal_lock_home is not None:
-            atomic_write_json(
-                global_lock_path(home=self.steal_lock_home),
-                {
-                    "created_at": utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-                    "pid": os.getpid(),
-                    "owner_token": "other-owner",
-                },
-            )
-        return "turn-1", {"turnId": "turn-1"}
 
 
 def _payload(repo: Path, **overrides: object) -> dict[str, object]:
@@ -158,6 +176,10 @@ def test_enqueue_reflection_from_payload_queues_when_trigger_hits(
         encoding="utf-8",
     )
     monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setattr(
+        "codex_self_evolution.session_reflection.runner.app_server_proxy_status",
+        lambda: {"available": True, "reason": None, "socket_path": str(tmp_path / "app-server.sock")},
+    )
 
     result = enqueue_reflection_from_payload(payload, home=home)
 
@@ -225,6 +247,47 @@ def test_enqueue_reflection_from_payload_archives_when_trigger_disabled(tmp_path
     assert not (home / "session_reflection" / "jobs").exists()
 
 
+def test_enqueue_reflection_from_payload_archives_when_app_server_proxy_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Unavailable app-server proxy does not create a reflection job doomed to fail."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    Path(str(payload["transcript_path"])).write_text(
+        json.dumps({"type": "response_item", "payload": {"role": "user", "content": "请把这个工作流沉淀成 skill"}}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setattr(
+        "codex_self_evolution.session_reflection.runner.app_server_proxy_status",
+        lambda: {
+            "available": False,
+            "reason": "control_socket_missing",
+            "socket_path": str(tmp_path / "missing.sock"),
+        },
+    )
+
+    result = enqueue_reflection_from_payload(payload, home=home)
+
+    assert result["status"] == "archive_only"
+    assert result["reason"] == "control_socket_missing"
+    assert result["decision"]["skip_reason"] == "control_socket_missing"
+    assert result["decision"]["app_server"]["socket_path"].endswith("missing.sock")
+    assert not (home / "session_reflection" / "jobs").exists()
+
+    from codex_self_evolution.session_reflection.trigger import (
+        load_trigger_state,
+        trigger_paths_for_payload,
+    )
+
+    state = load_trigger_state(trigger_paths_for_payload(payload, home=home), session_id="parent-1")
+    assert state["active_job_id"] is None
+    assert state["active_job_reserved_at"] is None
+
+
 def test_enqueue_reflection_from_payload_skips_guarded_child_source(tmp_path: Path) -> None:
     """Recursion guard decisions are surfaced as skipped enqueue results."""
     home = tmp_path / "home"
@@ -272,13 +335,60 @@ def test_run_reflection_job_forks_starts_registers_validates_and_cleans_lock(
     ]
     assert client.start_calls[0]["child_thread_id"] == "child-1"
     assert "Required receipt path: " in client.start_calls[0]["prompt"]
-    assert "Review memory: true" in client.start_calls[0]["prompt"]
-    assert "Review skills: true" in client.start_calls[0]["prompt"]
+    assert "Child thread id: child-1" in client.start_calls[0]["prompt"]
+    assert '"child_thread_id": "child-1"' in client.start_calls[0]["prompt"]
+    assert "Review scope: memory and skills" in client.start_calls[0]["prompt"]
+    assert "Review memory:" not in client.start_calls[0]["prompt"]
+    assert "Review skills:" not in client.start_calls[0]["prompt"]
     assert "Skill generation mode: one_shot_active" in client.start_calls[0]["prompt"]
     assert child_thread_registry_path("child-1", home=home).is_file()
     assert (home / "session_reflection" / "runs" / str(job["job_id"]) / "prompt.txt").is_file()
     assert (home / "session_reflection" / "runs" / str(job["job_id"]) / "validation.json").is_file()
     assert not global_lock_path(home=home).exists()
+
+
+def test_run_reflection_job_waits_for_async_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Runner waits for app-server turns that return before the receipt is written."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setenv("CSEP_CODEX_SKILLS_DIR", str(tmp_path / "skills"))
+    job = create_job_from_payload(_payload(repo), home=home)
+
+    updated = run_reflection_job(
+        str(job["job_id"]),
+        home=home,
+        client=FakeReflectionClient(receipt_after_return=True),
+    )
+
+    assert updated["status"] == "skipped_empty"
+    assert updated["validation"]["status"] == "skipped_empty"
+
+
+def test_run_reflection_job_waits_for_receipt_json_to_be_parseable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Runner does not validate an empty receipt file before the child finishes writing."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setenv("CSEP_CODEX_SKILLS_DIR", str(tmp_path / "skills"))
+    job = create_job_from_payload(_payload(repo), home=home)
+
+    updated = run_reflection_job(
+        str(job["job_id"]),
+        home=home,
+        client=FakeReflectionClient(empty_receipt_before_return=True),
+    )
+
+    assert updated["status"] == "skipped_empty"
+    assert updated["validation"]["status"] == "skipped_empty"
 
 
 def test_run_reflection_job_resets_trigger_counters_after_success(
@@ -668,6 +778,7 @@ def test_session_reflection_status_is_compact(monkeypatch: pytest.MonkeyPatch, t
     assert status["latest"]["job_id"] == job["job_id"]
     assert status["latest"]["status"] == "queued"
     assert status["global_lock"]["locked"] is False
+    assert status["app_server"]["reason"] == "control_socket_missing"
 
 
 def test_session_reflection_status_reports_failure_details(

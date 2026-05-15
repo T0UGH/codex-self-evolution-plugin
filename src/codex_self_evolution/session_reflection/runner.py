@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -7,7 +9,7 @@ from ..config import PROJECTS_SUBDIR, Paths, mangle_project_path, resolve_bucket
 from ..config_file import load_config
 from ..skill_paths import codex_skills_dir
 from ..storage import atomic_write_json, atomic_write_text, load_json
-from .app_server import ReflectionAppServerClient
+from .app_server import ReflectionAppServerClient, app_server_proxy_status
 from .guard import evaluate_recursion_guard
 from .paths import build_session_reflection_paths
 from .prompt import build_reflection_prompt
@@ -25,6 +27,7 @@ from .state import (
 )
 from .trigger import (
     TriggerLockBusy,
+    append_decision,
     evaluate_trigger_policy,
     load_trigger_state,
     payload_session_id,
@@ -33,6 +36,9 @@ from .trigger import (
     write_trigger_state,
 )
 from .validation import validate_receipt
+
+RECEIPT_POLL_INTERVAL_SECONDS = 0.05
+RECEIPT_STABLE_INVALID_GRACE_SECONDS = 0.5
 
 
 def enqueue_reflection_from_payload(payload: dict[str, Any], *, home: str | Path | None = None) -> dict[str, Any]:
@@ -65,6 +71,25 @@ def enqueue_reflection_from_payload(payload: dict[str, Any], *, home: str | Path
 
     if trigger_result["status"] != "queued":
         return trigger_result
+
+    proxy_status = app_server_proxy_status()
+    if not proxy_status["available"]:
+        decision = _archive_only_for_unavailable_app_server(
+            trigger_result["decision"],
+            proxy_status,
+        )
+        state = trigger_result["state"]
+        state["active_job_id"] = None
+        state["active_job_reserved_at"] = None
+        state["last_decision"] = decision
+        write_trigger_state(trigger_result["paths"], state)
+        append_decision(trigger_result["paths"], decision)
+        trigger_result["state"] = state
+        return {
+            "status": "archive_only",
+            "reason": proxy_status["reason"],
+            "decision": decision,
+        }
 
     state = trigger_result["state"]
     decision = trigger_result["decision"]
@@ -103,21 +128,6 @@ def run_reflection_job(
 
         project_paths = _build_project_paths_for_home(job["cwd"], home=resolved_home)
         skills_root = codex_skills_dir()
-        prompt = build_reflection_prompt(
-            job_id=job_id,
-            parent_session_id=str(job["parent_session_id"]),
-            cwd=str(job["cwd"]),
-            memory_user_path=project_paths.memory_dir / "USER.md",
-            memory_project_path=project_paths.memory_dir / "MEMORY.md",
-            skills_root=skills_root,
-            receipt_path=paths.receipt_path,
-            review_memory=bool(job.get("review_memory", True)),
-            review_skills=bool(job.get("review_skills", True)),
-            trigger_reasons=list(job.get("trigger_reasons") or []),
-            skill_generation_mode=str(job.get("skill_generation_mode") or "one_shot_active"),
-        )
-        atomic_write_text(paths.run_dir / "prompt.txt", prompt)
-
         app_client = client if client is not None else ReflectionAppServerClient(timeout_seconds=config.timeout_seconds)
         child_thread_id, fork_response = app_client.fork_thread(
             parent_thread_id=str(job["parent_session_id"]),
@@ -134,6 +144,21 @@ def run_reflection_job(
             job_id=job_id,
             home=resolved_home,
         )
+        prompt = build_reflection_prompt(
+            job_id=job_id,
+            parent_session_id=str(job["parent_session_id"]),
+            child_thread_id=child_thread_id,
+            cwd=str(job["cwd"]),
+            memory_user_path=project_paths.memory_dir / "USER.md",
+            memory_project_path=project_paths.memory_dir / "MEMORY.md",
+            skills_root=skills_root,
+            receipt_path=paths.receipt_path,
+            review_memory=bool(job.get("review_memory", True)),
+            review_skills=bool(job.get("review_skills", True)),
+            trigger_reasons=list(job.get("trigger_reasons") or []),
+            skill_generation_mode=str(job.get("skill_generation_mode") or "one_shot_active"),
+        )
+        atomic_write_text(paths.run_dir / "prompt.txt", prompt)
         turn_id, turn_response = app_client.start_reflection_turn(
             child_thread_id=child_thread_id,
             cwd=str(job["cwd"]),
@@ -142,6 +167,7 @@ def run_reflection_job(
             sandbox=config.sandbox,
             prompt=prompt,
         )
+        _wait_for_receipt(paths.receipt_path, timeout_seconds=config.timeout_seconds)
 
         validation = validate_receipt(
             paths.receipt_path,
@@ -192,6 +218,7 @@ def session_reflection_status(*, home: str | Path | None = None) -> dict[str, An
         "exists": paths.root.exists(),
         "latest": latest,
         "global_lock": global_lock_status(home=resolved_home),
+        "app_server": app_server_proxy_status(),
         "trigger": _trigger_status_summary(paths),
     }
 
@@ -227,6 +254,60 @@ def _compact_validation(validation: dict[str, Any]) -> dict[str, Any]:
         if value is not None:
             compact[key] = value
     return compact
+
+
+def _wait_for_receipt(receipt_path: Path, *, timeout_seconds: float) -> None:
+    """Wait for an asynchronous app-server turn to finish writing its receipt."""
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    last_text: str | None = None
+    stable_since = 0.0
+    while time.monotonic() < deadline:
+        if receipt_path.is_file():
+            now = time.monotonic()
+            try:
+                text = receipt_path.read_text(encoding="utf-8")
+            except OSError:
+                time.sleep(RECEIPT_POLL_INTERVAL_SECONDS)
+                continue
+            if text != last_text:
+                last_text = text
+                stable_since = now
+            if _receipt_text_is_parseable(text):
+                return
+            if now - stable_since >= RECEIPT_STABLE_INVALID_GRACE_SECONDS:
+                return
+        time.sleep(RECEIPT_POLL_INTERVAL_SECONDS)
+    return
+
+
+def _receipt_text_is_parseable(text: str) -> bool:
+    """Return whether receipt text is a complete JSON object."""
+    try:
+        return isinstance(json.loads(text), dict)
+    except ValueError:
+        return False
+
+
+def _archive_only_for_unavailable_app_server(
+    decision: dict[str, Any],
+    proxy_status: dict[str, Any],
+) -> dict[str, Any]:
+    """Convert a queued trigger decision into an archive-only environment skip."""
+    reason = str(proxy_status.get("reason") or "app_server_unavailable")
+    warnings = list(decision.get("warnings") or [])
+    if reason not in warnings:
+        warnings.append(reason)
+    return {
+        **decision,
+        "status": "archive_only",
+        "skip_reason": reason,
+        "warnings": warnings,
+        "app_server": {
+            "available": bool(proxy_status.get("available")),
+            "reason": proxy_status.get("reason"),
+            "socket_path": proxy_status.get("socket_path"),
+        },
+    }
 
 
 def _trigger_status_summary(paths: Any) -> dict[str, Any]:

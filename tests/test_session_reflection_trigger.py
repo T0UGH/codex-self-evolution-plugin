@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -166,8 +167,8 @@ def test_evaluate_trigger_archive_only_updates_counters_and_offset(tmp_path: Pat
     assert result["state"]["last_counted_byte_offset"] == transcript.stat().st_size
 
 
-def test_evaluate_trigger_memory_stop_interval_queues_memory(tmp_path: Path) -> None:
-    """Memory review queues when Stop interval reaches the configured threshold."""
+def test_evaluate_trigger_memory_stop_interval_queues_reflection(tmp_path: Path) -> None:
+    """Memory-only trigger reasons still queue a full reflection pass."""
     repo = tmp_path / "repo"
     repo.mkdir()
     payload = _payload(repo)
@@ -180,7 +181,7 @@ def test_evaluate_trigger_memory_stop_interval_queues_memory(tmp_path: Path) -> 
 
     assert result["status"] == "queued"
     assert result["decision"]["review_memory"] is True
-    assert result["decision"]["review_skills"] is False
+    assert result["decision"]["review_skills"] is True
     assert result["decision"]["trigger_reasons"] == ["memory_stop_interval"]
 
 
@@ -210,6 +211,7 @@ def test_evaluate_trigger_tool_calls_queue_skill(tmp_path: Path) -> None:
     result = evaluate_trigger_policy(payload, SessionReflectionTriggerConfig(), home=tmp_path)
 
     assert result["status"] == "queued"
+    assert result["decision"]["review_memory"] is True
     assert result["decision"]["review_skills"] is True
     assert "skill_tool_call_interval" in result["decision"]["trigger_reasons"]
 
@@ -242,6 +244,7 @@ def test_evaluate_trigger_function_call_rows_queue_skill(tmp_path: Path) -> None
 
     assert result["status"] == "queued"
     assert result["state"]["tool_calls_since_skill_review"] == 15
+    assert result["decision"]["review_memory"] is True
     assert result["decision"]["review_skills"] is True
     assert result["decision"]["trigger_reasons"] == ["skill_tool_call_interval"]
 
@@ -438,6 +441,7 @@ def test_evaluate_trigger_active_job_defers_queue(tmp_path: Path) -> None:
 
     assert result["status"] == "deferred_active_job"
     assert result["decision"]["skip_reason"] == "active_job_running"
+    assert result["decision"]["review_memory"] is True
     assert result["decision"]["review_skills"] is True
     assert result["state"]["active_job_id"] is None
 
@@ -487,12 +491,19 @@ def test_evaluate_trigger_stale_pending_reservation_allows_queue(tmp_path: Path)
     assert result["state"]["active_job_reserved_at"] is not None
 
 
-def test_evaluate_trigger_deferred_pending_does_not_refresh_reservation_age(tmp_path: Path) -> None:
+def test_evaluate_trigger_deferred_pending_does_not_refresh_reservation_age(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Repeated deferred decisions do not extend pending reservation TTL."""
     repo = tmp_path / "repo"
     repo.mkdir()
     payload = _payload(repo)
     paths = trigger_paths_for_payload(payload, home=tmp_path)
+    monkeypatch.setattr(
+        "codex_self_evolution.session_reflection.trigger.utc_now",
+        lambda: datetime(2026, 5, 15, 0, 5, tzinfo=timezone.utc),
+    )
     state = load_trigger_state(paths, session_id="parent-1")
     state["active_job_id"] = "pending"
     state["active_job_reserved_at"] = "2026-05-15T00:00:00Z"

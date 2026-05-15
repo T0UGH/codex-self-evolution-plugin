@@ -373,32 +373,26 @@ def evaluate_trigger_policy(
                         matched_snippet = user_text[:160]
 
         reasons: list[str] = []
-        review_memory = False
-        review_skills = False
         if int(state["stops_since_memory_review"]) >= int(getattr(config, "memory_stop_interval", 3)):
-            review_memory = True
             reasons.append("memory_stop_interval")
         if int(state["readable_chars_since_memory_review"]) >= int(getattr(config, "memory_context_chars", 16000)):
-            review_memory = True
             reasons.append("memory_context_chars")
         if int(state["tool_calls_since_skill_review"]) >= int(getattr(config, "skill_tool_call_interval", 15)):
-            review_skills = True
             reasons.append("skill_tool_call_interval")
         if matched_memory:
-            review_memory = True
             reasons.append("high_signal_memory_keyword")
         if matched_skill:
-            review_skills = True
             reasons.append("high_signal_skill_keyword")
 
+        should_queue_reflection = bool(reasons)
         matched_keywords = sorted(set(matched_memory + matched_skill))
         active_or_reserved = active_job is not None or _state_has_fresh_active_reservation(state, config)
-        if active_or_reserved and (review_memory or review_skills):
+        if active_or_reserved and should_queue_reflection:
             decision = {
                 "schema_version": 1,
                 "status": "deferred_active_job",
-                "review_memory": review_memory,
-                "review_skills": review_skills,
+                "review_memory": True,
+                "review_skills": True,
                 "trigger_reasons": reasons,
                 "matched_keywords": matched_keywords,
                 "matched_context_snippet": matched_snippet,
@@ -406,12 +400,12 @@ def evaluate_trigger_policy(
                 "warnings": warnings,
                 "counters": _counter_snapshot(state),
             }
-        elif review_memory or review_skills:
+        elif should_queue_reflection:
             decision = {
                 "schema_version": 1,
                 "status": "queued",
-                "review_memory": review_memory,
-                "review_skills": review_skills,
+                "review_memory": True,
+                "review_skills": True,
                 "trigger_reasons": reasons,
                 "matched_keywords": matched_keywords,
                 "matched_context_snippet": matched_snippet,

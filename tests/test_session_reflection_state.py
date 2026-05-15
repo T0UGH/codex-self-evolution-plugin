@@ -179,8 +179,8 @@ def test_create_job_from_payload_accepts_empty_trigger_decision(tmp_path: Path) 
     job = create_job_from_payload(_payload(repo), home=tmp_path, trigger_decision={})
 
     assert job["schema_version"] == 2
-    assert job["review_memory"] is False
-    assert job["review_skills"] is False
+    assert job["review_memory"] is True
+    assert job["review_skills"] is True
     assert job["trigger_reasons"] == []
     assert job["skill_generation_mode"] == "one_shot_active"
     assert job["covered_byte_offset"] == 0

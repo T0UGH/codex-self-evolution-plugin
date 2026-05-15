@@ -112,8 +112,8 @@ def create_job_from_payload(
     if decision_provided:
         job.update(
             {
-                "review_memory": bool(decision.get("review_memory")),
-                "review_skills": bool(decision.get("review_skills")),
+                "review_memory": True,
+                "review_skills": True,
                 "trigger_reasons": list(decision.get("trigger_reasons") or []),
                 "skill_generation_mode": skill_generation_mode,
                 "covered_byte_offset": int(covered_byte_offset),

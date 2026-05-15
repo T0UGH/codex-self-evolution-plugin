@@ -10,6 +10,7 @@ def test_reflection_prompt_contains_markers_paths_classification_and_receipt_sha
     prompt = build_reflection_prompt(
         job_id="job-1",
         parent_session_id="parent-1",
+        child_thread_id="child-1",
         cwd=tmp_path,
         memory_user_path=tmp_path / "memory" / "USER.md",
         memory_project_path=tmp_path / "memory" / "MEMORY.md",
@@ -19,6 +20,8 @@ def test_reflection_prompt_contains_markers_paths_classification_and_receipt_sha
 
     assert prompt.count("CSEP_REFLECTION_JOB_ID=job-1") == 1
     assert prompt.count("CSEP_REFLECTION_CHILD=1") == 1
+    assert prompt.count("Child thread id: child-1") == 1
+    assert '"child_thread_id": "child-1"' in prompt
     assert str(tmp_path / "memory" / "USER.md") in prompt
     assert str(tmp_path / "memory" / "MEMORY.md") in prompt
     assert str(tmp_path / "skills" / "csep-reflect-*") in prompt
@@ -29,7 +32,7 @@ def test_reflection_prompt_contains_markers_paths_classification_and_receipt_sha
 
 
 def test_reflection_prompt_includes_trigger_scope_and_skill_mode(tmp_path: Path) -> None:
-    """Prompt tells child which scopes to review and how to handle skills."""
+    """Prompt reviews both artifact types regardless of the trigger reason."""
     prompt = build_reflection_prompt(
         job_id="job-1",
         parent_session_id="parent-1",
@@ -44,8 +47,11 @@ def test_reflection_prompt_includes_trigger_scope_and_skill_mode(tmp_path: Path)
         skill_generation_mode="one_shot_active",
     )
 
-    assert "Review memory: true" in prompt
-    assert "Review skills: false" in prompt
+    assert "Review scope: memory and skills" in prompt
     assert "Trigger reasons: memory_stop_interval" in prompt
+    assert "Trigger reasons explain why this reflection ran; they do not restrict artifact types." in prompt
     assert "Skill generation mode: one_shot_active" in prompt
-    assert "Do not evaluate skills when Review skills is false." in prompt
+    assert "Do not evaluate skills when Review skills is false." not in prompt
+    assert "Review skills: false" not in prompt
+    assert "Write receipt.json atomically" in prompt
+    assert '"child_thread_id": "<current child thread id>"' in prompt

@@ -25,7 +25,7 @@
 ```toml
 [features]
 plugins = true
-codex_hooks = true
+hooks = true
 plugin_hooks = true
 memories = true
 ```
@@ -45,7 +45,7 @@ memories = true
 
 ## Smoke Verification
 
-After enabling `plugins` and `plugin_hooks`, a normal `codex exec` run without temporary `--enable` flags triggered:
+After enabling `plugins`, `hooks`, and `plugin_hooks`, a normal `codex exec` run without temporary `--enable` flags triggered:
 
 - `kind: session-start`
 - `kind: stop-review`
