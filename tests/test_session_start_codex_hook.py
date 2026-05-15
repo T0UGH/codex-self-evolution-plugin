@@ -210,7 +210,7 @@ def test_csep_recall_json_format(monkeypatch, capsys, tmp_path):
 
 
 def test_from_stdin_falls_back_to_cli_cwd_when_payload_missing_cwd(monkeypatch, capsys, tmp_path):
-    # Covers the shell-test case: `echo '{}' | codex-self-evolution session-start
+    # Covers the shell-test case: `echo '{}' | csep session-start
     # --from-stdin --cwd /path/to/repo`. Real Codex always sends cwd, but this
     # fallback is what makes the hook easy to smoke-test manually.
     state = _seed_state(tmp_path)

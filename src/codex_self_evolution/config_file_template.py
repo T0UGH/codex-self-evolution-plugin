@@ -1,4 +1,4 @@
-"""Static TOML template emitted by ``codex-self-evolution config init``."""
+"""Static TOML template emitted by ``csep config init``."""
 
 from __future__ import annotations
 

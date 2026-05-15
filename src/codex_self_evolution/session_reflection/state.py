@@ -287,12 +287,6 @@ def release_global_lock(
         return False
 
 
-def write_global_lock(*, home: str | Path | None = None) -> Path:
-    """Create the global reflection lock file for tests."""
-    lock = acquire_global_lock(home=home)
-    return Path(lock["path"])
-
-
 class ReflectionLockError(RuntimeError):
     """Raised when the reflection global lock cannot be acquired."""
 

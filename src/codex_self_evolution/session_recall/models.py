@@ -26,20 +26,3 @@ class ParsedSession:
     cwd: str
     messages: list[ParsedMessage]
     metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class RecallQuery:
-    query: str
-    cwd: str
-    repo_fingerprint: str = ""
-    global_scope: bool = False
-    recent: bool = False
-    limit: int = 3
-    before: int = 3
-    after: int = 5
-    budget_chars: int = 12000
-    message_chars: int = 1200
-    tool_message_chars: int = 600
-    current_session_id: str = ""
-

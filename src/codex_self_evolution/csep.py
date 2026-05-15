@@ -8,17 +8,29 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import cli as full_cli
 from .logging_setup import configure as configure_logging, get_logger
 from .session_recall.workflow import build_focused_recall, render_focused_recall_markdown
 from .session_recall.archive import archive_from_hook_payload, archive_transcript, backfill_sessions, default_db_path
 
+_MAIN_CLI_COMMANDS = {
+    "session-start",
+    "session-stop",
+    "session-reflect",
+    "status",
+    "config",
+    "migrate-worktrees",
+}
+
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the short csep command surface."""
     parser = argparse.ArgumentParser(
         prog="csep",
         description="Short runtime commands for codex-self-evolution.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+    _add_main_runtime_commands(subparsers)
 
     recall = subparsers.add_parser(
         "recall",
@@ -54,6 +66,71 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--since-days", type=int)
     ingest.add_argument("--limit-files", type=int)
     return parser
+
+
+def _add_main_runtime_commands(subparsers: argparse._SubParsersAction) -> None:
+    """Register csep aliases for the retained codex-self-evolution runtime commands."""
+    session_parser = subparsers.add_parser(
+        "session-start",
+        help="Codex SessionStart hook entrypoint.",
+    )
+    session_parser.add_argument("--cwd")
+    session_parser.add_argument("--state-dir")
+    session_parser.add_argument(
+        "--from-stdin",
+        action="store_true",
+        help="Read a Codex SessionStart hook JSON payload from stdin.",
+    )
+
+    stop_parser = subparsers.add_parser(
+        "session-stop",
+        help="Codex Stop hook entrypoint.",
+    )
+    stop_parser.add_argument("--state-dir")
+    stop_parser.add_argument(
+        "--from-stdin",
+        action="store_true",
+        help="Read a Codex native Stop hook JSON payload from stdin.",
+    )
+
+    reflect_parser = subparsers.add_parser(
+        "session-reflect",
+        help="Run or inspect session reflection jobs.",
+    )
+    reflect_mode = reflect_parser.add_mutually_exclusive_group(required=True)
+    reflect_mode.add_argument("--hook-payload")
+    reflect_mode.add_argument("--job")
+    reflect_mode.add_argument("--status", action="store_true")
+    reflect_parser.add_argument("--home")
+
+    status_parser = subparsers.add_parser(
+        "status",
+        help="Output a read-only diagnostic snapshot as JSON.",
+    )
+    status_parser.add_argument("--home")
+
+    config_parser = subparsers.add_parser(
+        "config",
+        help="Inspect, initialise, or validate config.toml.",
+    )
+    config_sub = config_parser.add_subparsers(dest="config_command", required=True)
+    config_show = config_sub.add_parser("show", help="Print resolved config.")
+    config_show.add_argument("--home")
+    config_show.add_argument("--raw", action="store_true")
+    config_init = config_sub.add_parser("init", help="Write a starter config.toml.")
+    config_init.add_argument("--home")
+    config_init.add_argument("--force", action="store_true")
+    config_validate = config_sub.add_parser("validate", help="Validate config.toml.")
+    config_validate.add_argument("--home")
+    config_path = config_sub.add_parser("path", help="Print config.toml path.")
+    config_path.add_argument("--home")
+
+    migrate_parser = subparsers.add_parser(
+        "migrate-worktrees",
+        help="Consolidate git-worktree buckets.",
+    )
+    migrate_parser.add_argument("--home")
+    migrate_parser.add_argument("--apply", action="store_true")
 
 
 def _query_hash(query: str) -> str:
@@ -159,6 +236,8 @@ def _handle_session_ingest(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command in _MAIN_CLI_COMMANDS:
+        return full_cli.main(argv, prog="csep")
     if args.command == "recall":
         return _handle_recall(args)
     if args.command == "session-archive":

@@ -28,8 +28,8 @@ def test_plugin_hooks_use_local_cli_not_uvx_or_tmp_placeholders():
     session_cmd = hooks["SessionStart"][0]["hooks"][0]["command"]
     stop_cmd = hooks["Stop"][0]["hooks"][0]["command"]
 
-    assert session_cmd == "codex-self-evolution session-start --from-stdin"
-    assert stop_cmd == "codex-self-evolution session-stop --from-stdin"
+    assert session_cmd == "csep session-start --from-stdin"
+    assert stop_cmd == "csep session-stop --from-stdin"
     assert "uvx" not in json.dumps(hooks)
     assert "/tmp/csep-" not in json.dumps(hooks)
 
@@ -39,10 +39,10 @@ def test_plugin_manifest_commands_use_local_cli_not_uvx():
 
     commands = {entry["name"]: entry["command"] for entry in manifest["commands"]}
     assert commands == {
-        "session-start": "codex-self-evolution session-start --from-stdin",
-        "session-stop": "codex-self-evolution session-stop --from-stdin",
-        "status": "codex-self-evolution status",
-        "session-reflect-status": "codex-self-evolution session-reflect --status",
+        "session-start": "csep session-start --from-stdin",
+        "session-stop": "csep session-stop --from-stdin",
+        "status": "csep status",
+        "session-reflect-status": "csep session-reflect --status",
         "recall": (
             'csep recall "$CODEX_RECALL_QUERY" --cwd "$CODEX_CWD" '
             '--state-dir "$CODEX_STATE_DIR"'
@@ -84,7 +84,7 @@ def test_default_plugin_root_falls_back_to_package_bundle(tmp_path, monkeypatch)
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "codex-self-evolution session-start --from-stdin",
+                            "command": "csep session-start --from-stdin",
                         },
                     ],
                 },
@@ -94,7 +94,7 @@ def test_default_plugin_root_falls_back_to_package_bundle(tmp_path, monkeypatch)
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "codex-self-evolution session-stop --from-stdin",
+                            "command": "csep session-stop --from-stdin",
                         },
                     ],
                 },

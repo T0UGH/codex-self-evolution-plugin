@@ -21,8 +21,6 @@ from .session_reflection.runner import session_reflection_status
 from .session_recall.archive import default_db_path
 from .session_recall.store import SessionRecallStore
 
-HOOK_MARKER = "codex-self-evolution-plugin managed"
-
 # Keys we recognize from .env.provider.example. Not exhaustive — other env
 # vars a user might add (custom MINIMAX_BASE_URL etc.) are reported as
 # "other" so they show up in the report without leaking values.
@@ -48,41 +46,6 @@ def collect_status(
         "env_provider": _check_env_provider(home_dir),
         "tools": _check_tools(),
     }
-
-
-# ---------- hooks --------------------------------------------------------
-
-
-def _check_hooks() -> dict[str, Any]:
-    hooks_path = Path.home() / ".codex" / "hooks.json"
-    result: dict[str, Any] = {
-        "file": str(hooks_path),
-        "exists": hooks_path.exists(),
-        "stop_installed": False,
-        "session_start_installed": False,
-        "error": None,
-    }
-    if not hooks_path.exists():
-        return result
-    try:
-        data = json.loads(hooks_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        result["error"] = f"failed to parse hooks.json: {exc}"
-        return result
-    hooks = (data.get("hooks") or {}) if isinstance(data, dict) else {}
-    for event, entries in hooks.items():
-        if not isinstance(entries, list):
-            continue
-        for entry in entries:
-            for h in entry.get("hooks", []):
-                cmd = h.get("command", "")
-                if HOOK_MARKER not in cmd:
-                    continue
-                if event == "Stop":
-                    result["stop_installed"] = True
-                elif event == "SessionStart":
-                    result["session_start_installed"] = True
-    return result
 
 
 def _check_plugin_hook_bundle(plugin_root: Path | None = None) -> dict[str, Any]:
@@ -151,7 +114,8 @@ def _check_plugin_hook_bundle(plugin_root: Path | None = None) -> dict[str, Any]
             result[command_key] = event_commands[0]
 
     result["uses_local_cli"] = any(
-        command.startswith("codex-self-evolution ") for command in all_commands
+        command.startswith("csep ") or command.startswith("codex-self-evolution ")
+        for command in all_commands
     )
     result["uses_uvx"] = any("uvx" in command for command in all_commands)
     return result

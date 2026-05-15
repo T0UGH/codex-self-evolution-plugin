@@ -8,7 +8,7 @@ from codex_self_evolution.diagnostics import collect_status
 
 
 def test_collect_status_includes_session_reflection_latest_job(tmp_path: Path) -> None:
-    """A latest reflection job should be visible from codex-self-evolution status."""
+    """A latest reflection job should be visible from status output."""
     root = tmp_path / "session_reflection"
     root.mkdir()
     (root / "latest.json").write_text(

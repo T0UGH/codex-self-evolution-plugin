@@ -1,6 +1,6 @@
 {
   "name": "codex-self-evolution",
-  "version": "0.7.10",
+  "version": "0.7.11",
   "description": "Session-level self-evolution loop with stable memory, session reflection, focused session recall, and csep-reflect skill generation.",
   "author": {
     "name": "T0UGH",
@@ -11,19 +11,19 @@
   "commands": [
     {
       "name": "session-start",
-      "command": "codex-self-evolution session-start --from-stdin"
+      "command": "csep session-start --from-stdin"
     },
     {
       "name": "session-stop",
-      "command": "codex-self-evolution session-stop --from-stdin"
+      "command": "csep session-stop --from-stdin"
     },
     {
       "name": "status",
-      "command": "codex-self-evolution status"
+      "command": "csep status"
     },
     {
       "name": "session-reflect-status",
-      "command": "codex-self-evolution session-reflect --status"
+      "command": "csep session-reflect --status"
     },
     {
       "name": "recall",

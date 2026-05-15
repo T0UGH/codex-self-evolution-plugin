@@ -6,9 +6,7 @@ from pathlib import Path
 
 from codex_self_evolution import cli, diagnostics
 from codex_self_evolution.diagnostics import (
-    HOOK_MARKER,
     _check_env_provider,
-    _check_hooks,
     _check_tools,
     collect_status,
 )
@@ -79,64 +77,6 @@ def test_env_provider_missing_file_is_clean_report(tmp_path: Path) -> None:
     }
 
 
-def test_hooks_probe_detects_both_managed_entries(tmp_path: Path, monkeypatch) -> None:
-    """The standalone user-hooks probe still identifies managed entries."""
-    fake_home = tmp_path / "home"
-    (fake_home / ".codex").mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(fake_home))
-    (fake_home / ".codex" / "hooks.json").write_text(json.dumps({
-        "hooks": {
-            "Stop": [
-                {"hooks": [{"type": "command", "command": "/other/tool/bridge"}]},
-                {"hooks": [{"type": "command",
-                            "command": f"bash -c ': {HOOK_MARKER}; exec stop'"}]},
-            ],
-            "SessionStart": [
-                {"hooks": [{"type": "command",
-                            "command": f"bash -c ': {HOOK_MARKER}; exec sstart'"}]},
-            ],
-        }
-    }), encoding="utf-8")
-    result = _check_hooks()
-    assert result["stop_installed"] is True
-    assert result["session_start_installed"] is True
-
-
-def test_hooks_probe_reports_missing_file_cleanly(tmp_path: Path, monkeypatch) -> None:
-    """Missing user hooks are reported without raising."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    result = _check_hooks()
-    assert result["exists"] is False
-    assert result["stop_installed"] is False
-    assert result["session_start_installed"] is False
-    assert result["error"] is None
-
-
-def test_hooks_probe_tolerates_malformed_json(tmp_path: Path, monkeypatch) -> None:
-    """Malformed user hooks surface a parse error instead of crashing."""
-    fake_home = tmp_path / "home"
-    (fake_home / ".codex").mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(fake_home))
-    (fake_home / ".codex" / "hooks.json").write_text("{broken", encoding="utf-8")
-    result = _check_hooks()
-    assert result["error"] is not None
-    assert result["stop_installed"] is False
-
-
-def test_hooks_probe_ignores_unmarked_entries(tmp_path: Path, monkeypatch) -> None:
-    """Marker-less user hooks are not counted as this plugin's hooks."""
-    fake_home = tmp_path / "home"
-    (fake_home / ".codex").mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(fake_home))
-    (fake_home / ".codex" / "hooks.json").write_text(json.dumps({
-        "hooks": {
-            "Stop": [{"hooks": [{"type": "command", "command": "some/other/stop-handler"}]}],
-        }
-    }), encoding="utf-8")
-    result = _check_hooks()
-    assert result["stop_installed"] is False
-
-
 def test_status_reports_plugin_hook_bundle_readiness() -> None:
     """Status keeps plugin metadata hook readiness as the hook health signal."""
     result = diagnostics._check_plugin_hook_bundle(
@@ -178,7 +118,7 @@ def test_plugin_hook_bundle_scans_all_commands_for_uvx(tmp_path: Path) -> None:
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "codex-self-evolution session-start --from-stdin",
+                            "command": "csep session-start --from-stdin",
                         },
                         {
                             "type": "command",
@@ -192,7 +132,7 @@ def test_plugin_hook_bundle_scans_all_commands_for_uvx(tmp_path: Path) -> None:
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "codex-self-evolution session-stop --from-stdin",
+                            "command": "csep session-stop --from-stdin",
                         },
                     ],
                 },
@@ -203,7 +143,7 @@ def test_plugin_hook_bundle_scans_all_commands_for_uvx(tmp_path: Path) -> None:
     result = diagnostics._check_plugin_hook_bundle(plugin_root)
 
     assert result["session_start_command"] == (
-        "codex-self-evolution session-start --from-stdin"
+        "csep session-start --from-stdin"
     )
     assert result["uses_uvx"] is True
 

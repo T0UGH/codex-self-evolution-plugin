@@ -28,21 +28,21 @@ python3 -m venv .venv
 scripts/install.sh
 ```
 
-安装脚本会用 `uv tool install --force <当前仓库>` 安装 `codex-self-evolution` / `csep`，刷新 Codex plugin cache，并清理旧版 marker-managed user hook。
+安装脚本会用 `uv tool install --force <当前仓库>` 安装主命令 `csep` 和兼容命令 `codex-self-evolution`，刷新 Codex plugin cache，并清理旧版 marker-managed user hook。
 
 ## 2. 初始化配置
 
 查看配置路径：
 
 ```bash
-codex-self-evolution config path
+csep config path
 ```
 
 写入默认配置：
 
 ```bash
-codex-self-evolution config init
-codex-self-evolution config validate
+csep config init
+csep config validate
 ```
 
 默认配置：
@@ -102,8 +102,8 @@ plugins/codex-self-evolution/.codex-plugin/hooks.json
 声明的生命周期入口：
 
 ```text
-SessionStart -> codex-self-evolution session-start --from-stdin
-Stop         -> codex-self-evolution session-stop --from-stdin
+SessionStart -> csep session-start --from-stdin
+Stop         -> csep session-stop --from-stdin
 ```
 
 如果当前 Codex CLI 还不支持 `plugin_hooks`，这一步不会生效；先升级 Codex，再重跑 `scripts/install.sh` 刷新 plugin cache。
@@ -145,8 +145,8 @@ codex exec 'Say one sentence in Chinese to test my Stop hook.'
 Stop hook 会快速返回；如果触发规则认为需要 reflection，会在后台创建 job。等待 15 到 30 秒后查看：
 
 ```bash
-codex-self-evolution session-reflect --status | python3 -m json.tool
-codex-self-evolution status | python3 -m json.tool
+csep session-reflect --status | python3 -m json.tool
+csep status | python3 -m json.tool
 ```
 
 关注：
@@ -173,13 +173,13 @@ codex-self-evolution status | python3 -m json.tool
 保存一份 Stop payload 后，可以手动创建并执行 job：
 
 ```bash
-codex-self-evolution session-reflect --hook-payload /path/to/stop-payload.json | python3 -m json.tool
+csep session-reflect --hook-payload /path/to/stop-payload.json | python3 -m json.tool
 ```
 
 只查看状态：
 
 ```bash
-codex-self-evolution session-reflect --status | python3 -m json.tool
+csep session-reflect --status | python3 -m json.tool
 ```
 
 只要 `validation.status` 是 `succeeded`，说明 child thread 的写入声明和父进程边界校验都通过。
@@ -238,7 +238,7 @@ codex plugin --help 2>&1 | head -20
 
 ```bash
 scripts/install.sh
-codex-self-evolution status | python3 -m json.tool
+csep status | python3 -m json.tool
 ```
 
 ### `session_reflection.latest.status` 是 `skipped`
@@ -257,7 +257,7 @@ codex-self-evolution status | python3 -m json.tool
 优先查看：
 
 ```bash
-codex-self-evolution session-reflect --status | python3 -m json.tool
+csep session-reflect --status | python3 -m json.tool
 tail -50 ~/.codex-self-evolution/logs/plugin.log
 ```
 
@@ -273,8 +273,8 @@ tail -50 ~/.codex-self-evolution/logs/plugin.log
 确认归档是否打开：
 
 ```bash
-codex-self-evolution config show | python3 -m json.tool
-codex-self-evolution status | python3 -m json.tool
+csep config show | python3 -m json.tool
+csep status | python3 -m json.tool
 ```
 
 如果是新安装，先跑几次真实 Codex 会话，或者手动回填：

@@ -51,7 +51,7 @@ scripts/install.sh
 
 `scripts/install.sh` 会做这些事：
 
-- 用 `uv tool install --force <当前仓库>` 安装 `codex-self-evolution` 和 `csep`
+- 用 `uv tool install --force <当前仓库>` 安装主命令 `csep` 和兼容命令 `codex-self-evolution`
 - 刷新 `~/.codex/plugins/cache/codex-self-evolution/...`
 - 清理旧版 marker-managed `~/.codex/hooks.json` 注入项
 - 不再向 `~/.codex/hooks.json` 写入新 hook
@@ -80,8 +80,8 @@ plugins/codex-self-evolution/.codex-plugin/hooks.json
 启用后，Codex 生命周期会调用：
 
 ```text
-SessionStart -> codex-self-evolution session-start --from-stdin
-Stop         -> codex-self-evolution session-stop --from-stdin
+SessionStart -> csep session-start --from-stdin
+Stop         -> csep session-stop --from-stdin
 ```
 
 ## 快速检查
@@ -89,7 +89,7 @@ Stop         -> codex-self-evolution session-stop --from-stdin
 查看只读状态：
 
 ```bash
-codex-self-evolution status | python3 -m json.tool
+csep status | python3 -m json.tool
 ```
 
 重点看：
@@ -107,10 +107,10 @@ codex-self-evolution status | python3 -m json.tool
 查看或初始化配置：
 
 ```bash
-codex-self-evolution config path
-codex-self-evolution config init
-codex-self-evolution config show | python3 -m json.tool
-codex-self-evolution config validate
+csep config path
+csep config init
+csep config show | python3 -m json.tool
+csep config validate
 ```
 
 默认配置只包含当前系统需要的段：
@@ -154,7 +154,7 @@ stop_hook_archive = true
 查看 reflection 状态：
 
 ```bash
-codex-self-evolution session-reflect --status | python3 -m json.tool
+csep session-reflect --status | python3 -m json.tool
 ```
 
 常见排查文件：
@@ -215,13 +215,13 @@ csep session-ingest --backfill --root ~/.codex/sessions
 
 | 命令 | 说明 |
 | --- | --- |
-| `codex-self-evolution session-start --from-stdin` | Codex SessionStart hook 入口。 |
-| `codex-self-evolution session-stop --from-stdin` | Codex Stop hook 入口：归档 session，评估触发规则，必要时创建 reflection job。 |
-| `codex-self-evolution session-reflect --status` | 查看 session reflection 最新 job、全局锁和触发器状态。 |
-| `codex-self-evolution session-reflect --hook-payload <file>` | 用保存的 Stop payload 手动创建并执行 reflection job。 |
-| `codex-self-evolution status` | 输出只读诊断快照。 |
-| `codex-self-evolution config show/init/validate/path` | 管理本地 `config.toml`。 |
-| `codex-self-evolution migrate-worktrees` | 合并同一个 git common dir 下的历史 bucket。 |
+| `csep session-start --from-stdin` | Codex SessionStart hook 入口。 |
+| `csep session-stop --from-stdin` | Codex Stop hook 入口：归档 session，评估触发规则，必要时创建 reflection job。 |
+| `csep session-reflect --status` | 查看 session reflection 最新 job、全局锁和触发器状态。 |
+| `csep session-reflect --hook-payload <file>` | 用保存的 Stop payload 手动创建并执行 reflection job。 |
+| `csep status` | 输出只读诊断快照。 |
+| `csep config show/init/validate/path` | 管理本地 `config.toml`。 |
+| `csep migrate-worktrees` | 合并同一个 git common dir 下的历史 bucket。 |
 | `csep recall "..."` | 面向模型使用的 session recall wrapper，默认 repo scope。 |
 | `csep recall --recent` | 返回当前 repo 最近归档的 session。 |
 | `csep recall "..." --global` | 跨 repo/worktree 检索 session recall。 |

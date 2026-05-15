@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "codex-self-evolution session-start --from-stdin",
+            "command": "csep session-start --from-stdin",
             "timeout": 15
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "codex-self-evolution session-stop --from-stdin",
+            "command": "csep session-stop --from-stdin",
             "timeout": 20
           }
         ]

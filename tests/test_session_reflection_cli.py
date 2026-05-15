@@ -59,7 +59,7 @@ def test_session_stop_from_stdin_spawns_session_reflect_job(
     assert captured["argv"][:6] == [
         sys.executable,
         "-m",
-        "codex_self_evolution.cli",
+        "codex_self_evolution.csep",
         "session-reflect",
         "--job",
         "job-123",

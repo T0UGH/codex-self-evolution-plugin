@@ -1,4 +1,4 @@
-"""Integration tests for retained ``codex-self-evolution config`` subcommands."""
+"""Integration tests for retained config subcommands."""
 
 from __future__ import annotations
 

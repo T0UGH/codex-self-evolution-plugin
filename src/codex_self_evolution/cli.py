@@ -29,8 +29,9 @@ from .session_reflection.runner import (
 )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="codex-self-evolution")
+def build_parser(prog: str = "codex-self-evolution") -> argparse.ArgumentParser:
+    """Build the retained runtime parser under the requested console-script name."""
+    parser = argparse.ArgumentParser(prog=prog)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     session_parser = subparsers.add_parser("session-start")
@@ -292,7 +293,7 @@ def _handle_session_stop_from_stdin(args: argparse.Namespace) -> int:
     child_argv = [
         sys.executable,
         "-m",
-        "codex_self_evolution.cli",
+        "codex_self_evolution.csep",
         "session-reflect",
         "--job",
         str(job_id),
@@ -349,8 +350,9 @@ def _handle_session_reflect(args: argparse.Namespace) -> dict[str, Any]:
     return queued
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
+def main(argv: list[str] | None = None, *, prog: str = "codex-self-evolution") -> int:
+    """Run retained runtime commands for either the long or short entrypoint."""
+    parser = build_parser(prog=prog)
     args = parser.parse_args(argv)
 
     # Install the JSON-lines file logger before anything that might fail.
@@ -427,7 +429,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _handle_config_subcommand(args: argparse.Namespace) -> dict:
-    """Dispatcher for ``codex-self-evolution config <subcommand>``.
+    """Dispatcher for retained config subcommands.
 
     Returns a dict; callers check for ``_exit_code`` to handle non-zero
     exit paths (validate warnings, migrate no-ops, etc.) uniformly.
