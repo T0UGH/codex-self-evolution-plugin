@@ -769,6 +769,15 @@ def test_session_reflection_status_is_compact(monkeypatch: pytest.MonkeyPatch, t
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setattr(
+        "codex_self_evolution.session_reflection.runner.app_server_proxy_status",
+        lambda: {
+            "available": True,
+            "mode": "managed_app_server",
+            "reason": "control_socket_missing",
+            "socket_path": str(tmp_path / "missing.sock"),
+        },
+    )
     job = create_job_from_payload(_payload(repo), home=home)
 
     status = session_reflection_status(home=home)

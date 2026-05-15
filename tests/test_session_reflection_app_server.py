@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from codex_self_evolution.session_reflection import app_server as app_server_module
 from codex_self_evolution.session_reflection.app_server import (
     AppServerError,
     ReflectionAppServerClient,
@@ -288,6 +289,7 @@ def test_app_server_proxy_status_reports_missing_control_socket(
 ) -> None:
     """Proxy status reports why the default app-server control socket is unusable."""
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setattr(app_server_module.shutil, "which", lambda name: "/usr/bin/codex" if name == "codex" else None)
 
     status = app_server_proxy_status()
 
@@ -295,6 +297,24 @@ def test_app_server_proxy_status_reports_missing_control_socket(
         "available": True,
         "mode": "managed_app_server",
         "reason": "control_socket_missing",
+        "socket_path": str(tmp_path / "codex-home" / "app-server-control" / "app-server-control.sock"),
+    }
+
+
+def test_app_server_proxy_status_reports_missing_codex_binary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Proxy status fails loudly when neither a socket nor Codex binary exists."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setattr(app_server_module.shutil, "which", lambda name: None)
+
+    status = app_server_proxy_status()
+
+    assert status == {
+        "available": False,
+        "mode": None,
+        "reason": "codex_binary_missing",
         "socket_path": str(tmp_path / "codex-home" / "app-server-control" / "app-server-control.sock"),
     }
 
