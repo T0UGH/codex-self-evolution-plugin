@@ -4,33 +4,38 @@
 >
 > 目标：把当前唯一保留的链路跑通：`SessionStart` 注入背景，`Stop` 归档 session 并按规则触发 reflection，reflection 写 memory / `csep-reflect-*` skill，`csep recall` 从 session 库召回历史上下文。
 
-## 1. 前置检查
+## 1. 安装
 
-在仓库根目录先确认：
+先确认本机有 Codex CLI 和 `uv`：
 
 ```bash
-python3 --version
 which uv
 codex --version
 ```
 
-本地开发安装：
+普通用户不需要 clone 仓库。直接跑：
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m pytest -q
+uvx csep setup
 ```
 
-用户级安装：
+这条命令会安装 `csep` CLI、注册 Codex plugin marketplace，并打开 `~/.codex/config.toml` 里的 plugin hooks 开关。
+
+也可以用 curl 包装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/scripts/setup.sh | bash
+```
+
+本地开发者如果要从当前 checkout 安装，可以继续用：
 
 ```bash
 scripts/install.sh
 ```
 
-安装脚本会用 `uv tool install --force <当前仓库>` 安装主命令 `csep` 和兼容命令 `codex-self-evolution`，刷新 Codex plugin cache，并清理旧版 marker-managed user hook。
-
 ## 2. 初始化配置
+
+`csep setup` 已经会启用插件。通常不需要手动初始化配置；没有配置文件时会使用默认值。
 
 查看配置路径：
 
@@ -78,9 +83,9 @@ stop_hook_archive = true
 retention_days = 14
 ```
 
-## 3. 启用 Codex Plugin Hooks
+## 3. 检查 Codex Plugin Hooks
 
-在 `~/.codex/config.toml` 中启用：
+`csep setup` 会写入或更新 `~/.codex/config.toml`：
 
 ```toml
 [features]
@@ -106,7 +111,7 @@ SessionStart -> csep session-start --from-stdin
 Stop         -> csep session-stop --from-stdin
 ```
 
-如果当前 Codex CLI 还不支持 `plugin_hooks`，这一步不会生效；先升级 Codex，再重跑 `scripts/install.sh` 刷新 plugin cache。
+如果当前 Codex CLI 还不支持 `plugin_hooks`，插件不会生效；先升级 Codex，再重跑 `uvx csep setup`。
 
 ## 4. 验证 SessionStart
 

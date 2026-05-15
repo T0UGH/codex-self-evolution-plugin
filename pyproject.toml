@@ -3,8 +3,8 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "codex-self-evolution-plugin"
-version = "0.7.11"
+name = "csep"
+version = "1.0.0"
 description = "Self-evolution loop for OpenAI Codex: session reflection, session recall, and reflection-generated skills with zero runtime dependencies."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -30,7 +30,7 @@ dependencies = []
 # Classifiers drive PyPI search + the project page sidebar. Keep the list
 # narrow: only things that are actually true of this package.
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
@@ -46,10 +46,11 @@ classifiers = [
 Homepage = "https://github.com/T0UGH/codex-self-evolution-plugin"
 Repository = "https://github.com/T0UGH/codex-self-evolution-plugin"
 Issues = "https://github.com/T0UGH/codex-self-evolution-plugin/issues"
-"Gap analysis" = "https://github.com/T0UGH/codex-self-evolution-plugin/blob/main/docs/2026-04-21-ready-for-others-gap-analysis.md"
+Documentation = "https://github.com/T0UGH/codex-self-evolution-plugin/blob/main/docs/getting-started.md"
+Architecture = "https://github.com/T0UGH/codex-self-evolution-plugin/blob/main/docs/architecture.md"
 
 [project.optional-dependencies]
-# `pip install codex-self-evolution-plugin[dev]` for contributors.
+# `pip install csep[dev]` for contributors.
 dev = ["pytest>=7", "build>=1.0", "twine>=5"]
 
 [project.scripts]

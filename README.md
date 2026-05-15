@@ -4,185 +4,125 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![python: 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-Codex 本地自我进化插件 | Session Reflection / Session Recall / Reflection Skills | 面向重度 Codex 工作流
+中文 | [English](README_en.md)
 
-## 概述
+让 Codex 把每次协作变成下一次的进步。
 
-Codex Self-Evolution Plugin 是一个本地优先的 Codex 自我进化层。它把一次会话里的稳定经验沉淀为下一次会话可读取的上下文，重点保留三条线：
+> 用 Codex 5.3 Spark 的空闲额度，帮你的 Codex 在后台攒经验。
 
-| 线 | 产生方式 | 消费方式 |
+如果你一天开好几个 Codex session，很快会发现一个很烦的问题：它这次能把活干完，但下次还是像第一次进仓库一样。测试命令要重讲，项目边界要重讲，你刚纠正过的写法和偏好也要重讲。
+
+当然可以自己搭一套 harness，把 prompt、脚本、知识库和日志都管起来。只是这件事太费劲了。`csep` 不要求你自己维护一整套外部流程，它直接接进 Codex 的生命周期，让 Codex 在真实使用里慢慢攒经验。
+
+Codex Self-Evolution Plugin，简称 `csep`。它在 `SessionStart` 时把稳定背景注入 Codex 上下文；在 `Stop` 时归档 transcript；遇到值得沉淀的 session，再开一个后台 reflection worker，把经验写成 memory 或 `csep-reflect-*` skill。历史 session 会进本地 SQLite/FTS，之后可以用 `csep recall` 找回来。
+
+它不是聊天记录备份工具。备份只能让你回看过去；`csep` 更关心下一次 Codex 能不能少问两句，少猜一点，少重复犯同一个错。
+
+![Codex Self-Evolution data flow](docs/assets/readme-csep-data-flow.png)
+
+图里只有三条线：`SessionStart` 读 memory，`Stop` 归档 session，触发后再由 reflection worker 写 memory 和 skill。
+
+## 为什么需要它
+
+用了几天 Codex 后，真正消耗人的往往不是大问题，而是这些重复的小事：
+
+- 这个仓库该怎么跑测试。
+- 这个用户不喜欢什么风格。
+- 哪些文件不能碰。
+- 上次已经验证过什么方案。
+- 某类任务应该用哪个工具、哪条命令。
+- 哪些纠正值得变成长期规则或 skill。
+
+`csep` 把这些经验留在本机。下次 Codex session 开始时，它们会先进入上下文；需要查旧 session 时，再用 `csep recall` 翻出来。
+
+## 它做什么
+
+| 能力 | 写入时机 | 下一次如何使用 |
 | --- | --- | --- |
-| Memory | Stop hook 触发 session reflection，child thread 按规则写入 `USER.md` / `MEMORY.md` | 下一次 `SessionStart` 注入 stable background |
-| Skill | 同一轮 session reflection 可写入 `~/.codex/skills/csep-reflect-*` | Codex 原生 skills loader 自动加载 |
-| Session Recall | Stop hook 归档 transcript 到本机 SQLite/FTS | `csep recall` / `csep recall --recent` 按 repo 或全局召回 |
+| Stable Memory | 达到 trigger 条件后，由 session reflection 写入 `USER.md` / `MEMORY.md` | `SessionStart` 自动注入 Codex 上下文 |
+| Session Recall | `Stop` hook 把 transcript 归档到本地 SQLite/FTS | `csep recall "..."` 按当前 repo 或全局检索历史片段 |
+| Reflection Skills | reflection worker 写入 `~/.codex/skills/csep-reflect-*` | Codex 原生 skills loader 自动加载 |
+| Runtime Status | hooks、配置、日志、reflection job、recall DB 都可只读检查 | `csep status` 排查当前运行状态 |
 
-核心闭环：
+每次 `Stop` 都会归档 session，但 reflection 只在计数或高信号命中后运行。
 
-```text
-SessionStart 注入 memory + recall 使用说明
-  -> Codex 正常工作
-  -> Stop 归档 transcript
-  -> session 级触发规则判断是否需要 reflection
-  -> 后台通过 Codex app-server fork 当前 thread
-  -> child 写 memory / csep-reflect-* skill / receipt
-  -> parent 校验 receipt 和写入边界
-  -> 下一次 Codex 会话读取更新后的上下文
+## 设计原则
+
+- 状态默认放在 `~/.codex-self-evolution/`，不写进业务仓库。
+- `SessionStart` / `Stop` hook 失败时尽量放行，不拖垮 Codex 正常工作。
+- 每次 `Stop` 都会归档 session，但 reflection 不是每次都跑；只有计数或高信号命中后才 fork worker。
+- reflection worker 写完必须留下 `receipt.json`，父进程会校验路径、hash 和 skill 命名空间。
+- memory 写在当前 repo bucket；生成 skill 只允许落到 `csep-reflect-*`，不碰用户已有 skill。
+- 核心包只用 Python stdlib，尽量减少安装、升级和 hook 执行时的变量。
+
+## 安装和启用
+
+需要本机已经有 Codex CLI，并且 Codex 支持 `plugins` / `hooks` / `plugin_hooks`。
+
+推荐路径：
+
+```bash
+uvx csep setup
 ```
 
-## 安装
+这条命令会安装 `csep` CLI，把本仓库注册为 Codex plugin marketplace，并打开 `~/.codex/config.toml` 里的插件开关。装完后新开一个 Codex session，插件就会跟着生命周期 hook 运行。
 
-前置依赖：
+没有 `uv` 的话，先装 `uv`，再跑同一条 setup：
 
 ```bash
 brew install uv
+uvx csep setup
 ```
 
-安装本地 CLI，并刷新 Codex plugin cache：
+也可以直接跑安装脚本：
 
 ```bash
-git clone https://github.com/T0UGH/codex-self-evolution-plugin.git
-cd codex-self-evolution-plugin
-
-mkdir -p ~/.codex-self-evolution
-cp .env.provider.example ~/.codex-self-evolution/.env.provider
-
-scripts/install.sh
+curl -fsSL https://raw.githubusercontent.com/T0UGH/codex-self-evolution-plugin/main/scripts/setup.sh | bash
 ```
 
-`scripts/install.sh` 会做这些事：
-
-- 用 `uv tool install --force <当前仓库>` 安装主命令 `csep` 和兼容命令 `codex-self-evolution`
-- 刷新 `~/.codex/plugins/cache/codex-self-evolution/...`
-- 清理旧版 marker-managed `~/.codex/hooks.json` 注入项
-- 不再向 `~/.codex/hooks.json` 写入新 hook
-
-## 启用 Codex Plugin Hooks
-
-如果你的 Codex CLI 已支持 `plugin_hooks`，在 `~/.codex/config.toml` 中启用：
-
-```toml
-[features]
-plugins = true
-hooks = true
-plugin_hooks = true
-
-[plugins."codex-self-evolution@codex-self-evolution"]
-enabled = true
-```
-
-插件 hook 定义位于：
-
-```text
-plugins/codex-self-evolution/.codex-plugin/plugin.json
-plugins/codex-self-evolution/.codex-plugin/hooks.json
-```
-
-启用后，Codex 生命周期会调用：
-
-```text
-SessionStart -> csep session-start --from-stdin
-Stop         -> csep session-stop --from-stdin
-```
-
-## 快速检查
-
-查看只读状态：
+检查当前状态：
 
 ```bash
 csep status | python3 -m json.tool
 ```
 
-重点看：
+重点看 `plugin_hooks.manifest_exists`、`plugin_hooks.session_start_declared`、`plugin_hooks.stop_declared` 是否为 `true`。之后每次 `SessionStart` 会注入 memory，每次 `Stop` 会归档 transcript；reflection 只在触发条件满足时后台运行。
 
-| 字段 | 期望 |
-| --- | --- |
-| `plugin_hooks.manifest_exists` | `true` |
-| `plugin_hooks.hooks_file_exists` | `true` |
-| `plugin_hooks.session_start_declared` | `true` |
-| `plugin_hooks.stop_declared` | `true` |
-| `plugin_hooks.uses_local_cli` | `true` |
-| `session_reflection.latest.status` | 有任务时为 `succeeded` / `failed` / `skipped` |
-| `session_recall.enabled` | `true` |
-
-查看或初始化配置：
+想确认 recall 已经有数据，可以跑：
 
 ```bash
-csep config path
-csep config init
-csep config show | python3 -m json.tool
-csep config validate
-```
-
-默认配置只包含当前系统需要的段：
-
-```toml
-[session_reflection]
-enabled = true
-backend = "codex-app-server"
-model = "gpt-5.3-codex-spark"
-skill_prefix = "csep-reflect-"
-
-[session_reflection.trigger]
-memory_stop_interval = 3
-memory_context_chars = 16000
-skill_tool_call_interval = 15
-high_signal_immediate = true
-skill_generation_mode = "one_shot_active"
-
-[session_recall]
-enabled = true
-stop_hook_archive = true
-```
-
-## Session Reflection
-
-`session-stop --from-stdin` 会做三件事：
-
-1. 归档当前 Codex transcript，供 session recall 使用。
-2. 按当前 session 的本地计数器和高信号关键词判断是否需要 reflection。
-3. 如果需要，创建后台 job，并快速返回 `{"continue": true}`。
-
-触发规则是 session 级别，不是全局计数。默认策略：
-
-| 规则 | 默认 |
-| --- | --- |
-| memory nudge | 每 3 次 Stop 或上下文增量达到 `memory_context_chars` |
-| skill nudge | 每 15 次工具调用 |
-| high-signal | 命中 correction / handoff / memory / skill 等关键词可立即触发 |
-| active job guard | 同一父 session 有活跃 job 时只归档，不递归 fork |
-
-查看 reflection 状态：
-
-```bash
-csep session-reflect --status | python3 -m json.tool
-```
-
-常见排查文件：
-
-```text
-~/.codex-self-evolution/session_reflection/latest.json
-~/.codex-self-evolution/session_reflection/runs/<job_id>/receipt.json
-~/.codex-self-evolution/session_reflection/runs/<job_id>/validation.json
-/tmp/codex-self-evolution/session-reflect-*.log
-```
-
-## Session Recall
-
-Stop hook 会把 session transcript 归档到本机 SQLite/FTS。召回默认按当前 repo 范围检索；同一个 git common dir 下的多个 worktree 视为同一个 repo。
-
-```bash
-csep recall "这个仓库之前 phase2 hooks 怎么设计的"
 csep recall --recent
-csep recall "hermes OR recall" --global
-csep recall "focused query" --format json
 ```
 
-手动归档或回填历史会话：
+安装、验证和排障细节见 [docs/getting-started.md](docs/getting-started.md)。
 
-```bash
-csep session-archive --transcript-path /path/to/session.jsonl --cwd /path/to/repo --session-id <id>
-csep session-ingest --backfill --root ~/.codex/sessions
-```
+## 常用命令
+
+日常使用基本只会碰到这几条：
+
+| 命令 | 用途 |
+| --- | --- |
+| `csep setup` | 安装 CLI、注册 Codex plugin marketplace、启用 plugin hooks |
+| `csep status` | 看插件、hook、reflection、recall 当前是否正常 |
+| `csep config path` / `show` / `validate` | 查看配置路径、当前配置和校验结果 |
+| `csep recall "..."` | 在当前 repo 的历史 session 里找上下文 |
+| `csep recall --recent` | 看当前 repo 最近归档了哪些 session |
+| `csep session-reflect --status` | reflection 没按预期运行时再看 |
+
+`session-start`、`session-stop`、`session-archive`、`session-ingest` 主要给 hook、排障和历史回填使用。完整列表见 [docs/getting-started.md](docs/getting-started.md)。
+
+## 性能和运行方式
+
+`SessionStart` / `Stop` 前台只做轻量文件读写、归档触发和状态判断；模型 reflection 在后台运行，不阻塞 Codex 正常退出。
+
+这台机器 2026-05-15 的本地日志里，最近 100 次以内的前台 hook 大致是这个量级：
+
+| 路径 | median | p95 |
+| --- | --- | --- |
+| `session-start` | 26ms | 51ms |
+| `session-stop` | 15ms | 33ms |
+
+`session-reflect` 是后台模型任务，耗时通常按几十秒到几分钟看，不在 Codex Stop 前台等待。
 
 ## 运行时目录
 
@@ -209,24 +149,46 @@ csep session-ingest --backfill --root ~/.codex/sessions
             └── MEMORY.md
 ```
 
-每个 repo 会按绝对路径分配独立 bucket，不会把运行时产物写进业务代码仓库。
+每个 repo 会按绝对路径分配独立 bucket。业务仓库保持干净，运行时状态留在用户 home 目录。
 
-## CLI 命令
+## 安全边界
 
-| 命令 | 说明 |
-| --- | --- |
-| `csep session-start --from-stdin` | Codex SessionStart hook 入口。 |
-| `csep session-stop --from-stdin` | Codex Stop hook 入口：归档 session，评估触发规则，必要时创建 reflection job。 |
-| `csep session-reflect --status` | 查看 session reflection 最新 job、全局锁和触发器状态。 |
-| `csep session-reflect --hook-payload <file>` | 用保存的 Stop payload 手动创建并执行 reflection job。 |
-| `csep status` | 输出只读诊断快照。 |
-| `csep config show/init/validate/path` | 管理本地 `config.toml`。 |
-| `csep migrate-worktrees` | 合并同一个 git common dir 下的历史 bucket。 |
-| `csep recall "..."` | 面向模型使用的 session recall wrapper，默认 repo scope。 |
-| `csep recall --recent` | 返回当前 repo 最近归档的 session。 |
-| `csep recall "..." --global` | 跨 repo/worktree 检索 session recall。 |
-| `csep session-archive --transcript-path ... --cwd ... --session-id ...` | 手动归档一份 Codex transcript。 |
-| `csep session-ingest --backfill` | 回填历史 Codex session transcript。 |
+`csep` 会让后台 reflection worker 读取当前 session，并写入本机文件。这里的边界要说清楚：
+
+- provider secret 不进仓库，密钥放在 `~/.codex-self-evolution/.env.provider`。
+- runtime state 不写进业务仓库。
+- `csep-reflect-*` 之外的 skill 不会被当作有效产物。
+- child thread 的口头声明不算数，父进程只认 `receipt.json` 和校验结果。
+- hook 前台不做长耗时工作，避免影响 Codex 正常退出。
+
+## 边界 / 不做什么
+
+- 不是云端记忆服务。
+- 不是团队知识库。
+- 不是通用 agent framework。
+- 不是旧的 reviewer / compiler / scheduler pipeline。
+
+它只做一件事：让你本机上的 Codex session 形成可验证、可召回、能继续积累的学习闭环。
+
+## 当前状态
+
+能用的部分：
+
+- Codex 启动时自动注入历史背景。
+- Codex 停止时自动归档当前 session。
+- 达到触发条件后，后台 reflection 会评估是否写入 memory 或 skill。
+- memory 写入有 `receipt.json` 和父进程边界校验。
+- 生成 skill 只允许使用 `csep-reflect-*` 前缀。
+- `csep recall` 可以查回当前 repo 的历史 session。
+- 同一仓库的多个 worktree 会尽量共享同一份 repo 记忆。
+- `csep status` / `csep config` 提供只读排障入口。
+
+还在打磨：
+
+- first-run onboarding
+- reflection 质量评估
+- README 图示和演示素材
+- Claude Code / Cursor 等其他客户端适配
 
 ## 开发
 
@@ -236,46 +198,22 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -q
 ```
 
-也可以使用 Makefile：
+也可以使用当前仓库的 `uv` 环境：
 
 ```bash
-make test PYTHON=.venv/bin/python
+uv run pytest -q
+uv run python -m build
+uv run twine check dist/*
 ```
-
-构建发布包：
-
-```bash
-uvx --from build pyproject-build
-```
-
-## 当前状态
-
-已经可用：
-
-- Codex-first `SessionStart` / `Stop` 生命周期接入
-- session 级 trigger counters
-- app-server fork reflection
-- memory 写入与 receipt 边界校验
-- `csep-reflect-*` skill 写入与前缀保护
-- SQLite/FTS session recall
-- worktree-aware repo scope
-- 只读 status / config / migration 工具
-
-仍在演进：
-
-- Codex CLI plugin hooks 的正式发布版本兼容
-- first-run onboarding
-- reflection 质量评估
-- Claude Code / Cursor 等其他客户端适配
 
 ## 文档
 
 | 文档 | 内容 |
 | --- | --- |
-| [docs/getting-started.md](docs/getting-started.md) | 本机安装、启用、验证和排障。 |
-| [docs/2026-05-15-memory-skill-session-recall-architecture.html](docs/2026-05-15-memory-skill-session-recall-architecture.html) | Memory / Skill / Session Recall 三条线架构图。 |
-| [docs/superpowers/specs/2026-05-15-session-reflection-trigger-policy-design.md](docs/superpowers/specs/2026-05-15-session-reflection-trigger-policy-design.md) | session reflection trigger policy 设计。 |
-| [docs/superpowers/specs/2026-05-15-legacy-review-compile-synthesis-removal-design.md](docs/superpowers/specs/2026-05-15-legacy-review-compile-synthesis-removal-design.md) | 本轮系统收敛设计。 |
+| [docs/getting-started.md](docs/getting-started.md) | 本机安装、启用、验证和排障 |
+| [docs/architecture.md](docs/architecture.md) | 当前 Memory / Reflection Skills / Session Recall 总架构 |
+| [docs/session-reflection.md](docs/session-reflection.md) | session reflection worker、trigger policy 和写入边界 |
+| [docs/session-recall.md](docs/session-recall.md) | SQLite/FTS session recall 的写入、检索和边界 |
 
 ## License
 

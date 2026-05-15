@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 from io import StringIO
 from pathlib import Path
@@ -145,3 +146,67 @@ def test_csep_session_stop_from_stdin_spawns_csep_worker(monkeypatch, capsys):
         "codex_self_evolution.csep",
         "session-reflect",
     ]
+
+
+def test_csep_setup_installs_marketplace_and_enables_config(tmp_path, monkeypatch, capsys):
+    """Setup is the one-command path for normal plugin installation."""
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(csep.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(csep.subprocess, "run", fake_run)
+    config_path = tmp_path / "config.toml"
+
+    exit_code = csep.main([
+        "setup",
+        "--package",
+        "csep==1.0.0",
+        "--marketplace-source",
+        "T0UGH/codex-self-evolution-plugin",
+        "--codex-config",
+        str(config_path),
+    ])
+
+    assert exit_code == 0
+    assert calls == [
+        ["uv", "tool", "install", "--force", "--reinstall", "--refresh", "csep==1.0.0"],
+        ["codex", "plugin", "marketplace", "add", "T0UGH/codex-self-evolution-plugin"],
+    ]
+    text = config_path.read_text(encoding="utf-8")
+    assert "[features]" in text
+    assert "plugins = true" in text
+    assert "hooks = true" in text
+    assert "plugin_hooks = true" in text
+    assert '[plugins."codex-self-evolution@codex-self-evolution"]' in text
+    assert "enabled = true" in text
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "ok"
+
+
+def test_setup_config_upsert_is_idempotent(tmp_path):
+    """Config setup updates existing tables instead of appending duplicates."""
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[features]
+plugins = false
+
+[plugins."codex-self-evolution@codex-self-evolution"]
+enabled = false
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    assert csep._enable_codex_plugin_config(config_path) is True
+    first = config_path.read_text(encoding="utf-8")
+    assert csep._enable_codex_plugin_config(config_path) is False
+    assert config_path.read_text(encoding="utf-8") == first
+    assert first.count("[features]") == 1
+    assert first.count('[plugins."codex-self-evolution@codex-self-evolution"]') == 1
+    assert "plugins = true" in first
+    assert "hooks = true" in first
+    assert "plugin_hooks = true" in first
+    assert "enabled = true" in first

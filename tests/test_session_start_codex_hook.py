@@ -1,8 +1,8 @@
 """Codex SessionStart hook wiring: format helper + --from-stdin CLI path.
 
-P0-0 research (see docs/todo.md 2026-04-21) confirmed codex-cli 0.122.0
-honors ``hookSpecificOutput.additionalContext`` as ``DeveloperInstructions``
-injected into the session. These tests lock in:
+Local verification against codex-cli 0.122.0 confirmed that
+``hookSpecificOutput.additionalContext`` is injected as
+``DeveloperInstructions``. These tests lock in:
 
 1. The ``format_session_start_for_codex`` helper produces the exact JSON
    shape Codex expects — a regression here means ``additionalContext``

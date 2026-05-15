@@ -163,3 +163,9 @@ def test_install_codex_hook_script_is_compatibility_wrapper():
     text = (ROOT / "scripts" / "install-codex-hook.sh").read_text(encoding="utf-8")
     assert 'exec "$REPO/scripts/install.sh" "$@"' in text
     assert "upserting Stop + SessionStart hooks" not in text
+
+
+def test_setup_script_delegates_to_uvx_setup():
+    text = (ROOT / "scripts" / "setup.sh").read_text(encoding="utf-8")
+    assert "uvx csep setup" in text
+    assert "git clone" not in text

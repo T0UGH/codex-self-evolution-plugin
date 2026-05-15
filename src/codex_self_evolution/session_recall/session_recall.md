@@ -21,7 +21,7 @@ Generate one focused query that says what prior context you need, then run:
 
 If `csep` is not on PATH, fall back to:
 
-`uvx --from codex-self-evolution-plugin csep recall "<focused query>"`
+`uvx csep recall "<focused query>"`
 
 Use the user's wording plus the current repo/task shape to form the focused query. Do not pass vague phrases like "continue this" when you can name the concrete topic.
 

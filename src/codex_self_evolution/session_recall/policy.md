@@ -8,7 +8,7 @@ Command:
 
 If `csep` is not on PATH, use:
 
-`uvx --from codex-self-evolution-plugin csep recall "<focused query>"`
+`uvx csep recall "<focused query>"`
 
 Generate the focused query yourself. Prefer a concrete topic over the user's vague continuation wording.
 

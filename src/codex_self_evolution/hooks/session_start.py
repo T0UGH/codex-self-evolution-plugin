@@ -64,9 +64,8 @@ def format_session_start_for_codex(session_result: dict[str, Any]) -> dict[str, 
 
     the ``additionalContext`` string is injected into the session as a
     ``DeveloperInstructions`` message. Verified against codex-cli 0.122.0
-    (2026-04-20 release); see ``docs/todo.md`` 2026-04-21 P0-0 entry for
-    the research trail and gotchas. Docs previously claimed this field was
-    "parsed but not supported" — that caveat is stale.
+    (2026-04-20 release). Older project notes claimed this field was
+    "parsed but not supported"; that caveat is stale.
 
     Per-repo memory stays per-repo because ``cwd`` routes ``session_start()``
     to ``~/.codex-self-evolution/projects/<mangled-cwd>/`` automatically via

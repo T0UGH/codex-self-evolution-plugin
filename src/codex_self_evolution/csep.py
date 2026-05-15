@@ -4,6 +4,8 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -65,6 +67,25 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--state-dir")
     ingest.add_argument("--since-days", type=int)
     ingest.add_argument("--limit-files", type=int)
+
+    setup = subparsers.add_parser("setup", help="Install and enable the Codex plugin for this machine.")
+    setup.add_argument(
+        "--package",
+        default=os.environ.get("CSEP_INSTALL_SOURCE", "csep"),
+        help="Package or local path passed to `uv tool install`. Defaults to the PyPI package.",
+    )
+    setup.add_argument(
+        "--marketplace-source",
+        default="T0UGH/codex-self-evolution-plugin",
+        help="Source passed to `codex plugin marketplace add`.",
+    )
+    setup.add_argument(
+        "--codex-config",
+        default=None,
+        help="Path to Codex config.toml. Defaults to $CODEX_HOME/config.toml or ~/.codex/config.toml.",
+    )
+    setup.add_argument("--skip-tool-install", action="store_true", help="Do not run `uv tool install`.")
+    setup.add_argument("--skip-marketplace", action="store_true", help="Do not run `codex plugin marketplace add`.")
     return parser
 
 
@@ -233,6 +254,118 @@ def _handle_session_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_setup(args: argparse.Namespace) -> int:
+    """Install the CLI, register the marketplace, and enable plugin hooks."""
+    if not args.skip_tool_install:
+        _require_command("uv")
+        _run_checked(["uv", "tool", "install", "--force", "--reinstall", "--refresh", args.package])
+    if not args.skip_marketplace:
+        _require_command("codex")
+        _run_checked(["codex", "plugin", "marketplace", "add", args.marketplace_source], prefer_system_git=True)
+    config_path = Path(args.codex_config).expanduser() if args.codex_config else _default_codex_config_path()
+    changed = _enable_codex_plugin_config(config_path)
+    print(json.dumps({
+        "status": "ok",
+        "codex_config": str(config_path),
+        "config_changed": changed,
+        "plugin": "codex-self-evolution@codex-self-evolution",
+        "next": "Start a new Codex session, then run `csep status` if you want to verify.",
+    }, indent=2, sort_keys=True))
+    return 0
+
+
+def _require_command(name: str) -> None:
+    """Raise a user-facing error when a required command is missing."""
+    if shutil.which(name) is None:
+        raise SystemExit(f"`{name}` not found on PATH")
+
+
+def _run_checked(argv: list[str], *, prefer_system_git: bool = False) -> None:
+    """Run a setup subprocess and surface stdout/stderr on failure."""
+    env = os.environ.copy()
+    if prefer_system_git:
+        env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin:" + env.get("PATH", "")
+    proc = subprocess.run(argv, text=True, capture_output=True, env=env, check=False)
+    if proc.returncode != 0:
+        message = proc.stderr.strip() or proc.stdout.strip() or f"{argv[0]} failed"
+        raise SystemExit(message)
+    if proc.stdout.strip():
+        print(proc.stdout.strip())
+
+
+def _default_codex_config_path() -> Path:
+    """Return the default Codex config path used by setup."""
+    codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
+    return codex_home / "config.toml"
+
+
+def _enable_codex_plugin_config(path: Path) -> bool:
+    """Enable CSEP plugin feature flags in Codex config.toml."""
+    before = path.read_text(encoding="utf-8") if path.exists() else ""
+    lines = before.splitlines()
+    lines = _upsert_toml_bool_table(
+        lines,
+        "[features]",
+        {"plugins": True, "hooks": True, "plugin_hooks": True},
+    )
+    lines = _upsert_toml_bool_table(
+        lines,
+        '[plugins."codex-self-evolution@codex-self-evolution"]',
+        {"enabled": True},
+    )
+    after = "\n".join(lines).rstrip() + "\n"
+    if after == before:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(after, encoding="utf-8")
+    return True
+
+
+def _upsert_toml_bool_table(lines: list[str], header: str, values: dict[str, bool]) -> list[str]:
+    """Return TOML lines with simple boolean keys upserted in one table."""
+    start = _find_toml_table(lines, header)
+    if start is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(header)
+        for key, value in values.items():
+            lines.append(f"{key} = {str(value).lower()}")
+        return lines
+
+    end = _next_toml_table(lines, start + 1)
+    existing = {key: False for key in values}
+    updated = list(lines)
+    for index in range(start + 1, end):
+        stripped = updated[index].strip()
+        for key, value in values.items():
+            if stripped.startswith(f"{key} " ) or stripped.startswith(f"{key}="):
+                updated[index] = f"{key} = {str(value).lower()}"
+                existing[key] = True
+    insert_at = end
+    for key, value in values.items():
+        if not existing[key]:
+            updated.insert(insert_at, f"{key} = {str(value).lower()}")
+            insert_at += 1
+    return updated
+
+
+def _find_toml_table(lines: list[str], header: str) -> int | None:
+    """Return the index of an exact TOML table header."""
+    for index, line in enumerate(lines):
+        if line.strip() == header:
+            return index
+    return None
+
+
+def _next_toml_table(lines: list[str], start: int) -> int:
+    """Return the next TOML table index or the end of the file."""
+    for index in range(start, len(lines)):
+        stripped = lines[index].strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            return index
+    return len(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -244,6 +377,8 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_session_archive(args)
     if args.command == "session-ingest":
         return _handle_session_ingest(args)
+    if args.command == "setup":
+        return _handle_setup(args)
     parser.error(f"unknown command: {args.command}")
     return 2
 
