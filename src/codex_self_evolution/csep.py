@@ -51,6 +51,25 @@ def build_parser() -> argparse.ArgumentParser:
     recall.add_argument("--tool-message-chars", type=int, default=600)
     recall.add_argument("--current-session-id", default="")
     recall.add_argument("--format", choices=("markdown", "json"), default="markdown")
+    recall.add_argument(
+        "--bootstrap",
+        action="store_true",
+        help="Backfill historical Codex sessions into recall. Same as `csep recall bootstrap`.",
+    )
+    recall.add_argument(
+        "--root",
+        "--bootstrap-root",
+        dest="bootstrap_root",
+        help="Codex sessions root for recall bootstrap. Defaults to ~/.codex/sessions.",
+    )
+    recall.add_argument(
+        "--since-days",
+        type=int,
+        default=30,
+        help="Only bootstrap transcripts modified within this many days. Use --all-history to disable.",
+    )
+    recall.add_argument("--all-history", action="store_true", help="Bootstrap all historical transcripts.")
+    recall.add_argument("--limit-files", type=int, help="Limit how many transcript files bootstrap processes.")
 
     archive = subparsers.add_parser("session-archive", help="Archive one Codex session transcript into the local recall store.")
     archive.add_argument("--from-hook-payload")
@@ -180,6 +199,8 @@ def _handle_recall(args: argparse.Namespace) -> int:
     configure_logging()
     query = " ".join(args.query).strip()
     cwd = str(Path(args.cwd or os.getcwd()).expanduser().resolve())
+    if _is_recall_bootstrap(args, query):
+        return _handle_recall_bootstrap(args)
     if not query and not args.recent:
         raise SystemExit("csep recall requires a query unless --recent is used")
     try:
@@ -216,6 +237,53 @@ def _handle_recall(args: argparse.Namespace) -> int:
         print(render_focused_recall_markdown(result), end="")
     _log_recall(started, cwd=cwd, query=query, result=result, output_format=args.format, exit_code=0)
     return 0
+
+
+def _is_recall_bootstrap(args: argparse.Namespace, query: str) -> bool:
+    return bool(args.bootstrap) or (query == "bootstrap" and not args.recent)
+
+
+def _handle_recall_bootstrap(args: argparse.Namespace) -> int:
+    if args.recent:
+        raise SystemExit("csep recall bootstrap does not support --recent")
+    since_days = None if args.all_history else args.since_days
+    db_path = default_db_path(state_dir=args.state_dir)
+    result = backfill_sessions(
+        root=args.bootstrap_root,
+        cwd=args.cwd,
+        since_days=since_days,
+        limit_files=args.limit_files,
+        db_path=db_path,
+    )
+    result.update(
+        {
+            "command": "recall bootstrap",
+            "since_days": since_days,
+            "limit_files": args.limit_files,
+        }
+    )
+    if args.format == "json":
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(_render_recall_bootstrap_markdown(result), end="")
+    return 0
+
+
+def _render_recall_bootstrap_markdown(result: dict[str, Any]) -> str:
+    return (
+        "## Recall Bootstrap\n\n"
+        f"Status: {result.get('status')}\n"
+        f"Root: {result.get('root')}\n"
+        f"Since days: {result.get('since_days')}\n"
+        f"Limit files: {result.get('limit_files')}\n"
+        f"Processed files: {result.get('processed_files')}\n"
+        f"Processed successfully: {result.get('processed_successfully')}\n"
+        f"New sessions: {result.get('new_sessions')}\n"
+        f"Updated sessions: {result.get('updated_sessions')}\n"
+        f"Unchanged sessions: {result.get('unchanged_sessions')}\n"
+        f"Errors: {result.get('error_count')}\n"
+        f"DB: {result.get('db_path')}\n"
+    )
 
 
 def _handle_session_archive(args: argparse.Namespace) -> int:

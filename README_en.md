@@ -88,6 +88,20 @@ csep status | python3 -m json.tool
 
 Look for `plugin_hooks.manifest_exists`, `plugin_hooks.session_start_declared`, and `plugin_hooks.stop_declared` to be `true`. After that, every `SessionStart` injects memory, every `Stop` archives the transcript, and reflection runs in the background only when triggered.
 
+### First-Time History Bootstrap
+
+The `Stop` hook archives future Codex sessions automatically. On a fresh install, existing `~/.codex/sessions` history still needs a one-time bootstrap so the first `csep recall` can find old context:
+
+```bash
+csep recall bootstrap --since-days 30
+```
+
+Bootstrap imports transcripts newest-first and reports `new_sessions`, `updated_sessions`, `unchanged_sessions`, and `error_count`. To import all history:
+
+```bash
+csep recall bootstrap --all-history
+```
+
 To check whether recall has data:
 
 ```bash
@@ -107,9 +121,10 @@ Most day-to-day use only needs these commands:
 | `csep config path` / `show` / `validate` | Inspect config path, resolved config, and validation result |
 | `csep recall "..."` | Search prior sessions for the current repo |
 | `csep recall --recent` | List recently archived sessions for the current repo |
+| `csep recall bootstrap` | Backfill local Codex session history into the recall database |
 | `csep session-reflect --status` | Inspect reflection jobs when something looks wrong |
 
-`session-start`, `session-stop`, `session-archive`, and `session-ingest` are mainly for hooks, troubleshooting, and historical backfill. See [docs/getting-started.md](docs/getting-started.md) for the full command surface.
+`session-start`, `session-stop`, `session-archive`, and `session-ingest` are mainly for hooks and low-level troubleshooting. See [docs/getting-started.md](docs/getting-started.md) for the full command surface.
 
 ## Performance And Runtime Behavior
 

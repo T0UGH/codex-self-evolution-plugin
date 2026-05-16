@@ -88,6 +88,20 @@ csep status | python3 -m json.tool
 
 重点看 `plugin_hooks.manifest_exists`、`plugin_hooks.session_start_declared`、`plugin_hooks.stop_declared` 是否为 `true`。之后每次 `SessionStart` 会注入 memory，每次 `Stop` 会归档 transcript；reflection 只在触发条件满足时后台运行。
 
+### 首次回填历史
+
+`Stop` hook 会自动归档以后发生的 Codex session；如果是新安装，而本机已经有 `~/.codex/sessions` 历史对话，先做一次 bootstrap，避免第一次 `csep recall` 搜不到旧上下文：
+
+```bash
+csep recall bootstrap --since-days 30
+```
+
+它会按 transcript 修改时间从新到旧导入，并输出 `new_sessions`、`updated_sessions`、`unchanged_sessions` 和 `error_count`。需要回填全部历史时：
+
+```bash
+csep recall bootstrap --all-history
+```
+
 想确认 recall 已经有数据，可以跑：
 
 ```bash
@@ -107,9 +121,10 @@ csep recall --recent
 | `csep config path` / `show` / `validate` | 查看配置路径、当前配置和校验结果 |
 | `csep recall "..."` | 在当前 repo 的历史 session 里找上下文 |
 | `csep recall --recent` | 看当前 repo 最近归档了哪些 session |
+| `csep recall bootstrap` | 把本机历史 Codex sessions 回填进 recall 数据库 |
 | `csep session-reflect --status` | reflection 没按预期运行时再看 |
 
-`session-start`、`session-stop`、`session-archive`、`session-ingest` 主要给 hook、排障和历史回填使用。完整列表见 [docs/getting-started.md](docs/getting-started.md)。
+`session-start`、`session-stop`、`session-archive`、`session-ingest` 主要给 hook 和底层排障使用。完整列表见 [docs/getting-started.md](docs/getting-started.md)。
 
 ## 性能和运行方式
 

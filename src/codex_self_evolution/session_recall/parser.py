@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -68,12 +69,16 @@ def parse_codex_jsonl(path: str | Path, *, session_id: str = "", cwd: str = "") 
         )
 
     repo_meta = collect_repo_metadata(resolved_cwd)
+    source_updated_at = _source_updated_at(session_path)
+    metadata = {**session_meta, **repo_meta}
+    if source_updated_at:
+        metadata.setdefault("source_updated_at", source_updated_at)
     return ParsedSession(
         session_id=resolved_session_id,
         session_path=session_path,
         cwd=repo_meta["cwd"],
         messages=messages,
-        metadata={**session_meta, **repo_meta},
+        metadata=metadata,
     )
 
 
@@ -168,3 +173,12 @@ def _message_uid(entry: dict[str, Any], raw_line: str, session_id: str) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return hashlib.sha256(f"{session_id}\n{raw_line}".encode("utf-8")).hexdigest()
+
+
+def _source_updated_at(path: Path) -> str:
+    """Return the source transcript mtime as a stable UTC string."""
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return ""
+    return datetime.fromtimestamp(mtime, UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")

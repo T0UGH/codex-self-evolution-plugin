@@ -25,7 +25,7 @@ Session recall 负责把过去 Codex session 中的具体上下文找回来。�
 | --- | --- |
 | `csep session-stop --from-stdin` | Stop hook 中后台归档当前 transcript |
 | `csep session-archive --transcript-path ...` | 手动归档单个 transcript |
-| `csep session-ingest --backfill --root ~/.codex/sessions` | 回填历史 Codex sessions |
+| `csep recall bootstrap --root ~/.codex/sessions` | 回填历史 Codex sessions |
 
 归档时会解析 transcript 中的 messages，并记录：
 
@@ -46,6 +46,7 @@ Session recall 负责把过去 Codex session 中的具体上下文找回来。�
 ```bash
 csep recall "这个仓库之前 trigger policy 怎么设计的"
 csep recall --recent
+csep recall bootstrap --since-days 30
 csep recall "session reflection" --global
 ```
 
@@ -62,6 +63,15 @@ csep recall "session reflection" --global
 | `--message-chars` | `1200` | 普通消息截断预算 |
 | `--tool-message-chars` | `600` | 工具消息截断预算 |
 | `--format` | `markdown` | 可选 `json` |
+
+历史回填参数：
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `--root` | `~/.codex/sessions` | Codex 历史 transcript 根目录 |
+| `--since-days` | `30` | 只回填最近多少天修改过的 transcript |
+| `--all-history` | `false` | 不按时间截断，回填全部历史 |
+| `--limit-files` | 无 | 限制处理文件数，按 transcript mtime 最新优先 |
 
 ## SessionStart 注入
 
@@ -130,5 +140,5 @@ csep session-archive \
 回填最近 14 天：
 
 ```bash
-csep session-ingest --backfill --root ~/.codex/sessions --since-days 14
+csep recall bootstrap --root ~/.codex/sessions --since-days 14
 ```

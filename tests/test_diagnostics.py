@@ -273,6 +273,27 @@ def test_collect_status_includes_session_recall_counts(monkeypatch, tmp_path: Pa
     assert result["session_recall"]["session_count"] == 1
     assert result["session_recall"]["message_count"] == 1
     assert result["session_recall"]["ingest_error_count"] == 0
+    assert result["session_recall"]["ingest_error_count_total"] == 0
+    assert "history" in result["session_recall"]
+
+
+def test_status_recommends_backfill_when_history_exists_but_db_is_empty(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Status should make cold-start recall bootstrap discoverable."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda _: None)
+    sessions = tmp_path / "codex-sessions"
+    sessions.mkdir()
+    (sessions / "one.jsonl").write_text(json.dumps({"role": "user", "content": "history"}) + "\n", encoding="utf-8")
+    monkeypatch.setenv("CODEX_SESSIONS_ROOT", str(sessions))
+
+    result = collect_status(home=tmp_path / "home")
+
+    history = result["session_recall"]["history"]
+    assert history["jsonl_count"] == 1
+    assert history["backfill_recommended"] is True
+    assert "recall bootstrap" in history["suggested_command"]
 
 
 def test_cli_status_outputs_valid_json(tmp_path: Path, capsys, monkeypatch) -> None:

@@ -225,7 +225,7 @@ csep session-archive --transcript-path /path/to/session.jsonl --cwd /path/to/rep
 回填历史 Codex sessions：
 
 ```bash
-csep session-ingest --backfill --root ~/.codex/sessions --since-days 14
+csep recall bootstrap --root ~/.codex/sessions --since-days 14
 ```
 
 ## 8. 常见问题
@@ -285,7 +285,7 @@ csep status | python3 -m json.tool
 如果是新安装，先跑几次真实 Codex 会话，或者手动回填：
 
 ```bash
-csep session-ingest --backfill --root ~/.codex/sessions --limit-files 50
+csep recall bootstrap --root ~/.codex/sessions --limit-files 50
 ```
 
 ### 想重置本地状态

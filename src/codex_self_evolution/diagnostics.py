@@ -164,12 +164,19 @@ def _check_session_recall(home: str | Path | None = None) -> dict[str, Any]:
             "session_count": 0,
             "message_count": 0,
             "ingest_error_count": 0,
+            "ingest_error_count_total": 0,
             "latest_error": None,
+            "latest_ingest_run": None,
+            "history": _check_codex_session_history(session_count=0),
         }
     try:
         store = SessionRecallStore(db_path)
         try:
-            return store.stats()
+            stats = store.stats()
+            stats["history"] = _check_codex_session_history(
+                session_count=int(stats.get("session_count") or 0),
+            )
+            return stats
         finally:
             store.close()
     except Exception as exc:  # noqa: BLE001 - status must never crash.
@@ -178,6 +185,30 @@ def _check_session_recall(home: str | Path | None = None) -> dict[str, Any]:
             "db_path": str(db_path),
             "error": f"{type(exc).__name__}: {exc}",
         }
+
+
+def _check_codex_session_history(*, session_count: int) -> dict[str, Any]:
+    root = Path(os.environ.get("CODEX_SESSIONS_ROOT") or Path.home() / ".codex" / "sessions").expanduser()
+    result: dict[str, Any] = {
+        "root": str(root),
+        "exists": root.exists(),
+        "jsonl_count": 0,
+        "backfill_recommended": False,
+        "suggested_command": None,
+        "error": None,
+    }
+    if not root.exists():
+        return result
+    try:
+        jsonl_count = sum(1 for _ in root.rglob("*.jsonl"))
+    except OSError as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+    result["jsonl_count"] = jsonl_count
+    result["backfill_recommended"] = jsonl_count > 0 and session_count < min(jsonl_count, 10)
+    if result["backfill_recommended"]:
+        result["suggested_command"] = f"csep recall bootstrap --root {root} --since-days 30"
+    return result
 
 
 # ---------- .env.provider key presence ----------------------------------

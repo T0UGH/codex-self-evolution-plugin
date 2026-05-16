@@ -93,35 +93,75 @@ def backfill_sessions(
     db_path: str | Path | None = None,
 ) -> dict[str, Any]:
     root_path = Path(root).expanduser().resolve() if root else Path.home() / ".codex" / "sessions"
+    resolved_db_path = Path(db_path).expanduser().resolve() if db_path else default_db_path()
+    started_at = _utc_timestamp()
     cutoff = None
     if since_days is not None:
         cutoff = datetime.now(UTC) - timedelta(days=max(0, since_days))
-    files = sorted(root_path.rglob("*.jsonl")) if root_path.exists() else []
+    files = sorted(
+        root_path.rglob("*.jsonl"),
+        key=lambda path: (_file_mtime(path), str(path)),
+        reverse=True,
+    ) if root_path.exists() else []
     if cutoff is not None:
         files = [
             path for path in files
-            if datetime.fromtimestamp(path.stat().st_mtime, UTC) >= cutoff
+            if datetime.fromtimestamp(_file_mtime(path), UTC) >= cutoff
         ]
     if limit_files is not None:
         files = files[: max(0, limit_files)]
     processed = 0
-    archived = 0
+    successful = 0
+    new_sessions = 0
+    updated_sessions = 0
+    unchanged_sessions = 0
     errors = 0
     for path in files:
         processed += 1
         session_id = _session_id_from_filename(path)
-        result = archive_transcript(path, session_id=session_id, cwd=cwd or str(path.parent), db_path=db_path)
+        result = archive_transcript(path, session_id=session_id, cwd=cwd or str(path.parent), db_path=resolved_db_path)
         if result.get("status") == "archived":
-            archived += 1
+            successful += 1
+            if result.get("new_session"):
+                new_sessions += 1
+            elif result.get("updated_session"):
+                updated_sessions += 1
+            elif result.get("unchanged_session"):
+                unchanged_sessions += 1
         else:
             errors += 1
+    finished_at = _utc_timestamp()
+    store = SessionRecallStore(resolved_db_path)
+    try:
+        store.record_ingest_run(
+            source="backfill",
+            root=str(root_path),
+            since_days=since_days,
+            limit_files=limit_files,
+            processed_files=processed,
+            successful_files=successful,
+            new_sessions=new_sessions,
+            updated_sessions=updated_sessions,
+            unchanged_sessions=unchanged_sessions,
+            error_count=errors,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+    finally:
+        store.close()
     return {
         "status": "completed",
         "root": str(root_path),
         "processed_files": processed,
-        "archived_sessions": archived,
+        "processed_successfully": successful,
+        "archived_sessions": successful,
+        "new_sessions": new_sessions,
+        "updated_sessions": updated_sessions,
+        "unchanged_sessions": unchanged_sessions,
         "error_count": errors,
-        "db_path": str(db_path or default_db_path()),
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "db_path": str(resolved_db_path),
     }
 
 
@@ -131,3 +171,14 @@ def _session_id_from_filename(path: Path) -> str:
     if len(parts) >= 8:
         return "-".join(parts[-5:])
     return stem
+
+
+def _file_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")

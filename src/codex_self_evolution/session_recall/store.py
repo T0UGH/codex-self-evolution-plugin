@@ -59,6 +59,23 @@ CREATE TABLE IF NOT EXISTS ingest_errors (
     error TEXT,
     created_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS ingest_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT,
+    root TEXT,
+    since_days INTEGER,
+    limit_files INTEGER,
+    processed_files INTEGER DEFAULT 0,
+    successful_files INTEGER DEFAULT 0,
+    new_sessions INTEGER DEFAULT 0,
+    updated_sessions INTEGER DEFAULT 0,
+    unchanged_sessions INTEGER DEFAULT 0,
+    error_count INTEGER DEFAULT 0,
+    started_at TEXT,
+    finished_at TEXT,
+    metadata_json TEXT
+);
 """
 
 FTS_SQL = """
@@ -109,13 +126,15 @@ class SessionRecallStore:
         if not parsed.messages:
             raise ValueError("archive requires at least one readable message")
 
-        now = _utc_now()
+        archived_at = _utc_now()
         meta = parsed.metadata
         existing = self._conn.execute(
             "SELECT message_count FROM sessions WHERE session_id = ?",
             (parsed.session_id,),
         ).fetchone()
-        started_at = str(meta.get("timestamp") or meta.get("started_at") or now)
+        source_updated_at = str(meta.get("source_updated_at") or archived_at)
+        started_at = str(meta.get("timestamp") or meta.get("started_at") or source_updated_at)
+        metadata_json = json.dumps({**meta, "archived_at": archived_at}, ensure_ascii=False, sort_keys=True)
         self._conn.execute(
             """
             INSERT INTO sessions (
@@ -143,8 +162,8 @@ class SessionRecallStore:
                 str(meta.get("worktree_root") or parsed.cwd),
                 str(meta.get("git_branch") or ""),
                 started_at if existing is None else str(meta.get("started_at") or started_at),
-                now,
-                json.dumps(meta, ensure_ascii=False, sort_keys=True),
+                source_updated_at,
+                metadata_json,
             ),
         )
         inserted = 0
@@ -179,7 +198,7 @@ class SessionRecallStore:
         ).fetchone()["c"]
         self._conn.execute(
             "UPDATE sessions SET message_count = ?, updated_at = ? WHERE session_id = ?",
-            (count, now, parsed.session_id),
+            (count, source_updated_at, parsed.session_id),
         )
         fts_count = self._conn.execute(
             """
@@ -198,6 +217,11 @@ class SessionRecallStore:
             "session_id": parsed.session_id,
             "message_count": int(count),
             "inserted_messages": inserted,
+            "new_session": existing is None,
+            "updated_session": existing is not None and inserted > 0,
+            "unchanged_session": existing is not None and inserted == 0,
+            "source_updated_at": source_updated_at,
+            "archived_at": archived_at,
             "db_path": str(self.db_path),
         }
 
@@ -205,6 +229,49 @@ class SessionRecallStore:
         self._conn.execute(
             "INSERT INTO ingest_errors(source_path, session_id, cwd, error, created_at) VALUES (?, ?, ?, ?, ?)",
             (source_path, session_id, cwd, error, _utc_now()),
+        )
+        self._conn.commit()
+
+    def record_ingest_run(
+        self,
+        *,
+        source: str,
+        root: str,
+        since_days: int | None,
+        limit_files: int | None,
+        processed_files: int,
+        successful_files: int,
+        new_sessions: int,
+        updated_sessions: int,
+        unchanged_sessions: int,
+        error_count: int,
+        started_at: str,
+        finished_at: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO ingest_runs (
+                source, root, since_days, limit_files, processed_files, successful_files,
+                new_sessions, updated_sessions, unchanged_sessions, error_count,
+                started_at, finished_at, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                source,
+                root,
+                since_days,
+                limit_files,
+                processed_files,
+                successful_files,
+                new_sessions,
+                updated_sessions,
+                unchanged_sessions,
+                error_count,
+                started_at,
+                finished_at,
+                json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
+            ),
         )
         self._conn.commit()
 
@@ -296,10 +363,11 @@ class SessionRecallStore:
         rows = self._conn.execute(
             f"""
             SELECT session_id, session_path, cwd, repo_root, repo_fingerprint,
-                   worktree_root, git_branch, started_at, updated_at, message_count
+                   worktree_root, git_branch, started_at, updated_at, message_count,
+                   metadata_json
             FROM sessions
             {where_sql}
-            ORDER BY updated_at DESC
+            ORDER BY COALESCE(started_at, updated_at) DESC, updated_at DESC
             LIMIT ?
             """,
             [*params, max(1, limit)],
@@ -307,6 +375,9 @@ class SessionRecallStore:
         results = []
         for row in rows:
             item = dict(row)
+            metadata = _decode_json_object(str(item.pop("metadata_json") or ""))
+            item["source_updated_at"] = metadata.get("source_updated_at") or item["updated_at"]
+            item["archived_at"] = metadata.get("archived_at") or item["updated_at"]
             preview = self._conn.execute(
                 "SELECT role, content, tool_name FROM messages WHERE session_id = ? ORDER BY message_index LIMIT 1",
                 (item["session_id"],),
@@ -329,13 +400,25 @@ class SessionRecallStore:
         latest_error = self._conn.execute(
             "SELECT source_path, session_id, error, created_at FROM ingest_errors ORDER BY id DESC LIMIT 1"
         ).fetchone()
+        latest_run = self._conn.execute(
+            """
+            SELECT source, root, since_days, limit_files, processed_files, successful_files,
+                   new_sessions, updated_sessions, unchanged_sessions, error_count,
+                   started_at, finished_at
+            FROM ingest_runs
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
         return {
             "db_exists": True,
             "db_path": str(self.db_path),
             "session_count": int(session_count),
             "message_count": int(message_count),
             "ingest_error_count": int(error_count),
+            "ingest_error_count_total": int(error_count),
             "latest_error": dict(latest_error) if latest_error else None,
+            "latest_ingest_run": dict(latest_run) if latest_run else None,
         }
 
     def _message_window(self, session_id: str, message_index: int, *, before: int, after: int) -> list[dict[str, Any]]:
@@ -373,6 +456,14 @@ def _preview(row: dict[str, Any], limit: int = 160) -> str:
         content = content[: limit - 15].rstrip() + " [truncated]"
     prefix = f"{label}:{tool}" if tool else label
     return f"[{prefix}] {content}"
+
+
+def _decode_json_object(text: str) -> dict[str, Any]:
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _sanitize_fts5_query(query: str) -> str:

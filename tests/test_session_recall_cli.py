@@ -63,6 +63,45 @@ def test_csep_session_ingest_backfill(tmp_path, monkeypatch, capsys):
     assert out["processed_files"] == 1
 
 
+def test_csep_recall_bootstrap_backfills_history(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    root = tmp_path / "sessions"
+    root.mkdir()
+    (root / "one.jsonl").write_text(
+        json.dumps({"role": "user", "content": "formal bootstrap history"}) + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = csep.main(
+        [
+            "recall",
+            "bootstrap",
+            "--root",
+            str(root),
+            "--cwd",
+            str(repo),
+            "--limit-files",
+            "1",
+            "--format",
+            "json",
+        ]
+    )
+
+    assert exit_code == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["command"] == "recall bootstrap"
+    assert out["processed_files"] == 1
+    assert out["processed_successfully"] == 1
+    assert out["new_sessions"] == 1
+
+    assert csep.main(["recall", "formal bootstrap", "--cwd", str(repo)]) == 0
+    recall_out = capsys.readouterr().out
+    assert "Status: matched" in recall_out
+    assert "formal bootstrap history" in recall_out
+
+
 def test_csep_recall_budget_truncates(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
     repo = tmp_path / "repo"
@@ -76,4 +115,3 @@ def test_csep_recall_budget_truncates(tmp_path, monkeypatch, capsys):
     csep.main(["recall", "needle", "--cwd", str(repo), "--budget-chars", "220", "--message-chars", "80"])
     out = capsys.readouterr().out
     assert "[truncated:" in out
-

@@ -11,6 +11,8 @@ def _parsed_session(tmp_path, *, session_id="s1", repo_fingerprint="repo-a"):
             "repo_root": str(tmp_path),
             "worktree_root": str(tmp_path),
             "git_branch": "main",
+            "started_at": "2026-01-01T00:00:00Z",
+            "source_updated_at": "2026-01-01T00:00:01Z",
         },
         messages=[
             ParsedMessage(session_id, "m1", 0, "user", "hermes recall design", "{}"),
@@ -44,9 +46,12 @@ def test_store_archives_and_searches_messages(tmp_path):
     result = store.archive(parsed)
     assert result["status"] == "archived"
     assert result["message_count"] == 3
+    assert result["new_session"] is True
 
     again = store.archive(parsed)
     assert again["inserted_messages"] == 0
+    assert again["new_session"] is False
+    assert again["unchanged_session"] is True
 
     hits = store.search("hermes", repo_fingerprint="repo-a", limit=3)
     assert hits[0]["session_id"] == "s1"
@@ -118,3 +123,23 @@ def test_recent_defaults_to_repo_scope(tmp_path):
     assert {item["session_id"] for item in recent} == {"s1"}
     global_recent = store.recent(repo_fingerprint="repo-a", global_scope=True, limit=10)
     assert {item["session_id"] for item in global_recent} == {"s1", "s2"}
+
+
+def test_recent_orders_by_session_time_not_archive_time(tmp_path):
+    from codex_self_evolution.session_recall.store import SessionRecallStore
+
+    store = SessionRecallStore(tmp_path / "state.db")
+    newer = _parsed_session(tmp_path, session_id="newer", repo_fingerprint="repo-a")
+    newer.metadata["started_at"] = "2026-02-01T00:00:00Z"
+    newer.metadata["source_updated_at"] = "2026-02-01T00:00:01Z"
+    older = _parsed_session(tmp_path, session_id="older", repo_fingerprint="repo-a")
+    older.metadata["started_at"] = "2026-01-01T00:00:00Z"
+    older.metadata["source_updated_at"] = "2026-01-01T00:00:01Z"
+
+    store.archive(newer)
+    store.archive(older)
+
+    recent = store.recent(repo_fingerprint="repo-a", limit=2)
+    assert [item["session_id"] for item in recent] == ["newer", "older"]
+    assert recent[0]["source_updated_at"] == "2026-02-01T00:00:01Z"
+    assert recent[0]["archived_at"]
