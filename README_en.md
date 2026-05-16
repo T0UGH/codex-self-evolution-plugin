@@ -40,7 +40,7 @@ After a few days with Codex, the real drag is usually not the big task. It is th
 | Capability | When it writes | How the next session uses it |
 | --- | --- | --- |
 | Stable Memory | After the trigger policy fires, session reflection writes `USER.md` / `MEMORY.md` | `SessionStart` injects it into Codex context |
-| Session Recall | The `Stop` hook archives transcripts into local SQLite/FTS | `csep recall "..."` searches past sessions by repo or globally |
+| Session Recall | The `Stop` hook archives transcripts into local SQLite/FTS, and the bundled `csep-session-recall` skill teaches Codex how to search | `csep recall "needle1|needle2"` searches historical evidence like `rg`, scoped to the current repo unless `--global` is explicit |
 | Reflection Skills | The reflection worker writes `~/.codex/skills/csep-reflect-*` | Codex loads them through the native skills loader |
 | Runtime Status | Hooks, config, logs, reflection jobs, and recall DB are read-only inspectable | `csep status` shows the current runtime state |
 
@@ -119,10 +119,12 @@ Most day-to-day use only needs these commands:
 | `csep setup` | Install the CLI, register the Codex plugin marketplace source, and enable plugin hooks |
 | `csep status` | Inspect plugin, hook, reflection, and recall runtime state |
 | `csep config path` / `show` / `validate` | Inspect config path, resolved config, and validation result |
-| `csep recall "..."` | Search prior sessions for the current repo |
+| `csep recall "needle1|needle2"` | Search prior sessions for the current repo like `rg` over past sessions |
 | `csep recall --recent` | List recently archived sessions for the current repo |
 | `csep recall bootstrap` | Backfill local Codex session history into the recall database |
 | `csep session-reflect --status` | Inspect reflection jobs when something looks wrong |
+
+`csep recall` is not a question-answering interface. Search short needles such as file names, commands, error text, symbols, or exact user wording; use `--global` only when cross-repo history is actually needed.
 
 `session-start`, `session-stop`, `session-archive`, and `session-ingest` are mainly for hooks and low-level troubleshooting. See [docs/getting-started.md](docs/getting-started.md) for the full command surface.
 

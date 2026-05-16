@@ -197,23 +197,23 @@ Stop hook 默认会把 transcript 归档到本机 SQLite/FTS：
 ~/.codex-self-evolution/session_recall/state.db
 ```
 
-召回当前 repo 的历史片段：
+召回当前 repo 的历史片段时，把 `csep recall` 当作 `rg` over past sessions：搜短 needle，不搜长问题。
 
 ```bash
-csep recall "这个仓库之前 trigger policy 怎么设计的"
+csep recall "trigger policy|review_memory|review_skills"
 csep recall --recent
 ```
 
 跨 repo 检索：
 
 ```bash
-csep recall "session reflection" --global
+csep recall "session reflection|reflection job" --global
 ```
 
 输出 JSON 便于调试：
 
 ```bash
-csep recall "session reflection" --format json | python3 -m json.tool
+csep recall "session reflection|reflection job" --format json | python3 -m json.tool
 ```
 
 手动归档单个 transcript：

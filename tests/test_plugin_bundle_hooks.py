@@ -17,8 +17,10 @@ def test_root_plugin_manifest_points_to_existing_hooks_file():
     manifest = _load_json(manifest_path)
 
     assert manifest["hooks"] == "./.codex-plugin/hooks.json"
+    assert manifest["skills"] == "./skills/"
     hooks_path = ROOT / ".codex-plugin" / "hooks.json"
     assert hooks_path.exists()
+    assert (ROOT / "skills" / "csep-session-recall" / "SKILL.md").exists()
 
 
 def test_plugin_hooks_use_local_cli_not_uvx_or_tmp_placeholders():
@@ -68,6 +70,9 @@ def test_packaged_plugin_copy_matches_root_hook_bundle():
 
     assert packaged_manifest == root_manifest
     assert packaged_hooks == root_hooks
+    assert (ROOT / "plugins" / "codex-self-evolution" / "skills" / "csep-session-recall" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == (ROOT / "skills" / "csep-session-recall" / "SKILL.md").read_text(encoding="utf-8")
 
 
 def test_default_plugin_root_falls_back_to_package_bundle(tmp_path, monkeypatch):
@@ -120,6 +125,11 @@ def test_package_plugin_bundle_matches_repo_plugin_bundle():
         assert _load_json(package_metadata / filename) == _load_json(
             repo_metadata / filename
         )
+    assert (
+        ROOT / "src" / "codex_self_evolution" / "plugin_bundle" / "skills" / "csep-session-recall" / "SKILL.md"
+    ).read_text(encoding="utf-8") == (
+        ROOT / "plugins" / "codex-self-evolution" / "skills" / "csep-session-recall" / "SKILL.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_pyproject_includes_package_plugin_bundle_data():
@@ -131,3 +141,4 @@ def test_pyproject_includes_package_plugin_bundle_data():
 
     assert "plugin_bundle/.codex-plugin/plugin.json" in package_data
     assert "plugin_bundle/.codex-plugin/hooks.json" in package_data
+    assert "plugin_bundle/skills/csep-session-recall/SKILL.md" in package_data

@@ -20,7 +20,7 @@ CSEP 只做一件事：让本机 Codex session 的经验能在后续 session 中
 Codex SessionStart
   -> csep session-start --from-stdin
   -> 读取当前 repo bucket 的 USER.md / MEMORY.md
-  -> 注入 stable background 和 recall contract
+  -> 注入 stable background 和极短 recall skill pointer
 
 Codex 正常工作
 
@@ -40,9 +40,10 @@ Session Reflection Worker
 
 csep recall
   -> 查询 session_recall SQLite/FTS
+  -> 使用 grep-like needle query
   -> 默认当前 repo scope
   -> 显式 --global 才跨 repo
-  -> 返回受预算控制的历史消息窗口
+  -> 返回受预算控制的 session-level evidence window
 ```
 
 ## 运行时目录
@@ -79,7 +80,7 @@ csep recall
 | --- | --- |
 | `csep setup` | 安装 CLI、注册 Codex plugin marketplace、启用 plugin hooks |
 | `csep status` | 输出只读运行状态 |
-| `csep recall "..."` | 查询当前 repo 的历史 session |
+| `csep recall "needle1|needle2"` | 查询当前 repo 的历史 session |
 | `csep recall --recent` | 查看最近归档的 session |
 | `csep recall bootstrap` | 回填本机历史 Codex sessions |
 | `csep session-reflect --status` | 查看 reflection job 状态 |

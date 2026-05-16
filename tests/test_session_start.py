@@ -3,7 +3,7 @@ import json
 from codex_self_evolution.hooks.session_start import session_start
 
 
-def test_session_start_injects_memory_recall_policy_and_session_recall_skill(tmp_path):
+def test_session_start_injects_memory_and_short_recall_pointer(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     state = tmp_path / "state"
@@ -13,13 +13,14 @@ def test_session_start_injects_memory_recall_policy_and_session_recall_skill(tmp
     result = session_start(cwd=repo, state_dir=state)
     assert result["hook"] == "SessionStart"
     assert "recall" in result["recall"]["policy"].lower()
-    assert "session_recall" == result["recall"]["skill"]["skill_id"]
-    assert "csep recall" in result["recall"]["skill"]["content"].lower()
+    assert "csep-session-recall" == result["recall"]["skill"]["skill_id"]
+    assert result["recall"]["skill"]["provided_by"] == "plugin"
+    assert "content" not in result["recall"]["skill"]
     assert result["runtime"]["session_context"]["thread_start_injected"] is True
     assert "Be concise." in result["stable_background"]["current_user_md"]
     assert "Run focused tests first." in result["stable_background"]["current_memory_md"]
     assert "# Stable Background" in result["stable_background"]["combined_prefix"]
-    assert "## Recall Contract" in result["stable_background"]["combined_prefix"]
-    assert "# Session Recall Skill" in result["stable_background"]["combined_prefix"]
+    assert "## Recall Contract" not in result["stable_background"]["combined_prefix"]
+    assert "# Session Recall Skill" not in result["stable_background"]["combined_prefix"]
     assert (state / "memory").exists()
     json.dumps(result)

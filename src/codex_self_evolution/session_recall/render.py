@@ -30,7 +30,6 @@ def render_markdown(payload: dict[str, Any]) -> str:
         lines.extend(["", f"Recall failed softly: {payload['error']}"])
         return "\n".join(lines).rstrip() + "\n"
     if count == 0:
-        lines.extend(["", "No matching recall was found. Continue with the current repo and conversation context. Do not invent prior context."])
         return "\n".join(lines).rstrip() + "\n"
     for idx, item in enumerate(payload.get("results") or [], start=1):
         session_id = str(item.get("session_id") or "")
@@ -49,12 +48,24 @@ def render_markdown(payload: dict[str, Any]) -> str:
             lines.append(f"Branch: {item['branch']}")
         if item.get("hit_count", 0) > 1:
             lines.append(f"Other hits: {int(item['hit_count']) - 1} hidden by budget")
-        for msg in item.get("messages") or []:
-            role = msg.get("role", "message")
-            tool = msg.get("tool_name")
-            label = f"{role}:{tool}" if tool else str(role)
-            content = str(msg.get("content") or "")
-            lines.extend(["", f"[{label}] {content}"])
+        windows = item.get("windows") or []
+        if windows:
+            for window_idx, window in enumerate(windows, start=1):
+                if len(windows) > 1:
+                    lines.extend(["", f"Window {window_idx} matched: {window.get('matched') or ''}"])
+                for msg in window.get("messages") or []:
+                    role = msg.get("role", "message")
+                    tool = msg.get("tool_name")
+                    label = f"{role}:{tool}" if tool else str(role)
+                    content = str(msg.get("content") or "")
+                    lines.extend(["", f"[{label}] {content}"])
+        else:
+            for msg in item.get("messages") or []:
+                role = msg.get("role", "message")
+                tool = msg.get("tool_name")
+                label = f"{role}:{tool}" if tool else str(role)
+                content = str(msg.get("content") or "")
+                lines.extend(["", f"[{label}] {content}"])
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -76,27 +87,38 @@ def budget_payload(
     truncated = False
     for result in results:
         item = {key: value for key, value in result.items() if key != "messages"}
-        item_messages = []
-        source_messages = result.get("messages") or []
-        if recent and not source_messages:
-            source_messages = [{"role": "preview", "content": result.get("preview", "")}]
-        for msg in source_messages:
-            limit = tool_message_chars if msg.get("role") == "tool" else message_chars
-            content, was_truncated = _truncate(_redact(str(msg.get("content") or "")), limit)
-            truncated = truncated or was_truncated
-            entry = dict(msg)
-            entry["content"] = content
-            cost = len(content) + len(str(entry.get("role") or "")) + 8
-            if used + cost > budget_chars:
-                truncated = True
-                if not item_messages:
-                    entry["content"], _ = _truncate(content, max(80, budget_chars - used - 40))
-                    item_messages.append(entry)
-                    used = budget_chars
-                break
-            item_messages.append(entry)
-            used += cost
-        item["messages"] = item_messages
+        item_windows = []
+        source_windows = result.get("windows") or []
+        if source_windows:
+            for window in source_windows:
+                budgeted_window, used, truncated = _budget_messages(
+                    window.get("messages") or [],
+                    used=used,
+                    budget_chars=budget_chars,
+                    message_chars=message_chars,
+                    tool_message_chars=tool_message_chars,
+                    truncated=truncated,
+                )
+                item_windows.append({**window, "messages": budgeted_window})
+                if used >= budget_chars:
+                    break
+        else:
+            item_messages = []
+            source_messages = result.get("messages") or []
+            if recent and not source_messages:
+                source_messages = [{"role": "preview", "content": result.get("preview", "")}]
+            item_messages, used, truncated = _budget_messages(
+                source_messages,
+                used=used,
+                budget_chars=budget_chars,
+                message_chars=message_chars,
+                tool_message_chars=tool_message_chars,
+                truncated=truncated,
+            )
+            item["messages"] = item_messages
+        if item_windows:
+            item["windows"] = item_windows
+            item["messages"] = item_windows[0].get("messages") or []
         output_results.append(item)
         if used >= budget_chars:
             break
@@ -114,6 +136,35 @@ def budget_payload(
             "truncation_reason": "budget_exceeded" if truncated else "",
         },
     }
+
+
+def _budget_messages(
+    source_messages: list[dict[str, Any]],
+    *,
+    used: int,
+    budget_chars: int,
+    message_chars: int,
+    tool_message_chars: int,
+    truncated: bool,
+) -> tuple[list[dict[str, Any]], int, bool]:
+    item_messages = []
+    for msg in source_messages:
+        limit = tool_message_chars if msg.get("role") == "tool" else message_chars
+        content, was_truncated = _truncate(_redact(str(msg.get("content") or "")), limit)
+        truncated = truncated or was_truncated
+        entry = dict(msg)
+        entry["content"] = content
+        cost = len(content) + len(str(entry.get("role") or "")) + 8
+        if used + cost > budget_chars:
+            truncated = True
+            if not item_messages:
+                entry["content"], _ = _truncate(content, max(80, budget_chars - used - 40))
+                item_messages.append(entry)
+                used = budget_chars
+            break
+        item_messages.append(entry)
+        used += cost
+    return item_messages, used, truncated
 
 
 def _truncate(text: str, limit: int) -> tuple[str, bool]:

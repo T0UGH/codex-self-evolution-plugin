@@ -10,6 +10,8 @@ from typing import Any
 from .models import ParsedMessage, ParsedSession
 
 SCHEMA_VERSION = 1
+DISPLAY_ROLES = {"user", "assistant", "tool"}
+BACKGROUND_ROLES = {"developer", "system"}
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -285,47 +287,71 @@ class SessionRecallStore:
         before: int = 3,
         after: int = 5,
         current_session_id: str = "",
+        all_terms: bool = False,
+        windows_per_session: int = 2,
+        include_background: bool = False,
     ) -> list[dict[str, Any]]:
-        fts_query = _sanitize_fts5_query(query)
-        if not fts_query:
+        query = str(query or "").strip()
+        if not query:
             return []
-        params: list[Any] = [fts_query]
-        where = ["messages_fts MATCH ?"]
-        if repo_fingerprint and not global_scope:
-            where.append("s.repo_fingerprint = ?")
-            params.append(repo_fingerprint)
-        if current_session_id:
-            where.append("m.session_id != ?")
-            params.append(current_session_id)
-        sql = f"""
-            SELECT
-                m.id, m.session_id, m.message_index, m.role, m.content, m.tool_name,
-                snippet(messages_fts, 0, '>>>', '<<<', '...', 20) AS snippet,
-                bm25(messages_fts) AS fts_rank,
-                s.session_path, s.cwd, s.repo_root, s.repo_fingerprint,
-                s.worktree_root, s.git_branch, s.updated_at, s.started_at
-            FROM messages_fts
-            JOIN messages m ON m.id = messages_fts.rowid
-            JOIN sessions s ON s.session_id = m.session_id
-            WHERE {" AND ".join(where)}
-            ORDER BY fts_rank
-            LIMIT 50
-        """
-        try:
-            rows = [dict(row) for row in self._conn.execute(sql, params).fetchall()]
-        except sqlite3.OperationalError:
-            return []
+        rows: list[dict[str, Any]] = []
+        query_mode = "strict"
+        for fts_query, mode in _candidate_fts_queries(query, all_terms=all_terms):
+            rows = self._search_fts_rows(
+                fts_query,
+                repo_fingerprint=repo_fingerprint,
+                global_scope=global_scope,
+                current_session_id=current_session_id,
+            )
+            if rows:
+                query_mode = mode
+                break
+        if not rows and not all_terms and not _has_explicit_fts(query):
+            rows = self._search_like_rows(
+                _query_needles(query),
+                repo_fingerprint=repo_fingerprint,
+                global_scope=global_scope,
+                current_session_id=current_session_id,
+            )
+            if rows:
+                query_mode = "like_fallback"
         grouped: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             grouped.setdefault(row["session_id"], []).append(row)
 
         ranked: list[tuple[float, dict[str, Any]]] = []
         for session_id, hits in grouped.items():
-            best = max(hits, key=_hit_score)
-            window = self._message_window(session_id, int(best["message_index"]), before=before, after=after)
+            anchors = _select_anchor_hits(
+                hits,
+                before=before,
+                after=after,
+                windows_per_session=windows_per_session,
+                include_background=include_background,
+            )
+            best = anchors[0] if anchors else max(hits, key=_hit_score)
+            windows = [
+                {
+                    "matched": anchor["snippet"],
+                    "anchor": {
+                        "message_index": anchor["message_index"],
+                        "role": anchor["role"],
+                        "tool_name": anchor.get("tool_name") or "",
+                        "matched_by": anchor.get("matched_by") or query_mode,
+                    },
+                    "messages": self._message_window(
+                        session_id,
+                        int(anchor["message_index"]),
+                        before=before,
+                        after=after,
+                        include_background=include_background,
+                    ),
+                }
+                for anchor in anchors
+            ]
             result = {
                 "session_id": session_id,
-                "score": _hit_score(best),
+                "score": _session_score(hits),
+                "query_mode": query_mode,
                 "matched": best["snippet"],
                 "source": best["session_path"],
                 "repo": best["repo_root"],
@@ -341,11 +367,97 @@ class SessionRecallStore:
                     for h in hits
                     if h["id"] != best["id"]
                 ],
-                "messages": window,
+                "windows": windows,
+                "messages": windows[0]["messages"] if windows else [],
             }
-            ranked.append((_hit_score(best), result))
+            ranked.append((_session_score(hits), result))
         ranked.sort(key=lambda item: item[0], reverse=True)
         return [item[1] for item in ranked[: max(1, limit)]]
+
+    def _search_fts_rows(
+        self,
+        fts_query: str,
+        *,
+        repo_fingerprint: str,
+        global_scope: bool,
+        current_session_id: str,
+    ) -> list[dict[str, Any]]:
+        if not fts_query:
+            return []
+        params: list[Any] = [fts_query]
+        where = ["messages_fts MATCH ?"]
+        if repo_fingerprint and not global_scope:
+            where.append("s.repo_fingerprint = ?")
+            params.append(repo_fingerprint)
+        if current_session_id:
+            where.append("m.session_id != ?")
+            params.append(current_session_id)
+        sql = f"""
+            SELECT
+                m.id, m.session_id, m.message_index, m.role, m.content, m.tool_name,
+                snippet(messages_fts, 0, '>>>', '<<<', '...', 20) AS snippet,
+                bm25(messages_fts) AS fts_rank,
+                'fts' AS matched_by,
+                s.session_path, s.cwd, s.repo_root, s.repo_fingerprint,
+                s.worktree_root, s.git_branch, s.updated_at, s.started_at
+            FROM messages_fts
+            JOIN messages m ON m.id = messages_fts.rowid
+            JOIN sessions s ON s.session_id = m.session_id
+            WHERE {" AND ".join(where)}
+            ORDER BY fts_rank
+            LIMIT 150
+        """
+        try:
+            return [dict(row) for row in self._conn.execute(sql, params).fetchall()]
+        except sqlite3.OperationalError:
+            return []
+
+    def _search_like_rows(
+        self,
+        needles: list[str],
+        *,
+        repo_fingerprint: str,
+        global_scope: bool,
+        current_session_id: str,
+    ) -> list[dict[str, Any]]:
+        needles = [needle for needle in needles if needle][:8]
+        if not needles:
+            return []
+        params: list[Any] = []
+        needle_clauses: list[str] = []
+        for needle in needles:
+            needle_clauses.append("(m.content LIKE ? OR m.tool_name LIKE ?)")
+            pattern = f"%{needle}%"
+            params.extend([pattern, pattern])
+        where = [f"({' OR '.join(needle_clauses)})"]
+        if repo_fingerprint and not global_scope:
+            where.append("s.repo_fingerprint = ?")
+            params.append(repo_fingerprint)
+        if current_session_id:
+            where.append("m.session_id != ?")
+            params.append(current_session_id)
+        rows = self._conn.execute(
+            f"""
+            SELECT
+                m.id, m.session_id, m.message_index, m.role, m.content, m.tool_name,
+                0.0 AS fts_rank,
+                'like' AS matched_by,
+                s.session_path, s.cwd, s.repo_root, s.repo_fingerprint,
+                s.worktree_root, s.git_branch, s.updated_at, s.started_at
+            FROM messages m
+            JOIN sessions s ON s.session_id = m.session_id
+            WHERE {" AND ".join(where)}
+            ORDER BY s.updated_at DESC, m.message_index
+            LIMIT 150
+            """,
+            params,
+        ).fetchall()
+        output: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["snippet"] = _content_snippet(str(item.get("content") or ""), needles)
+            output.append(item)
+        return output
 
     def recent(
         self,
@@ -379,9 +491,35 @@ class SessionRecallStore:
             item["source_updated_at"] = metadata.get("source_updated_at") or item["updated_at"]
             item["archived_at"] = metadata.get("archived_at") or item["updated_at"]
             preview = self._conn.execute(
-                "SELECT role, content, tool_name FROM messages WHERE session_id = ? ORDER BY message_index LIMIT 1",
+                """
+                SELECT role, content, tool_name
+                FROM messages
+                WHERE session_id = ?
+                  AND NOT (role = 'user' AND content LIKE '# AGENTS.md instructions%')
+                  AND NOT (role = 'user' AND content LIKE '<environment_context>%')
+                ORDER BY
+                    CASE role
+                        WHEN 'user' THEN 0
+                        WHEN 'assistant' THEN 1
+                        WHEN 'tool' THEN 2
+                        ELSE 3
+                    END,
+                    message_index
+                LIMIT 1
+                """,
                 (item["session_id"],),
             ).fetchone()
+            if preview is None:
+                preview = self._conn.execute(
+                    """
+                    SELECT role, content, tool_name
+                    FROM messages
+                    WHERE session_id = ?
+                    ORDER BY message_index
+                    LIMIT 1
+                    """,
+                    (item["session_id"],),
+                ).fetchone()
             item["preview"] = _preview(dict(preview)) if preview else ""
             item["matched"] = item["preview"]
             item["source"] = item["session_path"]
@@ -421,14 +559,24 @@ class SessionRecallStore:
             "latest_ingest_run": dict(latest_run) if latest_run else None,
         }
 
-    def _message_window(self, session_id: str, message_index: int, *, before: int, after: int) -> list[dict[str, Any]]:
+    def _message_window(
+        self,
+        session_id: str,
+        message_index: int,
+        *,
+        before: int,
+        after: int,
+        include_background: bool = False,
+    ) -> list[dict[str, Any]]:
         start = max(0, message_index - max(0, before))
         end = message_index + max(0, after)
+        role_filter = "" if include_background else "AND role NOT IN ('developer', 'system')"
         rows = self._conn.execute(
-            """
+            f"""
             SELECT message_index, role, content, tool_name, raw_event_type
             FROM messages
             WHERE session_id = ? AND message_index BETWEEN ? AND ?
+            {role_filter}
             ORDER BY message_index
             """,
             (session_id, start, end),
@@ -437,7 +585,7 @@ class SessionRecallStore:
 
 
 def _hit_score(row: dict[str, Any]) -> float:
-    role_weight = {"user": 30.0, "assistant": 25.0, "developer": 18.0, "system": 15.0, "tool": 5.0}.get(
+    role_weight = {"user": 30.0, "assistant": 25.0, "tool": 20.0, "developer": 2.0, "system": 1.0}.get(
         str(row.get("role") or ""),
         10.0,
     )
@@ -448,6 +596,48 @@ def _hit_score(row: dict[str, Any]) -> float:
     return role_weight + rank
 
 
+def _session_score(hits: list[dict[str, Any]]) -> float:
+    best = max((_hit_score(hit) for hit in hits), default=0.0)
+    hit_bonus = min(20.0, max(0, len(hits) - 1) * 3.0)
+    recency = _recency_score(str(hits[0].get("updated_at") or "")) if hits else 0.0
+    return best + hit_bonus + recency
+
+
+def _recency_score(value: str) -> float:
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    age_days = max(0.0, (datetime.now(UTC) - dt).total_seconds() / 86400)
+    return max(0.0, 8.0 - min(8.0, age_days / 7))
+
+
+def _select_anchor_hits(
+    hits: list[dict[str, Any]],
+    *,
+    before: int,
+    after: int,
+    windows_per_session: int,
+    include_background: bool,
+) -> list[dict[str, Any]]:
+    limit = max(1, int(windows_per_session))
+    visible_hits = hits if include_background else [hit for hit in hits if str(hit.get("role") or "") in DISPLAY_ROLES]
+    candidates = sorted(visible_hits or hits, key=_hit_score, reverse=True)
+    selected: list[dict[str, Any]] = []
+    overlap_distance = max(1, before + after + 1)
+    for hit in candidates:
+        idx = int(hit.get("message_index") or 0)
+        if any(abs(idx - int(existing.get("message_index") or 0)) <= overlap_distance for existing in selected):
+            continue
+        selected.append(hit)
+        if len(selected) >= limit:
+            break
+    if not selected and hits:
+        selected.append(max(hits, key=_hit_score))
+    selected.sort(key=lambda hit: int(hit.get("message_index") or 0))
+    return selected
+
+
 def _preview(row: dict[str, Any], limit: int = 160) -> str:
     label = str(row.get("role") or "message")
     tool = str(row.get("tool_name") or "")
@@ -456,6 +646,80 @@ def _preview(row: dict[str, Any], limit: int = 160) -> str:
         content = content[: limit - 15].rstrip() + " [truncated]"
     prefix = f"{label}:{tool}" if tool else label
     return f"[{prefix}] {content}"
+
+
+def _candidate_fts_queries(query: str, *, all_terms: bool) -> list[tuple[str, str]]:
+    if "|" in query:
+        or_query = _or_fts_query(_query_needles(query))
+        return [(or_query, "or_alias")] if or_query else []
+    strict = _sanitize_fts5_query(query)
+    if all_terms or _has_explicit_fts(query):
+        return [(strict, "strict")] if strict else []
+    candidates = [(strict, "strict")] if strict else []
+    or_query = _or_fts_query(_query_needles(query))
+    if or_query and or_query != strict:
+        candidates.append((or_query, "or_fallback"))
+    return candidates
+
+
+def _has_explicit_fts(query: str) -> bool:
+    return bool(re.search(r'["*]|\b(?:AND|OR|NOT)\b', query, re.IGNORECASE))
+
+
+def _query_needles(query: str) -> list[str]:
+    text = str(query or "").strip()
+    if "|" in text:
+        raw_parts = text.split("|")
+    else:
+        raw_parts = [match[0] or match[1] for match in re.findall(r'"([^"]+)"|(\S+)', text)]
+    needles: list[str] = []
+    for part in raw_parts:
+        cleaned = _clean_needle(part)
+        if cleaned and cleaned.upper() not in {"AND", "OR", "NOT"} and cleaned not in needles:
+            needles.append(cleaned)
+    return needles
+
+
+def _clean_needle(value: str) -> str:
+    cleaned = str(value or "").strip().strip('"').strip("'")
+    cleaned = re.sub(r"[+{}()^]", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _or_fts_query(needles: list[str]) -> str:
+    fragments = [_quote_fts_fragment(needle) for needle in needles]
+    fragments = [fragment for fragment in fragments if fragment]
+    return " OR ".join(fragments)
+
+
+def _quote_fts_fragment(fragment: str) -> str:
+    cleaned = _clean_needle(fragment).replace('"', " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return ""
+    if cleaned.endswith("*") and re.fullmatch(r"[\w.-]+\*", cleaned):
+        return _sanitize_fts5_query(cleaned)
+    return f'"{cleaned}"'
+
+
+def _content_snippet(content: str, needles: list[str], *, radius: int = 70) -> str:
+    folded = content.replace("\n", " ")
+    lower = folded.lower()
+    match_at = -1
+    match_len = 0
+    for needle in needles:
+        idx = lower.find(needle.lower())
+        if idx >= 0 and (match_at < 0 or idx < match_at):
+            match_at = idx
+            match_len = len(needle)
+    if match_at < 0:
+        return _preview({"role": "message", "content": folded}, limit=160)
+    start = max(0, match_at - radius)
+    end = min(len(folded), match_at + match_len + radius)
+    prefix = "..." if start else ""
+    suffix = "..." if end < len(folded) else ""
+    return f"{prefix}{folded[start:match_at]}>>>{folded[match_at:match_at + match_len]}<<<{folded[match_at + match_len:end]}{suffix}"
 
 
 def _decode_json_object(text: str) -> dict[str, Any]:

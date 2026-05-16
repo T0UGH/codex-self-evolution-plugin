@@ -46,10 +46,19 @@ def build_parser() -> argparse.ArgumentParser:
     recall.add_argument("--limit", "--top-k", dest="limit", type=int, default=3)
     recall.add_argument("--before", type=int, default=3)
     recall.add_argument("--after", type=int, default=5)
+    recall.add_argument("--windows-per-session", type=int, default=2)
     recall.add_argument("--budget-chars", type=int, default=12000)
     recall.add_argument("--message-chars", type=int, default=1200)
     recall.add_argument("--tool-message-chars", type=int, default=600)
     recall.add_argument("--current-session-id", default="")
+    recall.add_argument("--all-terms", action="store_true", help="Require all query terms instead of grep-like OR fallback.")
+    recall.add_argument(
+        "--include-background",
+        "--include-system",
+        dest="include_background",
+        action="store_true",
+        help="Allow developer/system messages to anchor evidence windows.",
+    )
     recall.add_argument("--format", choices=("markdown", "json"), default="markdown")
     recall.add_argument(
         "--bootstrap",
@@ -217,6 +226,9 @@ def _handle_recall(args: argparse.Namespace) -> int:
             message_chars=args.message_chars,
             tool_message_chars=args.tool_message_chars,
             current_session_id=args.current_session_id,
+            all_terms=args.all_terms,
+            windows_per_session=args.windows_per_session,
+            include_background=args.include_background,
         )
         result.update({"triggered": True, "reasons": ["self_invoked"], "status": "matched" if result["count"] else "no_match"})
     except Exception as exc:  # noqa: BLE001 - recall is a soft dependency for the model.

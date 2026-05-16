@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "csep"
-version = "1.1.0"
+version = "1.2.0"
 description = "Self-evolution loop for OpenAI Codex: session reflection, session recall, and reflection-generated skills with zero runtime dependencies."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -66,6 +66,7 @@ codex_self_evolution = [
     "session_recall/session_recall.md",
     "plugin_bundle/.codex-plugin/plugin.json",
     "plugin_bundle/.codex-plugin/hooks.json",
+    "plugin_bundle/skills/csep-session-recall/SKILL.md",
 ]
 
 [tool.setuptools.packages.find]

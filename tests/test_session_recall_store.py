@@ -85,6 +85,123 @@ def test_store_supports_fts5_phrase_or_not_and_prefix(tmp_path):
     assert store.search("hermes NOT stdout", repo_fingerprint="repo-a")
 
 
+def test_store_supports_pipe_or_alias_and_strict_fallback(tmp_path):
+    from codex_self_evolution.session_recall.store import SessionRecallStore
+
+    store = SessionRecallStore(tmp_path / "state.db")
+    store.archive(
+        ParsedSession(
+            session_id="alpha",
+            session_path=tmp_path / "alpha.jsonl",
+            cwd=str(tmp_path),
+            metadata={"repo_fingerprint": "repo-a", "repo_root": str(tmp_path), "worktree_root": str(tmp_path)},
+            messages=[ParsedMessage("alpha", "m1", 0, "user", "alpha only", "{}")],
+        )
+    )
+    store.archive(
+        ParsedSession(
+            session_id="beta",
+            session_path=tmp_path / "beta.jsonl",
+            cwd=str(tmp_path),
+            metadata={"repo_fingerprint": "repo-a", "repo_root": str(tmp_path), "worktree_root": str(tmp_path)},
+            messages=[ParsedMessage("beta", "m1", 0, "user", "beta only", "{}")],
+        )
+    )
+
+    assert {hit["session_id"] for hit in store.search("alpha|beta", repo_fingerprint="repo-a", limit=10)} == {
+        "alpha",
+        "beta",
+    }
+    assert store.search("alpha beta gamma", repo_fingerprint="repo-a")
+    assert store.search("alpha beta gamma", repo_fingerprint="repo-a", all_terms=True) == []
+
+
+def test_store_returns_multiple_evidence_windows_per_session(tmp_path):
+    from codex_self_evolution.session_recall.store import SessionRecallStore
+
+    store = SessionRecallStore(tmp_path / "state.db")
+    messages = [ParsedMessage("s1", f"m{idx}", idx, "assistant", f"filler {idx}", "{}") for idx in range(8)]
+    messages[0] = ParsedMessage("s1", "m0", 0, "user", "alpha decision", "{}")
+    messages[7] = ParsedMessage("s1", "m7", 7, "assistant", "beta decision", "{}")
+    store.archive(
+        ParsedSession(
+            session_id="s1",
+            session_path=tmp_path / "s1.jsonl",
+            cwd=str(tmp_path),
+            metadata={"repo_fingerprint": "repo-a", "repo_root": str(tmp_path), "worktree_root": str(tmp_path)},
+            messages=messages,
+        )
+    )
+
+    hits = store.search("alpha|beta", repo_fingerprint="repo-a", windows_per_session=2, before=0, after=0)
+
+    assert len(hits[0]["windows"]) == 2
+    assert [window["anchor"]["message_index"] for window in hits[0]["windows"]] == [0, 7]
+
+
+def test_store_prefers_user_anchor_over_developer_background(tmp_path):
+    from codex_self_evolution.session_recall.store import SessionRecallStore
+
+    store = SessionRecallStore(tmp_path / "state.db")
+    store.archive(
+        ParsedSession(
+            session_id="s1",
+            session_path=tmp_path / "s1.jsonl",
+            cwd=str(tmp_path),
+            metadata={"repo_fingerprint": "repo-a", "repo_root": str(tmp_path), "worktree_root": str(tmp_path)},
+            messages=[
+                ParsedMessage("s1", "m0", 0, "developer", "needle background", "{}"),
+                ParsedMessage("s1", "m1", 1, "user", "needle user evidence", "{}"),
+            ],
+        )
+    )
+
+    hits = store.search("needle", repo_fingerprint="repo-a", windows_per_session=1, before=0, after=0)
+
+    assert hits[0]["windows"][0]["anchor"]["role"] == "user"
+    assert hits[0]["messages"][0]["role"] == "user"
+
+    with_background = store.search(
+        "needle",
+        repo_fingerprint="repo-a",
+        windows_per_session=1,
+        before=1,
+        after=0,
+        include_background=True,
+    )
+    assert [message["role"] for message in with_background[0]["messages"]] == ["developer", "user"]
+
+
+def test_store_like_fallback_searches_tool_name(tmp_path):
+    from codex_self_evolution.session_recall.store import SessionRecallStore
+
+    store = SessionRecallStore(tmp_path / "state.db")
+    store.archive(
+        ParsedSession(
+            session_id="tool-hit",
+            session_path=tmp_path / "tool.jsonl",
+            cwd=str(tmp_path),
+            metadata={"repo_fingerprint": "repo-a", "repo_root": str(tmp_path), "worktree_root": str(tmp_path)},
+            messages=[
+                ParsedMessage(
+                    "tool-hit",
+                    "m1",
+                    0,
+                    "tool",
+                    "command output",
+                    "{}",
+                    tool_name="exec_command",
+                )
+            ],
+        )
+    )
+
+    hits = store.search("exec_command", repo_fingerprint="repo-a")
+
+    assert hits[0]["session_id"] == "tool-hit"
+    assert hits[0]["windows"][0]["anchor"]["matched_by"] == "like"
+
+
 def test_tool_hit_ranks_below_user_hit(tmp_path):
     from codex_self_evolution.session_recall.store import SessionRecallStore
 
@@ -143,3 +260,26 @@ def test_recent_orders_by_session_time_not_archive_time(tmp_path):
     assert [item["session_id"] for item in recent] == ["newer", "older"]
     assert recent[0]["source_updated_at"] == "2026-02-01T00:00:01Z"
     assert recent[0]["archived_at"]
+
+
+def test_recent_preview_uses_first_user_message(tmp_path):
+    from codex_self_evolution.session_recall.store import SessionRecallStore
+
+    store = SessionRecallStore(tmp_path / "state.db")
+    store.archive(
+        ParsedSession(
+            session_id="s1",
+            session_path=tmp_path / "s1.jsonl",
+            cwd=str(tmp_path),
+            metadata={"repo_fingerprint": "repo-a", "repo_root": str(tmp_path), "worktree_root": str(tmp_path)},
+            messages=[
+                ParsedMessage("s1", "m0", 0, "developer", "background instructions", "{}"),
+                ParsedMessage("s1", "m1", 1, "user", "real user task", "{}"),
+            ],
+        )
+    )
+
+    recent = store.recent(repo_fingerprint="repo-a", limit=1)
+
+    assert "real user task" in recent[0]["preview"]
+    assert "background instructions" not in recent[0]["preview"]

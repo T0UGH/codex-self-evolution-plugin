@@ -115,3 +115,85 @@ def test_csep_recall_budget_truncates(tmp_path, monkeypatch, capsys):
     csep.main(["recall", "needle", "--cwd", str(repo), "--budget-chars", "220", "--message-chars", "80"])
     out = capsys.readouterr().out
     assert "[truncated:" in out
+
+
+def test_csep_recall_pipe_or_fallback_and_all_terms(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(json.dumps({"role": "user", "content": "alpha only"}) + "\n", encoding="utf-8")
+
+    csep.main(["session-archive", "--transcript-path", str(transcript), "--cwd", str(repo), "--session-id", "s1"])
+    capsys.readouterr()
+
+    assert csep.main(["recall", "alpha|beta", "--cwd", str(repo)]) == 0
+    out = capsys.readouterr().out
+    assert "Status: matched" in out
+    assert "alpha only" in out
+
+    assert csep.main(["recall", "alpha beta gamma", "--cwd", str(repo)]) == 0
+    out = capsys.readouterr().out
+    assert "Status: matched" in out
+
+    assert csep.main(["recall", "alpha beta gamma", "--cwd", str(repo), "--all-terms"]) == 0
+    out = capsys.readouterr().out
+    assert "Status: no_match" in out
+
+
+def test_csep_recall_json_includes_evidence_windows(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps({"role": "user", "content": "alpha decision"}),
+                json.dumps({"role": "assistant", "content": "middle filler"}),
+                json.dumps({"role": "assistant", "content": "middle filler two"}),
+                json.dumps({"role": "assistant", "content": "middle filler three"}),
+                json.dumps({"role": "assistant", "content": "beta decision"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    csep.main(["session-archive", "--transcript-path", str(transcript), "--cwd", str(repo), "--session-id", "s1"])
+    capsys.readouterr()
+
+    assert csep.main([
+        "recall",
+        "alpha|beta",
+        "--cwd",
+        str(repo),
+        "--windows-per-session",
+        "2",
+        "--before",
+        "0",
+        "--after",
+        "0",
+        "--format",
+        "json",
+    ]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert len(out["results"][0]["windows"]) == 2
+    assert [window["anchor"]["message_index"] for window in out["results"][0]["windows"]] == [0, 4]
+
+
+def test_csep_recall_no_match_stays_minimal(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(json.dumps({"role": "user", "content": "known needle"}) + "\n", encoding="utf-8")
+
+    csep.main(["session-archive", "--transcript-path", str(transcript), "--cwd", str(repo), "--session-id", "s1"])
+    capsys.readouterr()
+
+    assert csep.main(["recall", "missing-only", "--cwd", str(repo)]) == 0
+    out = capsys.readouterr().out
+    assert "Status: no_match" in out
+    assert "Continue with the current repo" not in out
+    assert "Next:" not in out

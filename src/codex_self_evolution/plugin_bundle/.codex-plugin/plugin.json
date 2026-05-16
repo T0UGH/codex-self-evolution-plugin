@@ -30,5 +30,6 @@
       "command": "csep recall \"$CODEX_RECALL_QUERY\" --cwd \"$CODEX_CWD\" --state-dir \"$CODEX_STATE_DIR\""
     }
   ],
-  "hooks": "./.codex-plugin/hooks.json"
+  "hooks": "./.codex-plugin/hooks.json",
+  "skills": "./skills/"
 }

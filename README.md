@@ -40,7 +40,7 @@ Codex Self-Evolution Plugin，简称 `csep`。它在 `SessionStart` 时把稳定
 | 能力 | 写入时机 | 下一次如何使用 |
 | --- | --- | --- |
 | Stable Memory | 达到 trigger 条件后，由 session reflection 写入 `USER.md` / `MEMORY.md` | `SessionStart` 自动注入 Codex 上下文 |
-| Session Recall | `Stop` hook 把 transcript 归档到本地 SQLite/FTS | `csep recall "..."` 按当前 repo 或全局检索历史片段 |
+| Session Recall | `Stop` hook 把 transcript 归档到本地 SQLite/FTS；插件内置 `csep-session-recall` skill 教 Codex 如何检索 | `csep recall "needle1|needle2"` 像 `rg` 一样按当前 repo 或全局检索历史证据 |
 | Reflection Skills | reflection worker 写入 `~/.codex/skills/csep-reflect-*` | Codex 原生 skills loader 自动加载 |
 | Runtime Status | hooks、配置、日志、reflection job、recall DB 都可只读检查 | `csep status` 排查当前运行状态 |
 
@@ -119,10 +119,12 @@ csep recall --recent
 | `csep setup` | 安装 CLI、注册 Codex plugin marketplace、启用 plugin hooks |
 | `csep status` | 看插件、hook、reflection、recall 当前是否正常 |
 | `csep config path` / `show` / `validate` | 查看配置路径、当前配置和校验结果 |
-| `csep recall "..."` | 在当前 repo 的历史 session 里找上下文 |
+| `csep recall "needle1|needle2"` | 像 `rg` 一样在当前 repo 的历史 session 里找上下文 |
 | `csep recall --recent` | 看当前 repo 最近归档了哪些 session |
 | `csep recall bootstrap` | 把本机历史 Codex sessions 回填进 recall 数据库 |
 | `csep session-reflect --status` | reflection 没按预期运行时再看 |
+
+`csep recall` 不是问答接口，推荐搜索文件名、命令、错误文本、代码符号或用户原话这类短 needle；需要跨 repo 时再显式加 `--global`。
 
 `session-start`、`session-stop`、`session-archive`、`session-ingest` 主要给 hook 和底层排障使用。完整列表见 [docs/getting-started.md](docs/getting-started.md)。
 

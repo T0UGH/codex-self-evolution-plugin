@@ -24,6 +24,9 @@ def build_focused_recall(
     message_chars: int = 1200,
     tool_message_chars: int = 600,
     current_session_id: str = "",
+    all_terms: bool = False,
+    windows_per_session: int = 2,
+    include_background: bool = False,
 ) -> dict[str, Any]:
     """Build model-readable recall from the session_recall SQLite/FTS store only."""
     scope = "global" if global_scope else "repo"
@@ -63,6 +66,9 @@ def build_focused_recall(
             before=before,
             after=after,
             current_session_id=current_session_id,
+            all_terms=all_terms,
+            windows_per_session=windows_per_session,
+            include_background=include_background,
         )
         return budget_payload(
             query=query,

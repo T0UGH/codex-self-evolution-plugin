@@ -11,7 +11,6 @@ def session_start(cwd: str | Path | None = None, state_dir: str | Path | None = 
     paths = build_paths(repo_root=cwd, state_dir=state_dir)
     ensure_runtime_dirs(paths)
     policy = (PACKAGE_ROOT / "session_recall" / "policy.md").read_text(encoding="utf-8")
-    session_recall_skill = (PACKAGE_ROOT / "session_recall" / "session_recall.md").read_text(encoding="utf-8")
     memory_files = load_memory_files(paths)
     combined_prefix = "\n\n".join(
         section
@@ -19,7 +18,6 @@ def session_start(cwd: str | Path | None = None, state_dir: str | Path | None = 
             "# Stable Background",
             "## USER.md\n" + (memory_files["USER.md"] or "_No entries yet._\n"),
             "## MEMORY.md\n" + (memory_files["MEMORY.md"] or "_No entries yet._\n"),
-            "## Recall Contract\n\n" + session_recall_skill,
         ]
         if section
     )
@@ -36,9 +34,9 @@ def session_start(cwd: str | Path | None = None, state_dir: str | Path | None = 
         "recall": {
             "policy": policy,
             "skill": {
-                "skill_id": "session_recall",
-                "title": "Session Recall",
-                "content": session_recall_skill,
+                "skill_id": "csep-session-recall",
+                "title": "CSEP Session Recall",
+                "provided_by": "plugin",
             },
             "trigger_defaults": {"same_repo_first": True, "same_cwd_first": True, "auto_trigger": True},
         },
@@ -72,7 +70,7 @@ def format_session_start_for_codex(session_result: dict[str, Any]) -> dict[str, 
     ``build_paths``; Codex sees only context relevant to this session.
 
     ``additionalContext`` = ``stable_background.combined_prefix`` (USER.md +
-    MEMORY.md + session_recall skill) + recall policy. Empty MD files yield
+    MEMORY.md) + a short recall skill pointer. Empty MD files yield
     a short "No entries yet" stub, not a crash — the hook is safe to install
     on a fresh machine before any reflection job has written memory.
     """

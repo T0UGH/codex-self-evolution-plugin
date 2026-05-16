@@ -1,38 +1,19 @@
-# Session Recall Skill
+# Session Recall
 
-Use recall as a model-initiated self-check, not as an external rule router.
+The runtime recall guide now lives in the CSEP plugin skill:
 
-## Recall Contract
+```text
+skills/csep-session-recall/SKILL.md
+```
 
-Before answering, you MUST run focused recall when the task is repo/workspace related, non-trivial, and could depend on prior local context, repeated workflow guidance, or previously promoted patterns.
+`SessionStart` does not inject this file. It only injects stable background plus a short pointer to the plugin skill.
 
-Hard-skip recall for clearly self-contained turns only:
+Use recall like `rg` over past sessions:
 
-- simple arithmetic
-- one-sentence translation or rewrite
-- trivial formatting
-- a pure current-file edit where the user supplied all needed context
+```bash
+csep recall "MEMORY.md|refs|二级引用" --cwd "$PWD"
+csep recall "summary需要llm|不要llm|Hermes" --cwd "$PWD"
+csep recall --recent --cwd "$PWD"
+```
 
-## Command
-
-Generate one focused query that says what prior context you need, then run:
-
-`csep recall "<focused query>"`
-
-If `csep` is not on PATH, fall back to:
-
-`uvx csep recall "<focused query>"`
-
-Use the user's wording plus the current repo/task shape to form the focused query. Do not pass vague phrases like "continue this" when you can name the concrete topic.
-
-## Retrieval order
-1. same-repo results first
-2. same-cwd subtree results second
-3. global fallback only when local context is insufficient
-
-## Behavior
-- Do not preload large recall material at session start.
-- If recall returns matches that affect the answer, use them naturally.
-- If recall returns no matches or fails, continue with the current repo and conversation context. Do not invent prior context.
-- Do not announce empty recall separately unless the user asks.
-- Preserve provenance in results.
+Search short concrete needles, not long natural-language questions.
