@@ -338,8 +338,8 @@ def test_run_reflection_job_forks_starts_registers_validates_and_cleans_lock(
     assert "Child thread id: child-1" in client.start_calls[0]["prompt"]
     assert '"child_thread_id": "child-1"' in client.start_calls[0]["prompt"]
     assert "Review scope: memory and skills" in client.start_calls[0]["prompt"]
-    assert "Review memory:" not in client.start_calls[0]["prompt"]
-    assert "Review skills:" not in client.start_calls[0]["prompt"]
+    assert "Review memory: true" in client.start_calls[0]["prompt"]
+    assert "Review skills: true" in client.start_calls[0]["prompt"]
     assert "Skill generation mode: one_shot_active" in client.start_calls[0]["prompt"]
     assert child_thread_registry_path("child-1", home=home).is_file()
     assert (home / "session_reflection" / "runs" / str(job["job_id"]) / "prompt.txt").is_file()
@@ -527,10 +527,11 @@ def test_run_reflection_job_uses_explicit_home_for_memory_paths(
     run_reflection_job(str(job["job_id"]), home=home, client=client)
 
     prompt = client.start_calls[0]["prompt"]
-    assert f"User memory file: {home / 'projects'}" in prompt
     assert f"Project memory file: {home / 'projects'}" in prompt
-    assert "/memory/USER.md" in prompt
+    assert f"Project memory refs directory: {home / 'projects'}" in prompt
+    assert "/memory/USER.md" not in prompt
     assert "/memory/MEMORY.md" in prompt
+    assert "/memory/refs" in prompt
 
 
 def test_run_reflection_job_fails_wrong_child_receipt_id_and_cleans_lock(

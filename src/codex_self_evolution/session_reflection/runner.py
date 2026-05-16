@@ -149,8 +149,8 @@ def run_reflection_job(
             parent_session_id=str(job["parent_session_id"]),
             child_thread_id=child_thread_id,
             cwd=str(job["cwd"]),
-            memory_user_path=project_paths.memory_dir / "USER.md",
-            memory_project_path=project_paths.memory_dir / "MEMORY.md",
+            memory_path=project_paths.memory_dir / "MEMORY.md",
+            memory_refs_dir=project_paths.memory_refs_dir,
             skills_root=skills_root,
             receipt_path=paths.receipt_path,
             review_memory=bool(job.get("review_memory", True)),
@@ -400,10 +400,10 @@ def _validation_scope_has_issue(validation: dict[str, Any], scope: str) -> bool:
 
 def _path_scope(path: object) -> str:
     """Classify a validation path as memory, skill, or unknown."""
-    name = Path(str(path or "")).name
-    if name in {"USER.md", "MEMORY.md"}:
+    path_obj = Path(str(path or ""))
+    if path_obj.name == "MEMORY.md" or ("memory" in path_obj.parts and "refs" in path_obj.parts):
         return "memory"
-    if name == "SKILL.md":
+    if path_obj.name == "SKILL.md":
         return "skill"
     return ""
 

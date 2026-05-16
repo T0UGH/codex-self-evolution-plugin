@@ -162,6 +162,7 @@ class Paths:
     plugin_root: Path
     state_dir: Path
     memory_dir: Path
+    memory_refs_dir: Path
 
 
 def resolve_repo_root(cwd: str | Path | None = None) -> Path:
@@ -186,4 +187,5 @@ def build_paths(repo_root: str | Path | None = None, state_dir: str | Path | Non
         plugin_root=plugin_root,
         state_dir=resolved_state,
         memory_dir=resolved_state / "memory",
+        memory_refs_dir=resolved_state / "memory" / "refs",
     )

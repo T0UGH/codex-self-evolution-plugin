@@ -19,7 +19,7 @@ Design choices:
   ``<name>.archived.<ts>`` so historical data is still on disk for inspection
   and rollback.
 - **Minimal merge surface** — we consolidate ``memory.json`` and re-render
-  MEMORY.md/USER.md. Other historical runtime files stay in the archived
+  the single hot ``MEMORY.md``. Other historical runtime files stay in the archived
   bucket because they are not part of the retained session-level system.
 - **Dry-run first** — the caller can preview the plan before anything gets
   renamed. Guarded by an ``apply`` flag on :func:`plan_and_run`.
@@ -213,7 +213,7 @@ def _merge_memory(source_path: Path, target_path: Path) -> dict[str, list[dict[s
 
     Target may not exist yet (first consolidation into a fresh canonical
     bucket); in that case we materialise it from source. Returns the merged
-    dict so callers can also re-render MEMORY.md / USER.md.
+    dict so callers can also re-render the single hot MEMORY.md.
     """
     def _load(path: Path) -> dict[str, list[dict[str, Any]]]:
         if not path.exists():
@@ -294,13 +294,10 @@ def _apply_one(bucket_plan: BucketPlan) -> dict[str, Any]:
 
     merged = _merge_memory(source, target)
     atomic_write_json(target_memory_dir / "memory.json", merged)
-    atomic_write_text(
-        target_memory_dir / "USER.md",
-        _render_memory_markdown("USER", merged["user"]),
-    )
+    merged_records = merged["user"] + merged["global"]
     atomic_write_text(
         target_memory_dir / "MEMORY.md",
-        _render_memory_markdown("MEMORY", merged["global"]),
+        _render_memory_markdown("Project Memory", merged_records),
     )
 
     # Rename the source bucket. The suffix is timestamped so repeated

@@ -59,7 +59,7 @@ def test_format_wraps_into_codex_hookSpecificOutput_shape(tmp_path):
     json.loads(json.dumps(codex_output))
 
 
-def test_format_includes_user_memory_and_short_recall_pointer(tmp_path):
+def test_format_includes_stable_memory_and_short_recall_pointer(tmp_path):
     state = _seed_state(tmp_path, user="Prefer concise.", memory="Run focused tests first.")
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -68,7 +68,7 @@ def test_format_includes_user_memory_and_short_recall_pointer(tmp_path):
     ac = format_session_start_for_codex(result)["hookSpecificOutput"]["additionalContext"]
 
     # Stable background is memory plus a short pointer to the plugin skill.
-    assert "Prefer concise." in ac
+    assert "Prefer concise." not in ac
     assert "Run focused tests first." in ac
     assert "Session Recall Skill" not in ac
     assert "Recall Contract" not in ac
@@ -122,7 +122,8 @@ def test_from_stdin_reads_cwd_from_codex_payload(monkeypatch, capsys, tmp_path):
 
     out = json.loads(capsys.readouterr().out.strip())
     assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-    assert "Prefer concise" in out["hookSpecificOutput"]["additionalContext"]
+    assert "Focused tests first" in out["hookSpecificOutput"]["additionalContext"]
+    assert "Prefer concise" not in out["hookSpecificOutput"]["additionalContext"]
 
 
 def test_csep_recall_defaults_to_markdown(monkeypatch, capsys, tmp_path):

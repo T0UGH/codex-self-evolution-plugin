@@ -132,6 +132,53 @@ def test_validate_receipt_accepts_string_change_paths(tmp_path: Path) -> None:
     assert result["boundary_violations"] == []
 
 
+def test_validate_receipt_accepts_memory_refs_markdown(tmp_path: Path) -> None:
+    """Memory refs are allowed under memory/refs as Markdown files."""
+    memory_root = tmp_path / "project" / "memory"
+    ref = memory_root / "refs" / "design" / "memory-line.md"
+    ref.parent.mkdir(parents=True)
+    ref.write_text("Long-form memory reference.\n", encoding="utf-8")
+    receipt = tmp_path / "receipt.json"
+    _write_receipt(
+        receipt,
+        memory_changes=[{"path": str(ref), "action": "add", "after_hash": _sha(ref)}],
+        skill_changes=[],
+    )
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[memory_root],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["boundary_violations"] == []
+
+
+def test_validate_receipt_rejects_legacy_user_memory(tmp_path: Path) -> None:
+    """Legacy USER.md is retained on disk but is no longer writable memory."""
+    memory = tmp_path / "project" / "memory" / "USER.md"
+    memory.parent.mkdir(parents=True)
+    memory.write_text("Legacy user memory.\n", encoding="utf-8")
+    receipt = tmp_path / "receipt.json"
+    _write_receipt(
+        receipt,
+        memory_changes=[{"path": str(memory), "action": "add", "after_hash": _sha(memory)}],
+        skill_changes=[],
+    )
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[memory.parent],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+    )
+
+    assert result["status"] == "failed"
+    assert result["boundary_violations"][0]["reason"] == "memory_outside_root"
+
+
 def test_validate_receipt_rejects_skill_outside_namespace(tmp_path: Path) -> None:
     """A SKILL.md outside csep-reflect-* is a hard boundary failure."""
     skill = tmp_path / "skills" / "manual-skill" / "SKILL.md"
@@ -214,7 +261,7 @@ def test_validate_receipt_rejects_memory_outside_allowed_root(tmp_path: Path) ->
 
 def test_validate_receipt_hash_mismatch_becomes_partial(tmp_path: Path) -> None:
     """A non-blank after_hash must match the bytes on disk."""
-    memory = tmp_path / "project" / "memory" / "USER.md"
+    memory = tmp_path / "project" / "memory" / "MEMORY.md"
     memory.parent.mkdir(parents=True)
     memory.write_text("Changed bytes.\n", encoding="utf-8")
     receipt = tmp_path / "receipt.json"
@@ -239,7 +286,7 @@ def test_validate_receipt_missing_memory_with_hash_becomes_partial(tmp_path: Pat
     """A claimed memory write with a non-blank hash must exist on disk."""
     memory_root = tmp_path / "project" / "memory"
     memory_root.mkdir(parents=True)
-    memory = memory_root / "USER.md"
+    memory = memory_root / "MEMORY.md"
     receipt = tmp_path / "receipt.json"
     _write_receipt(
         receipt,

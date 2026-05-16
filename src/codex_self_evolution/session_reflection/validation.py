@@ -124,18 +124,28 @@ def _receipt_identity_reason(
 
 
 def _memory_boundary_violations(changes: Any, memory_roots: list[Path]) -> list[dict[str, str]]:
-    """Return memory changes outside allowed roots or filenames."""
+    """Return memory changes outside MEMORY.md or memory/refs/*.md."""
     if not isinstance(changes, list):
         return [{"reason": "memory_changes_not_list", "path": ""}]
     roots = [root.expanduser().resolve(strict=False) for root in memory_roots]
     violations: list[dict[str, str]] = []
     for item in changes:
         path = _change_path(item)
-        if path.name not in {"USER.md", "MEMORY.md"}:
-            violations.append({"reason": "memory_filename", "path": str(path)})
-        elif not any(path.expanduser().resolve(strict=False).parent == root for root in roots):
+        if not _memory_path_allowed(path, roots):
             violations.append({"reason": "memory_outside_root", "path": str(path)})
     return violations
+
+
+def _memory_path_allowed(path: Path, roots: list[Path]) -> bool:
+    """Return whether path is the hot MEMORY.md file or a Markdown ref."""
+    resolved = path.expanduser().resolve(strict=False)
+    for root in roots:
+        if resolved == root / "MEMORY.md":
+            return True
+        refs_root = root / "refs"
+        if _under(resolved, refs_root) and resolved != refs_root and resolved.suffix.lower() == ".md":
+            return True
+    return False
 
 
 def _skill_boundary_violations(changes: Any, skills_root: Path, skill_prefix: str) -> list[dict[str, str]]:

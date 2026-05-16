@@ -4,20 +4,19 @@ from pathlib import Path
 from typing import Any
 
 from ..config import PACKAGE_ROOT, build_paths
-from ..storage import ensure_runtime_dirs, load_memory_files, repo_fingerprint
+from ..storage import ensure_runtime_dirs, load_stable_memory, repo_fingerprint
 
 
 def session_start(cwd: str | Path | None = None, state_dir: str | Path | None = None) -> dict:
     paths = build_paths(repo_root=cwd, state_dir=state_dir)
     ensure_runtime_dirs(paths)
     policy = (PACKAGE_ROOT / "session_recall" / "policy.md").read_text(encoding="utf-8")
-    memory_files = load_memory_files(paths)
+    memory_text = load_stable_memory(paths)
     combined_prefix = "\n\n".join(
         section
         for section in [
             "# Stable Background",
-            "## USER.md\n" + (memory_files["USER.md"] or "_No entries yet._\n"),
-            "## MEMORY.md\n" + (memory_files["MEMORY.md"] or "_No entries yet._\n"),
+            "## MEMORY.md\n" + (memory_text or "_No entries yet._\n"),
         ]
         if section
     )
@@ -27,8 +26,10 @@ def session_start(cwd: str | Path | None = None, state_dir: str | Path | None = 
         "repo_fingerprint": repo_fingerprint(paths.repo_root),
         "state_dir": str(paths.state_dir),
         "stable_background": {
-            "current_user_md": memory_files["USER.md"],
-            "current_memory_md": memory_files["MEMORY.md"],
+            "current_memory_md": memory_text,
+            "memory_path": str(paths.memory_dir / "MEMORY.md"),
+            "memory_refs_dir": str(paths.memory_refs_dir),
+            "legacy_user_md_ignored": (paths.memory_dir / "USER.md").exists(),
             "combined_prefix": combined_prefix,
         },
         "recall": {
@@ -69,8 +70,8 @@ def format_session_start_for_codex(session_result: dict[str, Any]) -> dict[str, 
     to ``~/.codex-self-evolution/projects/<mangled-cwd>/`` automatically via
     ``build_paths``; Codex sees only context relevant to this session.
 
-    ``additionalContext`` = ``stable_background.combined_prefix`` (USER.md +
-    MEMORY.md) + a short recall skill pointer. Empty MD files yield
+    ``additionalContext`` = ``stable_background.combined_prefix`` (MEMORY.md)
+    + a short recall skill pointer. Empty MD files yield
     a short "No entries yet" stub, not a crash — the hook is safe to install
     on a fresh machine before any reflection job has written memory.
     """

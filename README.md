@@ -39,7 +39,7 @@ Codex Self-Evolution Plugin，简称 `csep`。它在 `SessionStart` 时把稳定
 
 | 能力 | 写入时机 | 下一次如何使用 |
 | --- | --- | --- |
-| Stable Memory | 达到 trigger 条件后，由 session reflection 写入 `USER.md` / `MEMORY.md` | `SessionStart` 自动注入 Codex 上下文 |
+| Stable Memory | 达到 trigger 条件后，由 session reflection 写入 `MEMORY.md` / `memory/refs/` | `SessionStart` 自动注入 `MEMORY.md` |
 | Session Recall | `Stop` hook 把 transcript 归档到本地 SQLite/FTS；插件内置 `csep-session-recall` skill 教 Codex 如何检索 | `csep recall "needle1|needle2"` 像 `rg` 一样按当前 repo 或全局检索历史证据 |
 | Reflection Skills | reflection worker 写入 `~/.codex/skills/csep-reflect-*` | Codex 原生 skills loader 自动加载 |
 | Runtime Status | hooks、配置、日志、reflection job、recall DB 都可只读检查 | `csep status` 排查当前运行状态 |
@@ -162,11 +162,12 @@ csep recall --recent
 └── projects/
     └── -Users-you-code-repo/
         └── memory/
-            ├── USER.md
-            └── MEMORY.md
+            ├── MEMORY.md
+            └── refs/
+                └── ...
 ```
 
-每个 repo 会按绝对路径分配独立 bucket。业务仓库保持干净，运行时状态留在用户 home 目录。
+每个 repo 会按绝对路径分配独立 bucket。`MEMORY.md` 是唯一默认注入的热上下文；`refs/` 保存按需读取的长资料，不会在 `SessionStart` 自动展开。旧 `USER.md` 如果存在会保留在磁盘上，但新版本只在 `status` 中提示 ignored。
 
 ## 安全边界
 
@@ -175,6 +176,7 @@ csep recall --recent
 - provider secret 不进仓库，密钥放在 `~/.codex-self-evolution/.env.provider`。
 - runtime state 不写进业务仓库。
 - `csep-reflect-*` 之外的 skill 不会被当作有效产物。
+- memory 写入只接受当前 repo bucket 下的 `MEMORY.md` 和 `memory/refs/**/*.md`。
 - child thread 的口头声明不算数，父进程只认 `receipt.json` 和校验结果。
 - hook 前台不做长耗时工作，避免影响 Codex 正常退出。
 

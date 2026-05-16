@@ -212,6 +212,7 @@ def test_collect_status_runs_cleanly_with_no_home(monkeypatch, tmp_path: Path) -
         "timestamp",
         "home",
         "plugin_hooks",
+        "stable_memory",
         "session_reflection",
         "session_recall",
         "env_provider",
@@ -277,6 +278,51 @@ def test_collect_status_includes_session_recall_counts(monkeypatch, tmp_path: Pa
     assert "history" in result["session_recall"]
 
 
+def test_collect_status_includes_stable_memory_buckets(monkeypatch, tmp_path: Path) -> None:
+    """Stable Memory status reports hot memory, legacy USER.md, and refs."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda _: None)
+    memory = tmp_path / "home" / "projects" / "-tmp-repo" / "memory"
+    refs = memory / "refs" / "design"
+    refs.mkdir(parents=True)
+    (memory / "MEMORY.md").write_text("Remember this.\n", encoding="utf-8")
+    (memory / "USER.md").write_text("Legacy ignored.\n", encoding="utf-8")
+    (refs / "memory-line.md").write_text("Reference.\n", encoding="utf-8")
+
+    result = collect_status(home=tmp_path / "home")
+
+    status = result["stable_memory"]
+    assert status["bucket_count"] == 1
+    assert status["total_refs_count"] == 1
+    bucket = status["buckets"][0]
+    assert bucket["memory_file_exists"] is True
+    assert bucket["memory_size_bytes"] == len("Remember this.\n")
+    assert bucket["legacy_user_md_ignored"] is True
+    assert bucket["refs_count"] == 1
+
+
+def test_collect_status_reports_latest_memory_validation_warning(monkeypatch, tmp_path: Path) -> None:
+    """Latest memory validation status is surfaced without reading secrets."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda _: None)
+    latest = tmp_path / "home" / "session_reflection" / "latest.json"
+    latest.parent.mkdir(parents=True)
+    latest.write_text(json.dumps({
+        "validation": {
+            "status": "failed",
+            "boundary_violations": [
+                {"reason": "memory_outside_root", "path": "/tmp/memory/USER.md"},
+            ],
+            "hash_mismatches": [],
+        }
+    }), encoding="utf-8")
+
+    result = collect_status(home=tmp_path / "home")
+
+    assert result["stable_memory"]["latest_memory_validation_status"] == "failed"
+    assert result["stable_memory"]["latest_memory_validation_warning"] == "memory_outside_root"
+
+
 def test_status_recommends_backfill_when_history_exists_but_db_is_empty(
     monkeypatch, tmp_path: Path,
 ) -> None:
@@ -310,6 +356,7 @@ def test_cli_status_outputs_valid_json(tmp_path: Path, capsys, monkeypatch) -> N
         "timestamp",
         "home",
         "plugin_hooks",
+        "stable_memory",
         "session_reflection",
         "session_recall",
         "env_provider",

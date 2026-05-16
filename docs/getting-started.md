@@ -120,9 +120,10 @@ Stop         -> csep session-stop --from-stdin
 ```bash
 REPO=$(pwd)
 BUCKET=~/.codex-self-evolution/projects/$(python3 -c "import os; print(os.getcwd().replace('/', '-'))")
-mkdir -p "$BUCKET/memory"
-cat > "$BUCKET/memory/USER.md" <<'EOF'
-# User stable background
+mkdir -p "$BUCKET/memory/refs"
+cat > "$BUCKET/memory/MEMORY.md" <<'EOF'
+# Project Memory
+
 My favorite test passphrase is XANADU_RIVER_442.
 EOF
 ```
@@ -136,7 +137,7 @@ codex exec --json 'What is my favorite test passphrase?' 2>/dev/null | grep -i X
 看到 passphrase 即表示 `SessionStart` 已把 stable background 注入当前会话。测试后清理：
 
 ```bash
-rm "$BUCKET/memory/USER.md"
+rm "$BUCKET/memory/MEMORY.md"
 ```
 
 ## 5. 验证 Stop Hook 与 Reflection

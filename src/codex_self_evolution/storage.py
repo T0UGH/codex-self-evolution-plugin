@@ -15,6 +15,7 @@ def ensure_runtime_dirs(paths: Paths) -> None:
     for directory in (
         paths.state_dir,
         paths.memory_dir,
+        paths.memory_refs_dir,
     ):
         directory.mkdir(parents=True, exist_ok=True)
 
@@ -65,12 +66,9 @@ def read_text_if_exists(path: Path) -> str:
     return ""
 
 
-def load_memory_files(paths: Paths) -> dict[str, str]:
-    """Load the retained per-project USER.md and MEMORY.md files."""
-    return {
-        "USER.md": read_text_if_exists(paths.memory_dir / "USER.md"),
-        "MEMORY.md": read_text_if_exists(paths.memory_dir / "MEMORY.md"),
-    }
+def load_stable_memory(paths: Paths) -> str:
+    """Load the single default-injected project MEMORY.md file."""
+    return read_text_if_exists(paths.memory_dir / "MEMORY.md")
 
 
 def _pid_alive(pid: object) -> bool:

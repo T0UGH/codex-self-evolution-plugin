@@ -39,7 +39,7 @@ After a few days with Codex, the real drag is usually not the big task. It is th
 
 | Capability | When it writes | How the next session uses it |
 | --- | --- | --- |
-| Stable Memory | After the trigger policy fires, session reflection writes `USER.md` / `MEMORY.md` | `SessionStart` injects it into Codex context |
+| Stable Memory | After the trigger policy fires, session reflection writes `MEMORY.md` / `memory/refs/` | `SessionStart` injects `MEMORY.md` into Codex context |
 | Session Recall | The `Stop` hook archives transcripts into local SQLite/FTS, and the bundled `csep-session-recall` skill teaches Codex how to search | `csep recall "needle1|needle2"` searches historical evidence like `rg`, scoped to the current repo unless `--global` is explicit |
 | Reflection Skills | The reflection worker writes `~/.codex/skills/csep-reflect-*` | Codex loads them through the native skills loader |
 | Runtime Status | Hooks, config, logs, reflection jobs, and recall DB are read-only inspectable | `csep status` shows the current runtime state |
@@ -162,11 +162,12 @@ Default runtime root:
 └── projects/
     └── -Users-you-code-repo/
         └── memory/
-            ├── USER.md
-            └── MEMORY.md
+            ├── MEMORY.md
+            └── refs/
+                └── ...
 ```
 
-Each repo gets a bucket based on its absolute path. Application repos stay clean; runtime state stays in the user's home directory.
+Each repo gets a bucket based on its absolute path. `MEMORY.md` is the only hot context injected by default; `refs/` stores long-form material that agents can open on demand. A legacy `USER.md`, if present, is kept on disk but ignored by the current runtime.
 
 ## Safety Boundaries
 
@@ -175,6 +176,7 @@ Each repo gets a bucket based on its absolute path. Application repos stay clean
 - Provider secrets do not go into the repo. Put them in `~/.codex-self-evolution/.env.provider`.
 - Runtime state does not get written into application repos.
 - Skills outside the `csep-reflect-*` namespace are not accepted as generated artifacts.
+- Memory writes are accepted only for the current repo bucket's `MEMORY.md` and `memory/refs/**/*.md`.
 - The child thread's natural-language claim is not trusted; the parent process validates `receipt.json`.
 - Foreground hooks do not run long model work, so Codex can exit normally.
 

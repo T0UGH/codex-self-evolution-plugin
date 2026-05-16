@@ -50,6 +50,7 @@ def test_build_paths_defaults_to_per_project_home_bucket(monkeypatch, tmp_path):
     expected_bucket = home.resolve() / "projects" / mangle_project_path(repo.resolve())
     assert paths.state_dir == expected_bucket
     assert paths.memory_dir == expected_bucket / "memory"
+    assert paths.memory_refs_dir == expected_bucket / "memory" / "refs"
     # And crucially: nothing lands inside the repo itself.
     assert not (repo / "data").exists()
 

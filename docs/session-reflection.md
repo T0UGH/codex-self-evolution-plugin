@@ -79,8 +79,8 @@ csep session-reflect --job <job_id>
 Child Codex 只能写两类产物：
 
 1. 当前 repo bucket 的 memory：
-   - `USER.md`
    - `MEMORY.md`
+   - `refs/**/*.md`
 2. 用户 Codex skills 目录下的 `csep-reflect-*` skill。
 
 Child 必须写 `receipt.json`，声明：
@@ -97,7 +97,7 @@ Parent 校验：
 
 - receipt 必须是合法 JSON object。
 - job / parent / child id 必须匹配。
-- memory path 必须落在允许的 memory root 下。
+- memory path 只接受当前 repo bucket 下的 `MEMORY.md` 和 `memory/refs/**/*.md`；旧 `USER.md` 不再是合法写入目标。
 - skill path 必须落在 skills root 下，且名称必须以 `csep-reflect-` 开头。
 - 文件 hash 必须和 receipt 声明一致。
 

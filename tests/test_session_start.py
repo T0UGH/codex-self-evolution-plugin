@@ -8,8 +8,10 @@ def test_session_start_injects_memory_and_short_recall_pointer(tmp_path):
     repo.mkdir()
     state = tmp_path / "state"
     (state / "memory").mkdir(parents=True)
-    (state / "memory" / "USER.md").write_text("# USER\n\nBe concise.\n", encoding="utf-8")
+    (state / "memory" / "USER.md").write_text("# USER\n\nDo not inject me.\n", encoding="utf-8")
     (state / "memory" / "MEMORY.md").write_text("# MEMORY\n\nRun focused tests first.\n", encoding="utf-8")
+    (state / "memory" / "refs").mkdir()
+    (state / "memory" / "refs" / "detail.md").write_text("Cold detail.\n", encoding="utf-8")
     result = session_start(cwd=repo, state_dir=state)
     assert result["hook"] == "SessionStart"
     assert "recall" in result["recall"]["policy"].lower()
@@ -17,10 +19,13 @@ def test_session_start_injects_memory_and_short_recall_pointer(tmp_path):
     assert result["recall"]["skill"]["provided_by"] == "plugin"
     assert "content" not in result["recall"]["skill"]
     assert result["runtime"]["session_context"]["thread_start_injected"] is True
-    assert "Be concise." in result["stable_background"]["current_user_md"]
     assert "Run focused tests first." in result["stable_background"]["current_memory_md"]
+    assert "Do not inject me." not in result["stable_background"]["combined_prefix"]
+    assert "Cold detail." not in result["stable_background"]["combined_prefix"]
+    assert result["stable_background"]["legacy_user_md_ignored"] is True
     assert "# Stable Background" in result["stable_background"]["combined_prefix"]
     assert "## Recall Contract" not in result["stable_background"]["combined_prefix"]
     assert "# Session Recall Skill" not in result["stable_background"]["combined_prefix"]
     assert (state / "memory").exists()
+    assert (state / "memory" / "refs").exists()
     json.dumps(result)

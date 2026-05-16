@@ -144,6 +144,10 @@ def test_run_migration_merges_memory(worktree_setup: tuple[Path, Path, Path]) ->
     # Target keeps the higher-confidence version of the shared entry.
     shared = next(item for item in merged["global"] if item["content"] == "prefer atomic commits")
     assert shared["confidence"] == 0.9
+    rendered_memory = (main_bucket / "memory" / "MEMORY.md").read_text()
+    assert "terse confirmations" in rendered_memory
+    assert "prefer atomic commits" in rendered_memory
+    assert not (main_bucket / "memory" / "USER.md").exists()
 
     # Source bucket is archived (renamed), not deleted.
     assert not linked_bucket.exists()

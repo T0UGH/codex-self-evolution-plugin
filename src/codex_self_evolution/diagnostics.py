@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .config import get_home_dir
+from .config import PROJECTS_SUBDIR, SESSION_REFLECTION_SUBDIR, get_home_dir
 from .session_reflection.runner import session_reflection_status
 from .session_recall.archive import default_db_path
 from .session_recall.store import SessionRecallStore
@@ -41,6 +41,7 @@ def collect_status(
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "home": str(home_dir),
         "plugin_hooks": _check_plugin_hook_bundle(),
+        "stable_memory": _check_stable_memory(home_dir),
         "session_reflection": session_reflection_status(home=home_dir),
         "session_recall": _check_session_recall(home_dir),
         "env_provider": _check_env_provider(home_dir),
@@ -150,6 +151,99 @@ def _commands_for_hook_event(entries: Any) -> list[str]:
             if isinstance(command, str) and command:
                 commands.append(command)
     return commands
+
+
+# ---------- stable memory -----------------------------------------------
+
+
+def _check_stable_memory(home_dir: Path) -> dict[str, Any]:
+    """Return read-only Stable Memory status for known project buckets."""
+    projects_root = home_dir / PROJECTS_SUBDIR
+    result: dict[str, Any] = {
+        "projects_root": str(projects_root),
+        "exists": projects_root.exists(),
+        "bucket_count": 0,
+        "total_refs_count": 0,
+        "buckets": [],
+        "latest_memory_validation_status": None,
+        "latest_memory_validation_warning": None,
+    }
+    if projects_root.exists():
+        buckets: list[dict[str, Any]] = []
+        for bucket in sorted(projects_root.iterdir(), key=lambda path: path.name):
+            if not bucket.is_dir():
+                continue
+            memory_dir = bucket / "memory"
+            memory_file = memory_dir / "MEMORY.md"
+            legacy_user_file = memory_dir / "USER.md"
+            refs_dir = memory_dir / "refs"
+            refs_count = _count_memory_refs(refs_dir)
+            buckets.append({
+                "bucket": bucket.name,
+                "memory_dir": str(memory_dir),
+                "memory_file_exists": memory_file.is_file(),
+                "memory_size_bytes": _file_size(memory_file),
+                "legacy_user_md_ignored": legacy_user_file.exists(),
+                "refs_dir_exists": refs_dir.is_dir(),
+                "refs_count": refs_count,
+            })
+        result["buckets"] = buckets
+        result["bucket_count"] = len(buckets)
+        result["total_refs_count"] = sum(int(bucket["refs_count"]) for bucket in buckets)
+    result.update(_latest_memory_validation(home_dir))
+    return result
+
+
+def _count_memory_refs(refs_dir: Path) -> int:
+    """Count Markdown files under memory/refs without failing status."""
+    if not refs_dir.is_dir():
+        return 0
+    try:
+        return sum(1 for path in refs_dir.rglob("*.md") if path.is_file())
+    except OSError:
+        return 0
+
+
+def _file_size(path: Path) -> int:
+    """Return file size in bytes, or 0 if the file is absent/unreadable."""
+    try:
+        return path.stat().st_size if path.is_file() else 0
+    except OSError:
+        return 0
+
+
+def _latest_memory_validation(home_dir: Path) -> dict[str, Any]:
+    """Return latest memory-scoped validation status and warning, if known."""
+    latest_path = home_dir / SESSION_REFLECTION_SUBDIR / "latest.json"
+    result: dict[str, Any] = {
+        "latest_memory_validation_status": None,
+        "latest_memory_validation_warning": None,
+    }
+    if not latest_path.is_file():
+        return result
+    try:
+        latest = json.loads(latest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        result["latest_memory_validation_warning"] = "latest_job_unreadable"
+        return result
+    validation = latest.get("validation") if isinstance(latest, dict) else None
+    if not isinstance(validation, dict):
+        return result
+    result["latest_memory_validation_status"] = validation.get("status")
+    result["latest_memory_validation_warning"] = _memory_validation_warning(validation)
+    return result
+
+
+def _memory_validation_warning(validation: dict[str, Any]) -> str | None:
+    """Summarize the first memory-scoped validation issue."""
+    for item in validation.get("boundary_violations") or []:
+        if isinstance(item, dict) and str(item.get("reason") or "").startswith("memory_"):
+            return str(item.get("reason") or "memory_boundary_violation")
+    for item in validation.get("hash_mismatches") or []:
+        path = str(item.get("path") or "") if isinstance(item, dict) else ""
+        if "/memory/" in path or path.endswith("/MEMORY.md"):
+            return str(item.get("reason") or "memory_hash_mismatch")
+    return None
 
 
 # ---------- session recall ----------------------------------------------
