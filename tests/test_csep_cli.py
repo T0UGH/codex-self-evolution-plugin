@@ -5,7 +5,25 @@ from io import StringIO
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from codex_self_evolution import cli, csep
+
+
+def test_csep_version_flag(capsys):
+    with pytest.raises(SystemExit) as exc:
+        csep.main(["--version"])
+
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.startswith("csep ")
+
+
+def test_long_cli_version_flag(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--version"])
+
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.startswith("codex-self-evolution ")
 
 
 def test_csep_recall_defaults_to_markdown_from_session_recall(tmp_path, monkeypatch, capsys):

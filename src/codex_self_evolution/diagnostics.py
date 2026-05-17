@@ -12,10 +12,14 @@ import os
 import re
 import shutil
 import subprocess
+import tomllib
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .config import PROJECTS_SUBDIR, SESSION_REFLECTION_SUBDIR, get_home_dir
 from .session_reflection.runner import session_reflection_status
 from .session_recall.archive import default_db_path
@@ -45,7 +49,7 @@ def collect_status(
         "session_reflection": session_reflection_status(home=home_dir),
         "session_recall": _check_session_recall(home_dir),
         "env_provider": _check_env_provider(home_dir),
-        "tools": _check_tools(),
+        "tools": _check_tools(include_remote=True),
     }
 
 
@@ -359,13 +363,124 @@ def _check_env_provider(home_dir: Path) -> dict[str, Any]:
 # ---------- CLI tool versions -------------------------------------------
 
 
-def _check_tools() -> dict[str, Any]:
-    return {
+def _check_tools(*, include_remote: bool = False) -> dict[str, Any]:
+    tools = {
         "codex": _probe_version(["codex", "--version"]),
         "opencode": _probe_version(["opencode", "--version"]),
         "pi": _probe_version(["pi", "--version"]),
-        "csep": _probe_version(["csep", "--help"]),
+        "csep": _probe_version(["csep", "--version"]),
     }
+    tools["csep"].update(_check_csep_version_details(tools["csep"], include_remote=include_remote))
+    return tools
+
+
+def _check_csep_version_details(csep_probe: dict[str, Any], *, include_remote: bool) -> dict[str, Any]:
+    source = _read_cwd_source_version(Path.cwd())
+    if include_remote and csep_probe.get("available"):
+        pypi = _fetch_pypi_latest_version()
+    else:
+        pypi = {"version": None, "error": None}
+    installed_version = _parse_csep_version_line(csep_probe.get("version"))
+    source_version = source.get("version")
+    pypi_version = pypi.get("version")
+    return {
+        "installed_version": installed_version,
+        "runtime_version": __version__,
+        "source_version": source_version,
+        "source_path": source.get("path"),
+        "source_error": source.get("error"),
+        "pypi_latest_version": pypi_version,
+        "pypi_error": pypi.get("error"),
+        "runtime_matches_installed": _versions_match(__version__, installed_version),
+        "runtime_matches_source": _versions_match(__version__, source_version),
+        "runtime_matches_pypi": _versions_match(__version__, pypi_version),
+        "source_matches_pypi": _versions_match(source_version, pypi_version),
+    }
+
+
+def _parse_csep_version_line(line: Any) -> str | None:
+    if not isinstance(line, str):
+        return None
+    match = re.search(r"\bcsep\s+([0-9][A-Za-z0-9_.!+~-]*)\b", line)
+    return match.group(1) if match else None
+
+
+def _versions_match(left: str | None, right: str | None) -> bool | None:
+    if not left or not right:
+        return None
+    return left == right
+
+
+def _read_cwd_source_version(cwd: Path) -> dict[str, Any]:
+    for directory in (cwd, *cwd.parents):
+        pyproject = directory / "pyproject.toml"
+        if not pyproject.is_file():
+            continue
+        try:
+            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            return {"version": None, "path": str(pyproject), "error": str(exc)}
+        project = data.get("project") if isinstance(data, dict) else None
+        if not isinstance(project, dict) or project.get("name") != "csep":
+            return {"version": None, "path": None, "error": None}
+        version = project.get("version")
+        return {
+            "version": version if isinstance(version, str) else None,
+            "path": str(pyproject),
+            "error": None if isinstance(version, str) else "project.version missing",
+        }
+    return {"version": None, "path": None, "error": None}
+
+
+def _fetch_pypi_latest_version() -> dict[str, str | None]:
+    request = urllib.request.Request(
+        "https://pypi.org/simple/csep/",
+        headers={
+            "Accept": "application/vnd.pypi.simple.v1+json",
+            "Cache-Control": "no-cache",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError, urllib.error.URLError) as exc:
+        return {"version": None, "error": str(exc)}
+    files = payload.get("files") if isinstance(payload, dict) else None
+    if not isinstance(files, list):
+        return {"version": None, "error": "unexpected PyPI simple response"}
+    versions: set[str] = set()
+    for item in files:
+        filename = item.get("filename") if isinstance(item, dict) else None
+        version = _version_from_pypi_filename(filename)
+        if version:
+            versions.add(version)
+    sorted_versions = sorted(versions, key=_version_sort_key)
+    if not sorted_versions:
+        return {"version": None, "error": "no csep releases found"}
+    return {"version": sorted_versions[-1], "error": None}
+
+
+def _version_from_pypi_filename(filename: str | None) -> str | None:
+    if not filename or not filename.startswith("csep-"):
+        return None
+    remainder = filename.removeprefix("csep-")
+    if remainder.endswith(".tar.gz"):
+        return remainder.removesuffix(".tar.gz")
+    if remainder.endswith(".zip"):
+        return remainder.removesuffix(".zip")
+    if remainder.endswith(".whl"):
+        parts = remainder.split("-")
+        return parts[0] if parts else None
+    return None
+
+
+def _version_sort_key(version: str) -> tuple[tuple[int, int | str], ...]:
+    pieces: list[tuple[int, int | str]] = []
+    for piece in re.split(r"([0-9]+)", version):
+        if not piece:
+            continue
+        pieces.append((0, int(piece)) if piece.isdigit() else (1, piece))
+    return tuple(pieces)
 
 
 def _probe_version(argv: list[str]) -> dict[str, Any]:

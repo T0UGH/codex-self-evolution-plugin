@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from codex_self_evolution import cli, diagnostics
@@ -181,15 +182,14 @@ def test_tools_probe_handles_missing_binary(monkeypatch) -> None:
 
 def test_tools_probe_grabs_first_line_of_version_output(monkeypatch) -> None:
     """Version probes use the first output line from each tool."""
+    calls: list[list[str]] = []
+
     def fake_which(binary: str) -> str:
         return f"/fake/{binary}"
 
     def fake_run(argv, **_):
-        class R:
-            stdout = "opencode\n1.4.0\n"
-            stderr = ""
-            returncode = 0
-        return R()
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="opencode\n1.4.0\n", stderr="")
 
     monkeypatch.setattr(diagnostics.shutil, "which", fake_which)
     monkeypatch.setattr(diagnostics.subprocess, "run", fake_run)
@@ -198,6 +198,46 @@ def test_tools_probe_grabs_first_line_of_version_output(monkeypatch) -> None:
     assert result["opencode"]["available"] is True
     assert result["pi"]["available"] is True
     assert result["csep"]["available"] is True
+    assert ["csep", "--version"] in calls
+
+
+def test_tools_probe_reports_csep_version_matrix(monkeypatch, tmp_path: Path) -> None:
+    """CSEP status exposes installed, source, and PyPI versions separately."""
+    calls: list[list[str]] = []
+
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[project]
+name = "csep"
+version = "1.2.3"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda binary: f"/fake/{binary}")
+
+    def fake_run(argv, **_):
+        calls.append(list(argv))
+        stdout = "csep 1.2.4\n" if argv[0] == "csep" else "tool 0.1.0\n"
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(diagnostics.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        diagnostics,
+        "_fetch_pypi_latest_version",
+        lambda: {"version": "1.2.5", "error": None},
+    )
+
+    result = _check_tools(include_remote=True)
+
+    csep_status = result["csep"]
+    assert ["csep", "--version"] in calls
+    assert csep_status["version"] == "csep 1.2.4"
+    assert csep_status["installed_version"] == "1.2.4"
+    assert csep_status["source_version"] == "1.2.3"
+    assert csep_status["pypi_latest_version"] == "1.2.5"
+    assert csep_status["runtime_matches_installed"] is False
+    assert csep_status["source_matches_pypi"] is False
 
 
 def test_collect_status_runs_cleanly_with_no_home(monkeypatch, tmp_path: Path) -> None:

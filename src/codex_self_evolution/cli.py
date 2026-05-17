@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .config_file import (
     ConfigError,
     config_to_dict,
@@ -32,6 +33,7 @@ from .session_reflection.runner import (
 def build_parser(prog: str = "codex-self-evolution") -> argparse.ArgumentParser:
     """Build the retained runtime parser under the requested console-script name."""
     parser = argparse.ArgumentParser(prog=prog)
+    parser.add_argument("--version", action="version", version=f"{prog} {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     session_parser = subparsers.add_parser("session-start")

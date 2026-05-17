@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from . import cli as full_cli
 from .logging_setup import configure as configure_logging, get_logger
 from .session_recall.workflow import build_focused_recall, render_focused_recall_markdown
@@ -31,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="csep",
         description="Short runtime commands for codex-self-evolution.",
     )
+    parser.add_argument("--version", action="version", version=f"csep {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
     _add_main_runtime_commands(subparsers)
 
