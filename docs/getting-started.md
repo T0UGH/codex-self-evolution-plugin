@@ -83,6 +83,8 @@ stop_hook_archive = true
 retention_days = 14
 ```
 
+默认的 `sandbox = "danger-full-access"` 和 `approval_policy = "never"` 是为了让后台 reflection 能无阻塞完成写入和 receipt 落盘。它的信任边界不在 child 自述，而在父进程的 receipt validation：路径、hash、job identity、memory root 和 `csep-reflect-*` skill namespace 都会被校验。低信任或共享环境可以调低这两个值，但后台 reflection 可能因此需要人工确认或无法完成。
+
 ## 3. 检查 Codex Plugin Hooks
 
 `csep setup` 会写入或更新 `~/.codex/config.toml`：
@@ -251,6 +253,12 @@ codex plugin --help 2>&1 | head -20
 ```bash
 scripts/install.sh
 csep status | python3 -m json.tool
+```
+
+发布或排障前可以额外跑 runtime smoke。脚本使用临时 state dir，不会污染默认 recall DB：
+
+```bash
+scripts/smoke-runtime.sh
 ```
 
 ### `session_reflection.latest.status` 是 `skipped`

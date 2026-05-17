@@ -53,7 +53,7 @@ Codex Self-Evolution Plugin，简称 `csep`。它在 `SessionStart` 时把稳定
 - 每次 `Stop` 都会归档 session，但 reflection 不是每次都跑；只有计数或高信号命中后才 fork worker。
 - reflection worker 写完必须留下 `receipt.json`，父进程会校验路径、hash 和 skill 命名空间。
 - memory 写在当前 repo bucket；生成 skill 只允许落到 `csep-reflect-*`，不碰用户已有 skill。
-- 核心包只用 Python stdlib，尽量减少安装、升级和 hook 执行时的变量。
+- 核心包没有 Python runtime dependencies，只用 stdlib；运行完整插件链路仍需要 Codex CLI、`uv`、hook/plugin 能力和 reflection provider 环境。
 
 ## 安装和启用
 
@@ -87,6 +87,12 @@ csep status | python3 -m json.tool
 ```
 
 重点看 `plugin_hooks.manifest_exists`、`plugin_hooks.session_start_declared`、`plugin_hooks.stop_declared` 是否为 `true`。之后每次 `SessionStart` 会注入 memory，每次 `Stop` 会归档 transcript；reflection 只在触发条件满足时后台运行。
+
+发布或排障前可以跑本地 runtime smoke。它使用临时 state dir，不会污染默认 recall DB：
+
+```bash
+scripts/smoke-runtime.sh
+```
 
 ### 首次回填历史
 

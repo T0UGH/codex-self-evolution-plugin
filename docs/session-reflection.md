@@ -143,6 +143,20 @@ skill_generation_mode = "one_shot_active"
 active_job_stale_seconds = 1800
 ```
 
+## 执行模型和安全边界
+
+默认配置里的 `sandbox = "danger-full-access"` 和 `approval_policy = "never"` 是有意选择的高自治模式：reflection child 需要在后台完成读 transcript、写 memory、生成 skill、落 receipt 等动作，不能在 Codex 退出路径上等待人工确认。
+
+这个默认值不表示 child 输出天然可信。CSEP 的安全边界放在父进程：
+
+- child 只能通过 receipt 声明自己写了什么。
+- 父进程用 `validate_receipt()` 校验 job / parent / child identity、写入路径、文件 hash、skill namespace 和 `SKILL.md` 结构。
+- 合法 memory 写入只允许落在当前 repo bucket 的 `MEMORY.md` 或 `memory/refs/**/*.md`。
+- 合法 skill 只允许落到 `~/.codex/skills/csep-reflect-*` 命名空间。
+- validation 失败的 job 不会被视为成功沉淀。
+
+如果你在共享机器、低信任 provider、或更严格的合规环境运行，可以把 sandbox / approval policy 调低，但要预期后台 reflection 可能需要人工确认或无法完成。
+
 用户可以换模型。CSEP 会把 job 使用的模型记录到 job/fork response 中，但当前不做模型 allowlist 拦截。
 
 ## 排障文件

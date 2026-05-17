@@ -107,7 +107,7 @@ csep recall sync-claude --root ~/.claude/projects --limit-files 50
 
 ## Plugin Skill
 
-Recall 的操作手册应该作为 CSEP 插件自带 skill 暴露给 Codex harness，而不是通过 `SessionStart` 注入完整 recall contract。
+Recall 的完整操作手册应该作为 CSEP 插件自带 skill 暴露给 Codex harness，而不是通过 `SessionStart` 注入完整 recall contract。`SessionStart` 只保留短的 recall policy/pointer，提醒模型按需调用 skill 或 `csep recall`。
 
 插件结构：
 
@@ -130,7 +130,7 @@ plugin_bundle/
 - `no_match` 后换更短、更确定的 needle。
 - 命中后引用原文证据，由模型自己总结和判断。
 
-`SessionStart` 不再注入完整 recall 操作手册。最多只保留短提示，或者完全依赖 plugin skill。
+`SessionStart` 不再注入完整 recall 操作手册；当前实现只注入短 recall policy，用来区分 stable background 和“按需拉取更多历史”的操作提示。具体工作流仍以 plugin skill 为准。
 
 ## 输出模型
 

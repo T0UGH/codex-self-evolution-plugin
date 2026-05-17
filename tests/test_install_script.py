@@ -169,3 +169,15 @@ def test_setup_script_delegates_to_uvx_setup():
     text = (ROOT / "scripts" / "setup.sh").read_text(encoding="utf-8")
     assert "uvx csep setup" in text
     assert "git clone" not in text
+
+
+def test_runtime_smoke_script_covers_release_gate_paths():
+    path = ROOT / "scripts" / "smoke-runtime.sh"
+    text = path.read_text(encoding="utf-8")
+
+    assert path.stat().st_mode & 0o111
+    assert "session-start --from-stdin" in text
+    assert "session-archive --from-hook-payload" in text
+    assert "recall sync-claude" in text
+    assert "runtime smoke archive needle" in text
+    assert "runtime smoke claude needle" in text

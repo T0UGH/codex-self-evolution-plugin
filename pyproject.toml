@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "csep"
-version = "1.3.3"
-description = "Self-evolution loop for OpenAI Codex: session reflection, session recall, and reflection-generated skills with zero runtime dependencies."
+version = "1.3.4"
+description = "Self-evolution loop for OpenAI Codex: session reflection, session recall, and reflection-generated skills with zero Python runtime dependencies."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -22,9 +22,9 @@ keywords = [
     "plugin",
     "self-evolution",
 ]
-# Keep runtime deps empty — the plugin only uses stdlib. If you ever add a real
-# dep, also update the "zero runtime dependencies" wording in the description
-# above and in README.
+# Keep Python runtime deps empty — the plugin only uses stdlib. If you ever add
+# a real dep, also update the "zero Python runtime dependencies" wording in the
+# description above and in README.
 dependencies = []
 
 # Classifiers drive PyPI search + the project page sidebar. Keep the list

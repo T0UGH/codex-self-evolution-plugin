@@ -53,7 +53,7 @@ Every `Stop` archives the session, but reflection only runs when counters or hig
 - Every `Stop` archives, but not every `Stop` reflects.
 - Reflection writes must leave a `receipt.json`; the parent process validates paths, hashes, and skill namespaces.
 - Memory writes stay in the current repo bucket; generated skills must use the `csep-reflect-*` prefix.
-- The core package uses only the Python standard library to keep install and hook behavior predictable.
+- The core package has zero Python runtime dependencies and uses only the standard library. The full plugin flow still depends on Codex CLI, `uv`, hook/plugin support, and reflection provider configuration.
 
 ## Install And Enable
 
@@ -87,6 +87,12 @@ csep status | python3 -m json.tool
 ```
 
 Look for `plugin_hooks.manifest_exists`, `plugin_hooks.session_start_declared`, and `plugin_hooks.stop_declared` to be `true`. After that, every `SessionStart` injects memory, every `Stop` archives the transcript, and reflection runs in the background only when triggered.
+
+Before a release or when debugging runtime wiring, run the local smoke harness. It uses a temporary state dir and does not pollute the default recall DB:
+
+```bash
+scripts/smoke-runtime.sh
+```
 
 ### First-Time History Bootstrap
 
