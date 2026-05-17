@@ -84,6 +84,7 @@ csep recall
 | `csep recall "needle1|needle2"` | 查询当前 repo 的历史 session |
 | `csep recall --recent` | 查看最近归档的 session |
 | `csep recall bootstrap` | 回填本机历史 Codex sessions |
+| `csep recall sync-claude` | 同步本机 Claude Code 历史 sessions |
 | `csep session-reflect --status` | 查看 reflection job 状态 |
 
 生命周期 hook 使用的命令：
@@ -100,6 +101,7 @@ csep recall
 | `csep session-reflect --hook-payload <path>` | 手动从 Stop payload 创建 reflection job |
 | `csep session-archive ...` | 手动归档单个 transcript |
 | `csep session-ingest --backfill ...` | 底层历史回填入口，通常用 `csep recall bootstrap` |
+| `csep recall sync-claude ...` | 用户入口，把 `~/.claude/projects` 写入 recall SQLite/FTS |
 | `csep config ...` | 查看、初始化、验证配置 |
 | `csep migrate-worktrees` | 维护旧 worktree bucket 合并 |
 

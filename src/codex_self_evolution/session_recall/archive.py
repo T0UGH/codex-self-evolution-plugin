@@ -8,7 +8,7 @@ from typing import Any, Iterable
 
 from ..config import get_home_dir
 from ..session_reflection.guard import evaluate_archive_guard
-from .parser import parse_codex_jsonl
+from .parser import parse_claude_jsonl, parse_codex_jsonl
 from .store import SessionRecallStore
 
 DISCOVERY_MTIME_WINDOW_SECONDS = 15 * 60
@@ -35,6 +35,31 @@ def archive_transcript(
         result = store.archive(parsed)
         return result
     except Exception as exc:  # noqa: BLE001 - archive is best-effort at hook boundary.
+        store.record_error(source_path=str(transcript_path), session_id=session_id, cwd=cwd, error=f"{type(exc).__name__}: {exc}")
+        return {
+            "status": "error",
+            "session_id": session_id,
+            "message_count": 0,
+            "error": f"{type(exc).__name__}: {exc}",
+            "db_path": str(store.db_path),
+        }
+    finally:
+        store.close()
+
+
+def archive_claude_transcript(
+    transcript_path: str | Path,
+    *,
+    session_id: str = "",
+    cwd: str = "",
+    db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    store = SessionRecallStore(db_path or default_db_path())
+    try:
+        parsed = parse_claude_jsonl(transcript_path, session_id=session_id, cwd=cwd)
+        result = store.archive(parsed)
+        return result
+    except Exception as exc:  # noqa: BLE001 - archive is best-effort at ingest boundary.
         store.record_error(source_path=str(transcript_path), session_id=session_id, cwd=cwd, error=f"{type(exc).__name__}: {exc}")
         return {
             "status": "error",
@@ -262,6 +287,87 @@ def backfill_sessions(
     return {
         "status": "completed",
         "root": str(root_path),
+        "processed_files": processed,
+        "processed_successfully": successful,
+        "archived_sessions": successful,
+        "new_sessions": new_sessions,
+        "updated_sessions": updated_sessions,
+        "unchanged_sessions": unchanged_sessions,
+        "error_count": errors,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "db_path": str(resolved_db_path),
+    }
+
+
+def backfill_claude_sessions(
+    root: str | Path | None = None,
+    *,
+    cwd: str | None = None,
+    since_days: int | None = None,
+    limit_files: int | None = None,
+    db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    root_path = Path(root).expanduser().resolve() if root else Path.home() / ".claude" / "projects"
+    resolved_db_path = Path(db_path).expanduser().resolve() if db_path else default_db_path()
+    started_at = _utc_timestamp()
+    cutoff = None
+    if since_days is not None:
+        cutoff = datetime.now(UTC) - timedelta(days=max(0, since_days))
+    files = sorted(
+        root_path.rglob("*.jsonl"),
+        key=lambda path: (_file_mtime(path), str(path)),
+        reverse=True,
+    ) if root_path.exists() else []
+    if cutoff is not None:
+        files = [
+            path for path in files
+            if datetime.fromtimestamp(_file_mtime(path), UTC) >= cutoff
+        ]
+    if limit_files is not None:
+        files = files[: max(0, limit_files)]
+    processed = 0
+    successful = 0
+    new_sessions = 0
+    updated_sessions = 0
+    unchanged_sessions = 0
+    errors = 0
+    for path in files:
+        processed += 1
+        result = archive_claude_transcript(path, cwd=cwd or "", db_path=resolved_db_path)
+        if result.get("status") == "archived":
+            successful += 1
+            if result.get("new_session"):
+                new_sessions += 1
+            elif result.get("updated_session"):
+                updated_sessions += 1
+            elif result.get("unchanged_session"):
+                unchanged_sessions += 1
+        else:
+            errors += 1
+    finished_at = _utc_timestamp()
+    store = SessionRecallStore(resolved_db_path)
+    try:
+        store.record_ingest_run(
+            source="claude_code",
+            root=str(root_path),
+            since_days=since_days,
+            limit_files=limit_files,
+            processed_files=processed,
+            successful_files=successful,
+            new_sessions=new_sessions,
+            updated_sessions=updated_sessions,
+            unchanged_sessions=unchanged_sessions,
+            error_count=errors,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+    finally:
+        store.close()
+    return {
+        "status": "completed",
+        "root": str(root_path),
+        "source": "claude_code",
         "processed_files": processed,
         "processed_successfully": successful,
         "archived_sessions": successful,

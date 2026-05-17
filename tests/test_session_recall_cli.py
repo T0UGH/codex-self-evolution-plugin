@@ -122,6 +122,71 @@ def test_csep_recall_bootstrap_backfills_history(tmp_path, monkeypatch, capsys):
     assert "formal bootstrap history" in recall_out
 
 
+def test_csep_recall_sync_claude_backfills_claude_history(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    root = tmp_path / "claude" / "projects" / "-tmp-repo"
+    root.mkdir(parents=True)
+    (root / "claude-session.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "sessionId": "claude-session",
+                "uuid": "u1",
+                "cwd": str(repo),
+                "timestamp": "2026-05-17T01:00:00.000Z",
+                "message": {"role": "user", "content": "claude sync needle"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = csep.main(
+        [
+            "recall",
+            "sync-claude",
+            "--root",
+            str(tmp_path / "claude" / "projects"),
+            "--limit-files",
+            "1",
+            "--format",
+            "json",
+        ]
+    )
+
+    assert exit_code == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["command"] == "recall sync-claude"
+    assert out["source"] == "claude_code"
+    assert out["processed_files"] == 1
+    assert out["processed_successfully"] == 1
+    assert out["new_sessions"] == 1
+
+    assert csep.main(["recall", "claude sync needle", "--cwd", str(repo)]) == 0
+    recall_out = capsys.readouterr().out
+    assert "Status: matched" in recall_out
+    assert "claude sync needle" in recall_out
+
+
+def test_csep_recall_claude_query_remains_search(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(json.dumps({"role": "user", "content": "claude query needle"}) + "\n", encoding="utf-8")
+
+    assert csep.main(["session-archive", "--transcript-path", str(transcript), "--cwd", str(repo), "--session-id", "s1"]) == 0
+    capsys.readouterr()
+
+    assert csep.main(["recall", "claude", "--cwd", str(repo)]) == 0
+    out = capsys.readouterr().out
+    assert "Status: matched" in out
+    assert "claude query needle" in out
+    assert "Claude Recall Sync" not in out
+
+
 def test_csep_recall_budget_truncates(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
     repo = tmp_path / "repo"

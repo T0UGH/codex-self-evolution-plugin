@@ -87,3 +87,72 @@ def test_parse_codex_jsonl_does_not_use_turn_id_as_message_uid(tmp_path):
 
     assert len(parsed.messages) == 2
     assert parsed.messages[0].message_uid != parsed.messages[1].message_uid
+
+
+def test_parse_claude_jsonl_extracts_text_and_tool_blocks(tmp_path):
+    from codex_self_evolution.session_recall.parser import parse_claude_jsonl
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    transcript = tmp_path / "claude.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "user",
+                        "sessionId": "claude-session",
+                        "uuid": "u1",
+                        "cwd": str(repo),
+                        "timestamp": "2026-05-17T01:00:00.000Z",
+                        "message": {"role": "user", "content": "sync claude history"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "sessionId": "claude-session",
+                        "uuid": "a1",
+                        "cwd": str(repo),
+                        "timestamp": "2026-05-17T01:00:01.000Z",
+                        "message": {
+                            "role": "assistant",
+                            "content": [
+                                {"type": "thinking", "thinking": "not for recall"},
+                                {"type": "text", "text": "claude answer"},
+                                {"type": "tool_use", "name": "Bash", "input": {"command": "pytest"}},
+                            ],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "user",
+                        "sessionId": "claude-session",
+                        "uuid": "u2",
+                        "cwd": str(repo),
+                        "timestamp": "2026-05-17T01:00:02.000Z",
+                        "message": {
+                            "role": "user",
+                            "content": [
+                                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "pytest passed"},
+                            ],
+                        },
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    parsed = parse_claude_jsonl(transcript)
+
+    assert parsed.session_id == "claude:claude-session"
+    assert parsed.cwd == str(repo)
+    assert parsed.metadata["source"] == "claude_code_jsonl"
+    assert [message.role for message in parsed.messages] == ["user", "assistant", "assistant", "tool"]
+    assert "not for recall" not in "\n".join(message.content for message in parsed.messages)
+    assert parsed.messages[1].content == "claude answer"
+    assert parsed.messages[2].tool_name == "Bash"
+    assert "pytest" in parsed.messages[2].content
+    assert parsed.messages[3].tool_name == "toolu_1"

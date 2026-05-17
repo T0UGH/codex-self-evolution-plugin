@@ -102,6 +102,12 @@ csep recall bootstrap --since-days 30
 csep recall bootstrap --all-history
 ```
 
+如果你还想把 Claude Code 的本地历史也放进同一个 recall 数据库，可以同步 `~/.claude/projects`：
+
+```bash
+csep recall sync-claude --since-days 30
+```
+
 想确认 recall 已经有数据，可以跑：
 
 ```bash
@@ -122,6 +128,7 @@ csep recall --recent
 | `csep recall "needle1|needle2"` | 像 `rg` 一样在当前 repo 的历史 session 里找上下文 |
 | `csep recall --recent` | 看当前 repo 最近归档了哪些 session |
 | `csep recall bootstrap` | 把本机历史 Codex sessions 回填进 recall 数据库 |
+| `csep recall sync-claude` | 把本机 Claude Code 历史 sessions 同步进 recall 数据库 |
 | `csep session-reflect --status` | reflection 没按预期运行时再看 |
 
 `csep recall` 不是问答接口，推荐搜索文件名、命令、错误文本、代码符号或用户原话这类短 needle；需要跨 repo 时再显式加 `--global`。

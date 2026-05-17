@@ -9,6 +9,7 @@ Session Recall 负责把过去 Codex session 中的具体上下文找回来。�
 - `Stop` hook 自动归档 Codex transcript。
 - 支持手动归档单个 transcript。
 - 支持回填 `~/.codex/sessions` 下的历史 sessions。
+- 支持同步 `~/.claude/projects` 下的 Claude Code 历史 sessions。
 - 使用 SQLite / FTS 做本地检索底座。
 - 默认只查当前 repo；显式 `--global` 才跨 repo。
 - 输出历史原文 evidence window，不做 LLM summary。
@@ -29,6 +30,7 @@ Session Recall 负责把过去 Codex session 中的具体上下文找回来。�
 | `csep session-stop --from-stdin` | Stop hook 中后台归档当前 transcript |
 | `csep session-archive --transcript-path ...` | 手动归档单个 transcript |
 | `csep recall bootstrap --root ~/.codex/sessions` | 回填历史 Codex sessions |
+| `csep recall sync-claude --root ~/.claude/projects` | 同步历史 Claude Code sessions |
 
 归档时会解析 transcript 中的 messages，并记录：
 
@@ -92,6 +94,16 @@ csep recall "session reflection" --global
 | `--since-days` | `30` | 只回填最近多少天修改过的 transcript |
 | `--all-history` | `false` | 不按时间截断，回填全部历史 |
 | `--limit-files` | 无 | 限制处理文件数，按 transcript mtime 最新优先 |
+
+Claude Code 历史同步使用同一组参数：
+
+```bash
+csep recall sync-claude --since-days 30
+csep recall sync-claude --all-history
+csep recall sync-claude --root ~/.claude/projects --limit-files 50
+```
+
+同步后的 Claude Code session 会写入同一个 SQLite/FTS 数据库，并标记为 `claude_code_jsonl` 来源；`csep recall` 的 repo scope 和 `--global` 行为保持不变。
 
 ## Plugin Skill
 
@@ -193,4 +205,10 @@ csep session-archive \
 
 ```bash
 csep recall bootstrap --root ~/.codex/sessions --since-days 14
+```
+
+同步最近 14 天 Claude Code 历史：
+
+```bash
+csep recall sync-claude --root ~/.claude/projects --since-days 14
 ```

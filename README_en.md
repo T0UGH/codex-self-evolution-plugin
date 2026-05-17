@@ -102,6 +102,12 @@ Bootstrap imports transcripts newest-first and reports `new_sessions`, `updated_
 csep recall bootstrap --all-history
 ```
 
+To make local Claude Code history searchable through the same recall database, sync `~/.claude/projects`:
+
+```bash
+csep recall sync-claude --since-days 30
+```
+
 To check whether recall has data:
 
 ```bash
@@ -122,6 +128,7 @@ Most day-to-day use only needs these commands:
 | `csep recall "needle1|needle2"` | Search prior sessions for the current repo like `rg` over past sessions |
 | `csep recall --recent` | List recently archived sessions for the current repo |
 | `csep recall bootstrap` | Backfill local Codex session history into the recall database |
+| `csep recall sync-claude` | Sync local Claude Code session history into the recall database |
 | `csep session-reflect --status` | Inspect reflection jobs when something looks wrong |
 
 `csep recall` is not a question-answering interface. Search short needles such as file names, commands, error text, symbols, or exact user wording; use `--global` only when cross-repo history is actually needed.

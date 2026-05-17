@@ -14,7 +14,13 @@ from . import __version__
 from . import cli as full_cli
 from .logging_setup import configure as configure_logging, get_logger
 from .session_recall.workflow import build_focused_recall, render_focused_recall_markdown
-from .session_recall.archive import archive_from_hook_payload, archive_transcript, backfill_sessions, default_db_path
+from .session_recall.archive import (
+    archive_from_hook_payload,
+    archive_transcript,
+    backfill_claude_sessions,
+    backfill_sessions,
+    default_db_path,
+)
 
 _MAIN_CLI_COMMANDS = {
     "session-start",
@@ -68,18 +74,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Backfill historical Codex sessions into recall. Same as `csep recall bootstrap`.",
     )
     recall.add_argument(
+        "--sync-claude",
+        action="store_true",
+        help="Backfill local Claude Code sessions into recall. Same as `csep recall sync-claude`.",
+    )
+    recall.add_argument(
         "--root",
         "--bootstrap-root",
         dest="bootstrap_root",
-        help="Codex sessions root for recall bootstrap. Defaults to ~/.codex/sessions.",
+        help="Sessions root for recall bootstrap/sync. Defaults to ~/.codex/sessions or ~/.claude/projects.",
     )
     recall.add_argument(
         "--since-days",
         type=int,
         default=30,
-        help="Only bootstrap transcripts modified within this many days. Use --all-history to disable.",
+        help="Only process transcripts modified within this many days. Use --all-history to disable.",
     )
-    recall.add_argument("--all-history", action="store_true", help="Bootstrap all historical transcripts.")
+    recall.add_argument("--all-history", action="store_true", help="Process all historical transcripts.")
     recall.add_argument("--limit-files", type=int, help="Limit how many transcript files bootstrap processes.")
 
     archive = subparsers.add_parser("session-archive", help="Archive one Codex session transcript into the local recall store.")
@@ -212,6 +223,8 @@ def _handle_recall(args: argparse.Namespace) -> int:
     cwd = str(Path(args.cwd or os.getcwd()).expanduser().resolve())
     if _is_recall_bootstrap(args, query):
         return _handle_recall_bootstrap(args)
+    if _is_claude_sync(args, query):
+        return _handle_claude_sync(args)
     if not query and not args.recent:
         raise SystemExit("csep recall requires a query unless --recent is used")
     try:
@@ -257,6 +270,10 @@ def _is_recall_bootstrap(args: argparse.Namespace, query: str) -> bool:
     return bool(args.bootstrap) or (query == "bootstrap" and not args.recent)
 
 
+def _is_claude_sync(args: argparse.Namespace, query: str) -> bool:
+    return bool(args.sync_claude) or (query == "sync-claude" and not args.recent)
+
+
 def _handle_recall_bootstrap(args: argparse.Namespace) -> int:
     if args.recent:
         raise SystemExit("csep recall bootstrap does not support --recent")
@@ -283,10 +300,42 @@ def _handle_recall_bootstrap(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_claude_sync(args: argparse.Namespace) -> int:
+    if args.recent:
+        raise SystemExit("csep recall sync-claude does not support --recent")
+    since_days = None if args.all_history else args.since_days
+    db_path = default_db_path(state_dir=args.state_dir)
+    result = backfill_claude_sessions(
+        root=args.bootstrap_root,
+        cwd=args.cwd,
+        since_days=since_days,
+        limit_files=args.limit_files,
+        db_path=db_path,
+    )
+    result.update(
+        {
+            "command": "recall sync-claude",
+            "since_days": since_days,
+            "limit_files": args.limit_files,
+        }
+    )
+    if args.format == "json":
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(_render_recall_ingest_markdown(result), end="")
+    return 0
+
+
 def _render_recall_bootstrap_markdown(result: dict[str, Any]) -> str:
+    return _render_recall_ingest_markdown(result, title="Recall Bootstrap")
+
+
+def _render_recall_ingest_markdown(result: dict[str, Any], *, title: str | None = None) -> str:
+    title = title or ("Claude Recall Sync" if result.get("source") == "claude_code" else "Recall Bootstrap")
     return (
-        "## Recall Bootstrap\n\n"
+        f"## {title}\n\n"
         f"Status: {result.get('status')}\n"
+        f"Source: {result.get('source') or 'codex'}\n"
         f"Root: {result.get('root')}\n"
         f"Since days: {result.get('since_days')}\n"
         f"Limit files: {result.get('limit_files')}\n"

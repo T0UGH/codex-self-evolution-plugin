@@ -229,6 +229,12 @@ csep session-archive --transcript-path /path/to/session.jsonl --cwd /path/to/rep
 csep recall bootstrap --root ~/.codex/sessions --since-days 14
 ```
 
+同步历史 Claude Code sessions：
+
+```bash
+csep recall sync-claude --root ~/.claude/projects --since-days 14
+```
+
 ## 8. 常见问题
 
 ### `plugin_hooks` 不生效

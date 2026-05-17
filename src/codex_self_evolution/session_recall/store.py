@@ -136,6 +136,7 @@ class SessionRecallStore:
         ).fetchone()
         source_updated_at = str(meta.get("source_updated_at") or archived_at)
         started_at = str(meta.get("timestamp") or meta.get("started_at") or source_updated_at)
+        source = str(meta.get("source") or "codex_jsonl")
         metadata_json = json.dumps({**meta, "archived_at": archived_at}, ensure_ascii=False, sort_keys=True)
         self._conn.execute(
             """
@@ -143,9 +144,10 @@ class SessionRecallStore:
                 session_id, session_path, source, cwd, repo_root, repo_fingerprint,
                 worktree_root, git_branch, source_missing, started_at, updated_at,
                 message_count, metadata_json
-            ) VALUES (?, ?, 'codex_jsonl', ?, ?, ?, ?, ?, 0, ?, ?, 0, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 session_path = excluded.session_path,
+                source = excluded.source,
                 cwd = excluded.cwd,
                 repo_root = excluded.repo_root,
                 repo_fingerprint = excluded.repo_fingerprint,
@@ -158,6 +160,7 @@ class SessionRecallStore:
             (
                 parsed.session_id,
                 str(parsed.session_path),
+                source,
                 parsed.cwd,
                 str(meta.get("repo_root") or parsed.cwd),
                 str(meta.get("repo_fingerprint") or ""),

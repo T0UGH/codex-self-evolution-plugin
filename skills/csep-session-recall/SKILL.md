@@ -1,6 +1,6 @@
 ---
 name: csep-session-recall
-description: Use CSEP session recall as grep-like search over past Codex sessions. Trigger when local repo/workspace work may depend on prior discussion, commands, errors, decisions, or user wording.
+description: Use CSEP session recall as grep-like search over past Codex and imported Claude Code sessions. Trigger when local repo/workspace work may depend on prior discussion, commands, errors, decisions, or user wording.
 ---
 
 # CSEP Session Recall
@@ -63,13 +63,19 @@ csep recall "summary需要llm|不要llm|Hermes"
    csep recall --recent --cwd "$PWD"
    ```
 
-5. Use `--global` only when repo-local history is insufficient and cross-repo noise is acceptable:
+5. If the user asks to include Claude Code history, sync it first:
+
+   ```bash
+   csep recall sync-claude --since-days 30
+   ```
+
+6. Use `--global` only when repo-local history is insufficient and cross-repo noise is acceptable:
 
    ```bash
    csep recall "needle1|needle2" --global
    ```
 
-6. Treat matches as evidence. Summarize and decide yourself; recall does not answer the question for you.
+7. Treat matches as evidence. Summarize and decide yourself; recall does not answer the question for you.
 
 ## Output Handling
 
