@@ -317,7 +317,7 @@ def _handle_session_archive(args: argparse.Namespace) -> int:
             db_path=db_path,
         )
     print(json.dumps(result, indent=2, sort_keys=True))
-    return 0 if result.get("status") == "archived" else 1
+    return 0 if result.get("status") in {"archived", "skipped"} else 1
 
 
 def _handle_session_ingest(args: argparse.Namespace) -> int:

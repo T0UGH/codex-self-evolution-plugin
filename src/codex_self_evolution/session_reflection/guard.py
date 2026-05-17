@@ -12,6 +12,19 @@ TRANSCRIPT_MARKER_CHUNK_SIZE = 64 * 1024
 
 def evaluate_recursion_guard(payload: dict[str, Any], *, home: str | Path | None = None) -> GuardDecision:
     """Evaluate whether a Stop payload should start a reflection job."""
+    archive_decision = evaluate_archive_guard(payload, home=home)
+    if archive_decision.skip:
+        return archive_decision
+
+    lock = global_lock_status(home=home)
+    if lock["locked"] and not lock["stale"]:
+        return GuardDecision(True, "global_lock", str(lock["path"]))
+
+    return GuardDecision(False)
+
+
+def evaluate_archive_guard(payload: dict[str, Any], *, home: str | Path | None = None) -> GuardDecision:
+    """Return whether a Stop payload is a reflection child that should not archive."""
     thread_source = _payload_text(payload, "threadSource", "thread_source", "source")
     if thread_source == "memory_consolidation":
         return GuardDecision(True, "thread_source_memory_consolidation", thread_source)
@@ -23,10 +36,6 @@ def evaluate_recursion_guard(payload: dict[str, Any], *, home: str | Path | None
     transcript_path = _payload_text(payload, "transcript_path", "codex_transcript_path")
     if transcript_path and _transcript_has_marker(Path(transcript_path)):
         return GuardDecision(True, "reflection_marker", transcript_path)
-
-    lock = global_lock_status(home=home)
-    if lock["locked"] and not lock["stale"]:
-        return GuardDecision(True, "global_lock", str(lock["path"]))
 
     return GuardDecision(False)
 

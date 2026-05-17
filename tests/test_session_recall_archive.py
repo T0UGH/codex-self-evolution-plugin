@@ -2,6 +2,24 @@ import json
 import os
 
 
+def _write_transcript(path, *, session_id="s1", cwd="", message="archive me"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join([
+            json.dumps({
+                "type": "session_meta",
+                "payload": {
+                    "id": session_id,
+                    "cwd": cwd or str(path.parent),
+                },
+            }),
+            json.dumps({"role": "user", "content": message}),
+            "",
+        ]),
+        encoding="utf-8",
+    )
+
+
 def test_archive_from_hook_payload(tmp_path):
     from codex_self_evolution.session_recall.archive import archive_from_hook_payload
 
@@ -18,6 +36,148 @@ def test_archive_from_hook_payload(tmp_path):
     assert result["status"] == "archived"
     assert result["session_id"] == "s1"
     assert result["message_count"] == 1
+
+
+def test_archive_from_hook_payload_skips_registered_reflection_child(tmp_path):
+    from codex_self_evolution.session_recall.archive import archive_from_hook_payload
+    from codex_self_evolution.session_recall.store import SessionRecallStore
+    from codex_self_evolution.session_reflection.state import register_child_thread
+
+    home = tmp_path / "home"
+    register_child_thread(
+        child_thread_id="child-1",
+        parent_session_id="parent-1",
+        job_id="job-1",
+        home=home,
+    )
+    payload = tmp_path / "payload.json"
+    payload.write_text(
+        json.dumps({"session_id": "child-1", "cwd": str(tmp_path)}),
+        encoding="utf-8",
+    )
+
+    result = archive_from_hook_payload(payload, db_path=home / "session_recall" / "state.db")
+
+    assert result == {
+        "status": "skipped",
+        "reason": "child_thread_registry",
+        "detail": "child-1",
+        "session_id": "child-1",
+        "message_count": 0,
+        "db_path": str((home / "session_recall" / "state.db").resolve()),
+    }
+    store = SessionRecallStore(home / "session_recall" / "state.db")
+    try:
+        assert store.stats()["ingest_error_count"] == 0
+        assert store.stats()["session_count"] == 0
+    finally:
+        store.close()
+
+
+def test_archive_from_hook_payload_skips_discovered_reflection_marker(tmp_path):
+    from codex_self_evolution.session_recall.archive import archive_from_hook_payload
+    from codex_self_evolution.session_recall.store import SessionRecallStore
+
+    sessions_root = tmp_path / "sessions"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    transcript = sessions_root / "rollout-child-1.jsonl"
+    _write_transcript(transcript, session_id="child-1", cwd=str(repo), message="CSEP_REFLECTION_CHILD=1")
+    payload = tmp_path / "payload.json"
+    payload.write_text(json.dumps({"session_id": "child-1", "cwd": str(repo)}), encoding="utf-8")
+
+    result = archive_from_hook_payload(
+        payload,
+        db_path=tmp_path / "state.db",
+        sessions_root=sessions_root,
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "reflection_marker"
+    assert result["discovery_reason"] == "filename_session_id"
+    store = SessionRecallStore(tmp_path / "state.db")
+    try:
+        assert store.stats()["ingest_error_count"] == 0
+        assert store.stats()["session_count"] == 0
+    finally:
+        store.close()
+
+
+def test_archive_from_hook_payload_discovers_transcript_by_filename_session_id(tmp_path):
+    from codex_self_evolution.session_recall.archive import archive_from_hook_payload
+
+    sessions_root = tmp_path / "sessions"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    transcript = sessions_root / "rollout-2026-05-17T00-00-00-s1.jsonl"
+    _write_transcript(transcript, session_id="s1", cwd=str(repo), message="discovered by filename")
+    payload = tmp_path / "payload.json"
+    payload.write_text(json.dumps({"session_id": "s1", "cwd": str(repo)}), encoding="utf-8")
+
+    result = archive_from_hook_payload(
+        payload,
+        db_path=tmp_path / "state.db",
+        sessions_root=sessions_root,
+    )
+
+    assert result["status"] == "archived"
+    assert result["session_id"] == "s1"
+    assert result["discovery_status"] == "found"
+    assert result["discovery_reason"] == "filename_session_id"
+    assert result["discovered_transcript_path"] == str(transcript.resolve())
+    assert result["message_count"] == 1
+
+
+def test_archive_from_hook_payload_discovers_recent_unique_cwd(tmp_path):
+    from codex_self_evolution.session_recall.archive import archive_from_hook_payload
+
+    sessions_root = tmp_path / "sessions"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    transcript = sessions_root / "rollout-2026-05-17T00-00-00-real-session.jsonl"
+    _write_transcript(transcript, session_id="real-session", cwd=str(repo), message="discovered by cwd")
+    payload = tmp_path / "payload.json"
+    payload.write_text(json.dumps({"session_id": "payload-session", "cwd": str(repo)}), encoding="utf-8")
+
+    result = archive_from_hook_payload(
+        payload,
+        db_path=tmp_path / "state.db",
+        sessions_root=sessions_root,
+    )
+
+    assert result["status"] == "archived"
+    assert result["session_id"] == "real-session"
+    assert result["discovery_reason"] == "recent_cwd_unique"
+    assert result["message_count"] == 1
+
+
+def test_archive_from_hook_payload_does_not_discover_ambiguous_recent_cwd(tmp_path):
+    from codex_self_evolution.session_recall.archive import archive_from_hook_payload
+    from codex_self_evolution.session_recall.store import SessionRecallStore
+
+    sessions_root = tmp_path / "sessions"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_transcript(sessions_root / "one.jsonl", session_id="one", cwd=str(repo), message="one")
+    _write_transcript(sessions_root / "two.jsonl", session_id="two", cwd=str(repo), message="two")
+    payload = tmp_path / "payload.json"
+    payload.write_text(json.dumps({"session_id": "payload-session", "cwd": str(repo)}), encoding="utf-8")
+
+    result = archive_from_hook_payload(
+        payload,
+        db_path=tmp_path / "state.db",
+        sessions_root=sessions_root,
+    )
+
+    assert result["status"] == "error"
+    assert "discovery_ambiguous" in result["error"]
+    store = SessionRecallStore(tmp_path / "state.db")
+    try:
+        stats = store.stats()
+        assert stats["ingest_error_count"] == 1
+        assert stats["session_count"] == 0
+    finally:
+        store.close()
 
 
 def test_archive_from_hook_payload_records_error_for_missing_transcript(tmp_path):

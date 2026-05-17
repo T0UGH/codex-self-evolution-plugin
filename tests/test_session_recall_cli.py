@@ -36,6 +36,26 @@ def test_csep_session_archive_and_recall(tmp_path, monkeypatch, capsys):
     assert "hermes session recall smoke" in out
 
 
+def test_csep_session_archive_skipped_reflection_child_is_success(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
+    payload = tmp_path / "payload.json"
+    payload.write_text(
+        json.dumps({
+            "session_id": "child-1",
+            "cwd": str(tmp_path),
+            "thread_source": "memory_consolidation",
+        }),
+        encoding="utf-8",
+    )
+
+    code = csep.main(["session-archive", "--from-hook-payload", str(payload)])
+
+    assert code == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "skipped"
+    assert out["reason"] == "thread_source_memory_consolidation"
+
+
 def test_csep_recall_recent(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
     repo = tmp_path / "repo"
