@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "csep"
-version = "1.3.5"
+version = "1.3.6"
 description = "Self-evolution loop for OpenAI Codex: session reflection, session recall, and reflection-generated skills with zero Python runtime dependencies."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -196,6 +196,95 @@ def test_validate_receipt_flags_duplicate_only_reflection_memory_writes(tmp_path
     ]
 
 
+def test_validate_receipt_flags_duplicate_reflection_refs_without_fixed_noop_phrase(tmp_path: Path) -> None:
+    """Reflection refs that only say candidates are duplicate should not be durable memory."""
+    memory_root = tmp_path / "project" / "memory"
+    ref = memory_root / "refs" / "20260519T113111Z-csep-memory-skills-duplicate.md"
+    ref.parent.mkdir(parents=True)
+    ref.write_text(
+        "## CSEP 反思作业\n\n"
+        "本轮 `memory and skills` 复盘复用既有 `csep-reflect-session-receipt` 流程。\n\n"
+        "- memory 候选：没有新的长期 fact、rule、preference。\n"
+        "- skill 候选：workflow 路径与既有 skill 等价，判定为 duplicate。\n"
+        "- durable 变更：仅记录本轮复盘摘要和 receipt.json。\n",
+        encoding="utf-8",
+    )
+    receipt = tmp_path / "receipt.json"
+    _write_receipt(
+        receipt,
+        memory_changes=[{"path": str(ref), "action": "add"}],
+        skill_changes=[],
+    )
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[memory_root],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+    )
+
+    assert result["status"] == "partial"
+    assert result["low_value_memory_writes"] == [{"reason": "memory_reflection_noop_ref", "path": str(ref)}]
+
+
+def test_validate_receipt_flags_no_writable_memory_reflection_refs(tmp_path: Path) -> None:
+    """No-writable-memory reflection refs are duplicate ledgers even without filename markers."""
+    memory_root = tmp_path / "project" / "memory"
+    ref = memory_root / "refs" / "20260519T090154Z-39cbc123.md"
+    ref.parent.mkdir(parents=True)
+    ref.write_text(
+        "# CSEP 复盘记录\n\n"
+        "- 任务范围：memory and skills。\n"
+        "- 结果：未发现可写入长期 MEMORY 的新 fact/rule/preference。\n"
+        "- 判定：继续复用现有 workflow，命中 `csep-reflect-session-receipt`。\n"
+        "- 处理：本次无生产代码/配置改动、无新技能落地。\n",
+        encoding="utf-8",
+    )
+    receipt = tmp_path / "receipt.json"
+    _write_receipt(
+        receipt,
+        memory_changes=[{"path": str(ref), "action": "add"}],
+        skill_changes=[],
+    )
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[memory_root],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+    )
+
+    assert result["status"] == "partial"
+    assert result["low_value_memory_writes"] == [{"reason": "memory_reflection_noop_ref", "path": str(ref)}]
+
+
+def test_validate_receipt_allows_non_reflection_duplicate_memory(tmp_path: Path) -> None:
+    """Domain notes may mention duplicate behavior without being reflection noise."""
+    memory_root = tmp_path / "project" / "memory"
+    ref = memory_root / "refs" / "order-idempotency.md"
+    ref.parent.mkdir(parents=True)
+    ref.write_text(
+        "订单接口会把 duplicate request id 作为幂等重试处理，调用方可以复用同一个 request id 查询结果。\n",
+        encoding="utf-8",
+    )
+    receipt = tmp_path / "receipt.json"
+    _write_receipt(
+        receipt,
+        memory_changes=[{"path": str(ref), "action": "add"}],
+        skill_changes=[],
+    )
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[memory_root],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["low_value_memory_writes"] == []
+
+
 def test_validate_receipt_rejects_legacy_user_memory(tmp_path: Path) -> None:
     """Legacy USER.md is retained on disk but is no longer writable memory."""
     memory = tmp_path / "project" / "memory" / "USER.md"

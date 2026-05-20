@@ -200,6 +200,26 @@ def discover_transcript_for_hook_payload(
                 "candidate_count": len(meta_matches),
             }
 
+    turn_discovery = _recent_content_discovery(
+        recent_files,
+        payload,
+        key="turn_id",
+        reason="recent_turn_id",
+        min_chars=6,
+    )
+    if turn_discovery:
+        return turn_discovery
+
+    assistant_discovery = _recent_content_discovery(
+        recent_files,
+        payload,
+        key="last_assistant_message",
+        reason="recent_last_assistant_message",
+        min_chars=24,
+    )
+    if assistant_discovery:
+        return assistant_discovery
+
     cwd = str(payload.get("cwd") or "")
     if cwd:
         cwd_matches = [
@@ -425,6 +445,84 @@ def _session_meta(path: Path) -> dict[str, Any]:
     except OSError:
         return {}
     return {}
+
+
+def _recent_content_discovery(
+    recent_files: list[Path],
+    payload: dict[str, Any],
+    *,
+    key: str,
+    reason: str,
+    min_chars: int,
+) -> dict[str, Any] | None:
+    """Return a unique recent transcript whose JSON content contains a payload value."""
+    needle = _normalized_search_text(str(payload.get(key) or ""))
+    if len(needle) < min_chars:
+        return None
+    matches = [
+        path for path in recent_files
+        if _transcript_contains_normalized_text(path, needle)
+    ]
+    matches = _prefer_payload_cwd(matches, payload)
+    if len(matches) == 1:
+        return _discovered(matches[0], reason)
+    if len(matches) > 1:
+        return {
+            "status": "discovery_ambiguous",
+            "reason": reason,
+            "path": "",
+            "candidate_count": len(matches),
+        }
+    return None
+
+
+def _prefer_payload_cwd(paths: list[Path], payload: dict[str, Any]) -> list[Path]:
+    """Prefer content matches whose session metadata cwd matches the hook payload."""
+    if len(paths) <= 1:
+        return paths
+    cwd = str(payload.get("cwd") or "")
+    if not cwd:
+        return paths
+    cwd_matches = [
+        path for path in paths
+        if _same_path(str(_session_meta(path).get("cwd") or ""), cwd)
+    ]
+    return cwd_matches or paths
+
+
+def _transcript_contains_normalized_text(path: Path, needle: str) -> bool:
+    """Return whether any JSON leaf string or raw line contains normalized text."""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for raw in handle:
+                if needle in _normalized_search_text(raw):
+                    return True
+                try:
+                    entry = json.loads(raw)
+                except ValueError:
+                    continue
+                if any(needle in _normalized_search_text(value) for value in _json_leaf_strings(entry)):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _json_leaf_strings(value: Any) -> Iterable[str]:
+    """Yield all string leaf values from JSON-like transcript entries."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for child in value.values():
+            yield from _json_leaf_strings(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _json_leaf_strings(child)
+
+
+def _normalized_search_text(value: str) -> str:
+    """Normalize transcript text for robust exact-substring matching."""
+    return " ".join(value.split()).lower()
 
 
 def _same_path(left: str, right: str) -> bool:

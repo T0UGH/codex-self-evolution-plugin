@@ -227,7 +227,10 @@ def _hot_memory_has_noop_reflection_summary(text: str) -> bool:
     """Return whether hot memory contains a per-run duplicate/no-new reflection line."""
     for line in text.splitlines():
         normalized = line.lower()
-        if _has_noop_memory_signal(normalized) and _has_reflection_review_signal(normalized):
+        if (
+            _has_reflection_review_signal(normalized)
+            and (_has_noop_memory_signal(normalized) or _has_duplicate_only_memory_signal(normalized))
+        ):
             return True
     return False
 
@@ -235,11 +238,24 @@ def _hot_memory_has_noop_reflection_summary(text: str) -> bool:
 def _memory_ref_is_noop_reflection_record(path: Path, text: str) -> bool:
     """Return whether a ref file is only a duplicate/no-new reflection ledger."""
     normalized = text.lower()
-    if not _has_noop_memory_signal(normalized):
+    if not (_has_noop_memory_signal(normalized) or _has_duplicate_only_memory_signal(normalized)):
         return False
-    if "csep-reflection-memory-skills" in path.name:
+    if _has_reflection_ledger_filename(path):
         return True
     return _has_reflection_review_signal(normalized)
+
+
+def _has_reflection_ledger_filename(path: Path) -> bool:
+    """Return whether the ref filename is generated reflection-review bookkeeping."""
+    name = path.name.lower()
+    return any(
+        marker in name
+        for marker in (
+            "csep-reflection-memory-skills",
+            "csep-memory-skills-duplicate",
+            "csep-reflection-review",
+        )
+    )
 
 
 def _has_noop_memory_signal(text: str) -> bool:
@@ -249,11 +265,46 @@ def _has_noop_memory_signal(text: str) -> bool:
         for token in (
             "未识别新增",
             "未发现新增",
+            "未出现可沉淀",
+            "未发现可沉淀",
+            "未发现可写入",
+            "未新增可",
             "无新增",
             "nothing reusable",
             "no new reusable",
         )
     )
+
+
+def _has_duplicate_only_memory_signal(text: str) -> bool:
+    """Return whether text says all candidates were duplicate or already covered."""
+    duplicate_signal = any(
+        token in text
+        for token in (
+            "duplicate",
+            "复用既有",
+            "既有",
+            "等价",
+            "already covered",
+        )
+    )
+    no_durable_signal = any(
+        token in text
+        for token in (
+            "没有新的",
+            "未产生",
+            "仅记录",
+            "仅需",
+            "无需",
+            "不写入",
+            "不产生",
+            "未创建",
+            "未新增",
+            "no durable",
+            "no new",
+        )
+    )
+    return duplicate_signal and no_durable_signal
 
 
 def _has_reflection_review_signal(text: str) -> bool:

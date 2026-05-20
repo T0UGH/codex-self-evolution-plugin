@@ -180,6 +180,79 @@ def test_archive_from_hook_payload_does_not_discover_ambiguous_recent_cwd(tmp_pa
         store.close()
 
 
+def test_archive_from_hook_payload_disambiguates_recent_cwd_by_last_assistant_message(tmp_path):
+    from codex_self_evolution.session_recall.archive import archive_from_hook_payload
+
+    sessions_root = tmp_path / "sessions"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_transcript(sessions_root / "one.jsonl", session_id="one", cwd=str(repo), message="other session")
+    matched = sessions_root / "two.jsonl"
+    _write_transcript(
+        matched,
+        session_id="two",
+        cwd=str(repo),
+        message="The exact final assistant sentence that appears in the Stop payload.",
+    )
+    payload = tmp_path / "payload.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "session_id": "payload-session",
+                "cwd": str(repo),
+                "last_assistant_message": "The exact final assistant sentence that appears in the Stop payload.",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = archive_from_hook_payload(
+        payload,
+        db_path=tmp_path / "state.db",
+        sessions_root=sessions_root,
+    )
+
+    assert result["status"] == "archived"
+    assert result["session_id"] == "two"
+    assert result["discovery_reason"] == "recent_last_assistant_message"
+    assert result["discovered_transcript_path"] == str(matched.resolve())
+
+
+def test_archive_from_hook_payload_discovers_recent_turn_id(tmp_path):
+    from codex_self_evolution.session_recall.archive import archive_from_hook_payload
+
+    sessions_root = tmp_path / "sessions"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    transcript = sessions_root / "turn-match.jsonl"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "session_meta", "payload": {"id": "turn-session", "cwd": str(repo)}}),
+                json.dumps({"id": "turn-abc", "role": "assistant", "content": "archive this turn"}),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    payload = tmp_path / "payload.json"
+    payload.write_text(
+        json.dumps({"session_id": "payload-session", "turn_id": "turn-abc", "cwd": str(repo)}),
+        encoding="utf-8",
+    )
+
+    result = archive_from_hook_payload(
+        payload,
+        db_path=tmp_path / "state.db",
+        sessions_root=sessions_root,
+    )
+
+    assert result["status"] == "archived"
+    assert result["session_id"] == "turn-session"
+    assert result["discovery_reason"] == "recent_turn_id"
+
+
 def test_archive_from_hook_payload_records_error_for_missing_transcript(tmp_path):
     from codex_self_evolution.session_recall.archive import archive_from_hook_payload
     from codex_self_evolution.session_recall.store import SessionRecallStore
