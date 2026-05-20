@@ -1,13 +1,22 @@
 import json
 import subprocess
 import sys
+import tomllib
 from io import StringIO
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from codex_self_evolution import __version__
 from codex_self_evolution import cli, csep
+
+
+def test_runtime_version_matches_pyproject():
+    pyproject = Path(__file__).parents[1] / "pyproject.toml"
+    project = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]
+
+    assert __version__ == project["version"]
 
 
 def test_csep_version_flag(capsys):
