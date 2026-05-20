@@ -55,3 +55,22 @@ def test_reflection_prompt_includes_trigger_scope_and_skill_mode(tmp_path: Path)
     assert "Do not create, edit, or delete skills. Keep skill_changes empty." in prompt
     assert "Write receipt.json atomically" in prompt
     assert '"child_thread_id": "<current child thread id>"' in prompt
+
+
+def test_reflection_prompt_keeps_duplicate_noop_reviews_out_of_memory(tmp_path: Path) -> None:
+    """Prompt keeps duplicate-only reflection reviews in the receipt, not durable memory."""
+    prompt = build_reflection_prompt(
+        job_id="job-1",
+        parent_session_id="parent-1",
+        cwd=tmp_path,
+        memory_path=tmp_path / "memory" / "MEMORY.md",
+        memory_refs_dir=tmp_path / "memory" / "refs",
+        skills_root=tmp_path / "skills",
+        receipt_path=tmp_path / "receipt.json",
+        review_memory=True,
+        review_skills=True,
+    )
+
+    assert "If all candidates are duplicate, transient, or sensitive, leave MEMORY.md and refs/ unchanged." in prompt
+    assert "Duplicate-only or no-new-candidate review summaries belong only in receipt.json" in prompt
+    assert "Do not create a ref just to record that nothing reusable was found." in prompt

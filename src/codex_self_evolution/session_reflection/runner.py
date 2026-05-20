@@ -395,6 +395,9 @@ def _validation_scope_has_issue(validation: dict[str, Any], scope: str) -> bool:
     for item in validation.get("hash_mismatches") or []:
         if isinstance(item, dict) and _path_scope(item.get("path")) == scope:
             return True
+    for item in validation.get("low_value_memory_writes") or []:
+        if scope == "memory" and isinstance(item, dict):
+            return True
     return scope == "skill" and bool(validation.get("invalid_skills"))
 
 

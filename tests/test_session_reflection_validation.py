@@ -156,6 +156,46 @@ def test_validate_receipt_accepts_memory_refs_markdown(tmp_path: Path) -> None:
     assert result["boundary_violations"] == []
 
 
+def test_validate_receipt_flags_duplicate_only_reflection_memory_writes(tmp_path: Path) -> None:
+    """Duplicate-only reflection ledgers are not durable memory content."""
+    memory_root = tmp_path / "project" / "memory"
+    memory = memory_root / "MEMORY.md"
+    ref = memory_root / "refs" / "20260519T120637Z-csep-reflection-memory-skills.md"
+    ref.parent.mkdir(parents=True)
+    memory.write_text(
+        "# MEMORY 索引\n\n"
+        "- 本次复盘仍未识别新增可复用 `fact`/`rule`/`preference`/`workflow`；"
+        "`review memory` 与 `review skills` 均为 `duplicate`。\n",
+        encoding="utf-8",
+    )
+    ref.write_text(
+        "# 反思记录\n\n"
+        "- 输入：`review memory=true`，`review skills=true`\n"
+        "- 结论：无新增可复用 `fact` / `rule` / `preference` / `workflow`。\n"
+        "- `memory_changes`: `[]`\n",
+        encoding="utf-8",
+    )
+    receipt = tmp_path / "receipt.json"
+    _write_receipt(
+        receipt,
+        memory_changes=[{"path": str(memory), "action": "update"}, {"path": str(ref), "action": "add"}],
+        skill_changes=[],
+    )
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[memory_root],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+    )
+
+    assert result["status"] == "partial"
+    assert result["low_value_memory_writes"] == [
+        {"reason": "memory_reflection_noop_summary", "path": str(memory)},
+        {"reason": "memory_reflection_noop_ref", "path": str(ref)},
+    ]
+
+
 def test_validate_receipt_rejects_legacy_user_memory(tmp_path: Path) -> None:
     """Legacy USER.md is retained on disk but is no longer writable memory."""
     memory = tmp_path / "project" / "memory" / "USER.md"

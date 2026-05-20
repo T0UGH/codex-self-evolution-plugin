@@ -60,11 +60,12 @@ def validate_receipt(
     boundary_violations.extend(_skill_boundary_violations(skill_changes, skills_root, skill_prefix))
     hash_mismatches = _hash_mismatches(memory_changes) + _hash_mismatches(skill_changes)
     invalid_skills = _invalid_skills(skill_changes, skills_root, skill_prefix)
+    low_value_memory_writes = _low_value_memory_writes(memory_changes)
 
     status = str(receipt.get("status") or "failed")
     if boundary_violations:
         status = "failed"
-    elif invalid_skills or hash_mismatches:
+    elif invalid_skills or hash_mismatches or low_value_memory_writes:
         status = "partial"
     elif not memory_changes and not skill_changes:
         status = "skipped_empty"
@@ -76,6 +77,7 @@ def validate_receipt(
         "boundary_violations": boundary_violations,
         "hash_mismatches": hash_mismatches,
         "invalid_skills": invalid_skills,
+        "low_value_memory_writes": low_value_memory_writes,
     }
 
 
@@ -88,6 +90,7 @@ def _failure(reason: str) -> dict[str, Any]:
         "boundary_violations": [],
         "hash_mismatches": [],
         "invalid_skills": [],
+        "low_value_memory_writes": [],
     }
 
 
@@ -198,6 +201,74 @@ def _invalid_skills(changes: Any, skills_root: Path, skill_prefix: str) -> list[
         if reason:
             invalid.append({"path": str(path), "reason": reason})
     return invalid
+
+
+def _low_value_memory_writes(changes: Any) -> list[dict[str, str]]:
+    """Return memory writes that only record duplicate/no-op reflection reviews."""
+    if not isinstance(changes, list):
+        return []
+    low_value: list[dict[str, str]] = []
+    for item in changes:
+        path = _change_path(item)
+        if not path.is_file() or path.suffix.lower() != ".md":
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if path.name == "MEMORY.md" and _hot_memory_has_noop_reflection_summary(text):
+            low_value.append({"reason": "memory_reflection_noop_summary", "path": str(path)})
+        elif _memory_ref_is_noop_reflection_record(path, text):
+            low_value.append({"reason": "memory_reflection_noop_ref", "path": str(path)})
+    return low_value
+
+
+def _hot_memory_has_noop_reflection_summary(text: str) -> bool:
+    """Return whether hot memory contains a per-run duplicate/no-new reflection line."""
+    for line in text.splitlines():
+        normalized = line.lower()
+        if _has_noop_memory_signal(normalized) and _has_reflection_review_signal(normalized):
+            return True
+    return False
+
+
+def _memory_ref_is_noop_reflection_record(path: Path, text: str) -> bool:
+    """Return whether a ref file is only a duplicate/no-new reflection ledger."""
+    normalized = text.lower()
+    if not _has_noop_memory_signal(normalized):
+        return False
+    if "csep-reflection-memory-skills" in path.name:
+        return True
+    return _has_reflection_review_signal(normalized)
+
+
+def _has_noop_memory_signal(text: str) -> bool:
+    """Return whether text says the reflection found no reusable durable candidate."""
+    return any(
+        token in text
+        for token in (
+            "未识别新增",
+            "未发现新增",
+            "无新增",
+            "nothing reusable",
+            "no new reusable",
+        )
+    )
+
+
+def _has_reflection_review_signal(text: str) -> bool:
+    """Return whether text is about the CSEP memory/skill reflection review."""
+    return any(
+        token in text
+        for token in (
+            "review memory",
+            "review skills",
+            "反思",
+            "复盘",
+            "csep_reflection_job_id",
+            "csep-reflection",
+        )
+    )
 
 
 def _validate_skill_doc(path: Path, skill_prefix: str) -> str:
