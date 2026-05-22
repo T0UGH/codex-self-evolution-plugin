@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,10 @@ def validate_receipt(
     if not receipt_path.is_file():
         return _failure("receipt_missing")
     try:
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt_text = receipt_path.read_text(encoding="utf-8")
+        if not receipt_text.strip():
+            return _failure("receipt_empty")
+        receipt = json.loads(receipt_text)
     except (OSError, ValueError) as exc:
         result = _failure("receipt_invalid_json")
         result["error"] = str(exc)
@@ -99,12 +103,26 @@ def _receipt_schema_reason(receipt: dict[str, Any]) -> str:
     for field in REQUIRED_TEXT_FIELDS:
         if not isinstance(receipt.get(field), str) or not receipt[field].strip():
             return "receipt_schema"
+    for field in ("started_at", "finished_at"):
+        if not _is_utc_iso_timestamp(str(receipt[field])):
+            return "receipt_timestamp"
     if receipt.get("status") not in VALID_RECEIPT_STATUSES:
         return "receipt_status"
     for field in REQUIRED_LIST_FIELDS:
         if not isinstance(receipt.get(field), list):
             return "receipt_schema"
     return ""
+
+
+def _is_utc_iso_timestamp(value: str) -> bool:
+    """Return whether a receipt timestamp is a concrete UTC ISO timestamp."""
+    if not value.endswith("Z") or "$" in value or "<" in value or ">" in value:
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
 
 
 def _receipt_identity_reason(

@@ -59,7 +59,7 @@ def test_format_wraps_into_codex_hookSpecificOutput_shape(tmp_path):
     json.loads(json.dumps(codex_output))
 
 
-def test_format_includes_stable_memory_and_short_recall_pointer(tmp_path):
+def test_format_includes_stable_memory_and_strong_recall_policy(tmp_path):
     state = _seed_state(tmp_path, user="Prefer concise.", memory="Run focused tests first.")
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -67,13 +67,17 @@ def test_format_includes_stable_memory_and_short_recall_pointer(tmp_path):
 
     ac = format_session_start_for_codex(result)["hookSpecificOutput"]["additionalContext"]
 
-    # Stable background is memory plus a short pointer to the plugin skill.
+    # Stable background is memory plus a startup policy that makes recall a
+    # first-class self-check, while still leaving execution to the agent.
     assert "Prefer concise." not in ac
     assert "Run focused tests first." in ac
     assert "Session Recall Skill" not in ac
     assert "Recall Contract" not in ac
     assert "Recall Policy" in ac
     assert "csep-session-recall" in ac
+    assert "Before answering or taking action" in ac
+    assert "When unsure, use recall" in ac
+    assert "Skip recall only when" in ac
 
 
 def test_format_handles_empty_session_gracefully():

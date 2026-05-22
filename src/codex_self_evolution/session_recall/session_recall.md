@@ -6,7 +6,7 @@ The runtime recall guide now lives in the CSEP plugin skill:
 skills/csep-session-recall/SKILL.md
 ```
 
-`SessionStart` does not inject this file. It only injects stable background plus a short pointer to the plugin skill.
+`SessionStart` does not inject this file. It only injects stable background plus the compact recall policy from `policy.md`.
 
 Use recall like `rg` over past sessions:
 

@@ -37,6 +37,8 @@ class FakeReflectionClient:
         steal_lock_home: Path | None = None,
         receipt_after_return: bool = False,
         empty_receipt_before_return: bool = False,
+        invalid_receipt_text: str | None = None,
+        memory_write_text: str | None = None,
     ) -> None:
         """Configure whether turn/start raises after fork registration."""
         self.fail_start = fail_start
@@ -46,6 +48,8 @@ class FakeReflectionClient:
         self.steal_lock_home = steal_lock_home
         self.receipt_after_return = receipt_after_return
         self.empty_receipt_before_return = empty_receipt_before_return
+        self.invalid_receipt_text = invalid_receipt_text
+        self.memory_write_text = memory_write_text
         self.fork_calls: list[dict[str, Any]] = []
         self.start_calls: list[dict[str, Any]] = []
 
@@ -60,6 +64,15 @@ class FakeReflectionClient:
         if self.fail_start:
             raise RuntimeError("turn failed")
         prompt = str(kwargs["prompt"])
+        if self.memory_write_text is not None:
+            memory_path = Path(_line_value(prompt, "Project memory file: "))
+            memory_path.parent.mkdir(parents=True, exist_ok=True)
+            memory_path.write_text(self.memory_write_text, encoding="utf-8")
+        if self.invalid_receipt_text is not None:
+            receipt_path = _receipt_path_from_prompt(prompt)
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_text(self.invalid_receipt_text, encoding="utf-8")
+            return "turn-1", {"turnId": "turn-1"}
         if self.empty_receipt_before_return:
             receipt_path = _receipt_path_from_prompt(prompt)
             receipt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -391,6 +404,39 @@ def test_run_reflection_job_waits_for_receipt_json_to_be_parseable(
     assert updated["validation"]["status"] == "skipped_empty"
 
 
+def test_run_reflection_job_recovers_changed_memory_when_receipt_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A malformed receipt does not discard durable memory output."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setenv("CSEP_CODEX_SKILLS_DIR", str(tmp_path / "skills"))
+    job = create_job_from_payload(_payload(repo), home=home)
+
+    updated = run_reflection_job(
+        str(job["job_id"]),
+        home=home,
+        client=FakeReflectionClient(
+            invalid_receipt_text='{"schema_version": 1, "started_at": "\'"$run_started_utc"\'"}',
+            memory_write_text="Use durable reflection evidence.\n",
+        ),
+    )
+    run_dir = home / "session_reflection" / "runs" / str(job["job_id"])
+    receipt = json.loads((run_dir / "receipt.json").read_text())
+
+    assert updated["status"] == "partial"
+    assert updated["validation"]["status"] == "partial"
+    assert (run_dir / "receipt.invalid.txt").read_text(encoding="utf-8").startswith('{"schema_version"')
+    assert receipt["status"] == "partial"
+    assert receipt["validation_notes"][0]["reason"] == "receipt_recovered_from_durable_outputs"
+    assert receipt["memory_changes"][0]["path"].endswith("/memory/MEMORY.md")
+    assert receipt["memory_changes"][0]["action"] == "create"
+    assert receipt["skill_changes"] == []
+
+
 def test_run_reflection_job_resets_trigger_counters_after_success(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -534,11 +580,11 @@ def test_run_reflection_job_uses_explicit_home_for_memory_paths(
     assert "/memory/refs" in prompt
 
 
-def test_run_reflection_job_fails_wrong_child_receipt_id_and_cleans_lock(
+def test_run_reflection_job_canonicalizes_child_receipt_envelope(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Receipt validation binds the receipt to the current child thread."""
+    """Runner owns deterministic receipt fields instead of trusting child text."""
     home = tmp_path / "home"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -551,9 +597,12 @@ def test_run_reflection_job_fails_wrong_child_receipt_id_and_cleans_lock(
         home=home,
         client=FakeReflectionClient(receipt_child_thread_id="wrong-child"),
     )
+    receipt = json.loads((home / "session_reflection" / "runs" / str(job["job_id"]) / "receipt.json").read_text())
 
-    assert updated["status"] == "failed"
-    assert updated["validation"]["reason"] == "child_thread_id_mismatch"
+    assert updated["status"] == "skipped_empty"
+    assert receipt["child_thread_id"] == "child-1"
+    assert receipt["validation_notes"][0]["reason"] == "receipt_envelope_canonicalized"
+    assert "child_thread_id" in receipt["validation_notes"][0]["fields"]
     assert not global_lock_path(home=home).exists()
 
 
@@ -602,7 +651,7 @@ def test_run_reflection_job_failed_validation_clears_active_job_without_counter_
     run_reflection_job(
         str(job["job_id"]),
         home=home,
-        client=FakeReflectionClient(receipt_child_thread_id="wrong-child"),
+        client=FakeReflectionClient(memory_changes=[{"path": str(tmp_path / "outside.md"), "action": "create"}]),
     )
 
     updated = load_trigger_state(trigger_paths, session_id="parent-1")

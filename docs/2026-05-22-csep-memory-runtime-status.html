@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CSEP Memory 运行状态与产出盘点</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --panel-soft: #f0f4f7;
+      --text: #18202a;
+      --muted: #5e6a78;
+      --line: #d9e1ea;
+      --good: #18835c;
+      --warn: #b87503;
+      --bad: #b53737;
+      --accent: #2864b8;
+      --accent-2: #7a4b20;
+      --shadow: 0 8px 28px rgba(31, 44, 60, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    header {
+      background: #192332;
+      color: #fff;
+      padding: 36px 40px 32px;
+    }
+    header .eyebrow {
+      color: #aeb9c7;
+      font-size: 13px;
+      letter-spacing: 0;
+      margin-bottom: 8px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1.18;
+      letter-spacing: 0;
+    }
+    header p {
+      margin: 14px 0 0;
+      max-width: 980px;
+      color: #d8e0ea;
+      font-size: 15px;
+    }
+    main {
+      max-width: 1220px;
+      margin: 0 auto;
+      padding: 28px 24px 56px;
+    }
+    section {
+      margin-top: 24px;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 0 0 8px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+    p { margin: 0 0 10px; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      background: #edf1f5;
+      border: 1px solid #dce4ec;
+      padding: 1px 5px;
+      border-radius: 5px;
+    }
+    .grid {
+      display: grid;
+      gap: 16px;
+    }
+    .grid.metrics {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .grid.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 18px;
+    }
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    .metric .value {
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+    .metric .note {
+      color: var(--muted);
+      margin-top: 6px;
+      font-size: 12px;
+    }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 3px 9px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid transparent;
+    }
+    .status.good { color: var(--good); background: #e9f7f1; border-color: #bde7d6; }
+    .status.warn { color: var(--warn); background: #fff4df; border-color: #f2d39c; }
+    .status.bad { color: var(--bad); background: #fff0f0; border-color: #efc7c7; }
+    .bars {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 110px 1fr 44px;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .bar {
+      height: 10px;
+      border-radius: 999px;
+      background: #e2e9f0;
+      overflow: hidden;
+    }
+    .fill {
+      height: 100%;
+      border-radius: inherit;
+      background: var(--accent);
+    }
+    .fill.good { background: var(--good); }
+    .fill.warn { background: var(--warn); }
+    .fill.bad { background: var(--bad); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    th, td {
+      text-align: left;
+      vertical-align: top;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    th {
+      background: #edf2f6;
+      color: #354250;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    tr:last-child td { border-bottom: 0; }
+    td.small, th.small { width: 86px; }
+    td.path {
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      word-break: break-all;
+    }
+    .tag {
+      display: inline-block;
+      margin: 0 4px 4px 0;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid #cad6e2;
+      background: #f6f9fb;
+      color: #405061;
+      font-size: 12px;
+    }
+    .callout {
+      border-left: 4px solid var(--accent);
+      background: #eef5ff;
+      padding: 14px 16px;
+      border-radius: 6px;
+    }
+    .callout.warn {
+      border-color: var(--warn);
+      background: #fff6e6;
+    }
+    .callout.bad {
+      border-color: var(--bad);
+      background: #fff1f1;
+    }
+    details {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin: 10px 0;
+    }
+    summary {
+      cursor: pointer;
+      font-weight: 700;
+    }
+    ul {
+      margin: 8px 0 0 18px;
+      padding: 0;
+    }
+    .muted { color: var(--muted); }
+    .nowrap { white-space: nowrap; }
+    @media (max-width: 900px) {
+      header { padding: 28px 22px; }
+      h1 { font-size: 28px; }
+      main { padding: 20px 16px 40px; }
+      .grid.metrics, .grid.two { grid-template-columns: 1fr; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="eyebrow">CSEP runtime report · 2026-05-22 20:43 CST snapshot</div>
+    <h1>Memory 运行状态与产出盘点</h1>
+    <p>本报告读取了本机真实 CSEP 状态、最近 reflection receipt / validation、各 bucket 的 <code>MEMORY.md</code> 与 <code>refs/*.md</code> 内容。重点回答：memory 是否真的在产出、产出了什么、质量风险在哪里。</p>
+  </header>
+
+  <main>
+    <section>
+      <div class="grid metrics">
+        <div class="card metric">
+          <div class="label">stable memory buckets</div>
+          <div class="value">38</div>
+          <div class="note">31 个 bucket 有 MEMORY.md 实体</div>
+        </div>
+        <div class="card metric">
+          <div class="label">memory refs</div>
+          <div class="value">20</div>
+          <div class="note">长上下文归档在 refs/*.md</div>
+        </div>
+        <div class="card metric">
+          <div class="label">latest reflection</div>
+          <div class="value"><span class="status good">succeeded</span></div>
+          <div class="note">20260522T123159Z-dcd8d253</div>
+        </div>
+        <div class="card metric">
+          <div class="label">recall archive</div>
+          <div class="value">763</div>
+          <div class="note">sessions / 61428 messages</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid two">
+      <div class="card">
+        <h2>运行结论</h2>
+        <p><span class="status good">活着</span> Stop hook、SessionStart hook、session reflection 和 recall DB 都处于可用状态。最新 reflection 成功写入 memory，并通过 boundary/hash/skill/low-value 检查。</p>
+        <p><span class="status warn">质量不稳</span> 最近 20 次 validation 中，14 次是 <code>skipped_empty</code>，3 次 <code>receipt_invalid_json</code>，2 次因 low-value memory 写入降级为 partial，1 次成功。</p>
+        <p><span class="status warn">校验缺口</span> 多个 receipt 的 <code>started_at</code> / <code>finished_at</code> 是 <code>$START</code>、<code>${START}</code>、<code>START_PLACEHOLDER</code> 等占位字符串；最新成功 receipt 也有 <code>$START</code>/<code>$END</code>，说明 validator 只检查非空字符串，没有检查 ISO 时间。</p>
+      </div>
+      <div class="card">
+        <h2>最近 20 次 reflection validation</h2>
+        <div class="bars">
+          <div class="bar-row"><span>skipped_empty</span><div class="bar"><div class="fill" style="width:70%"></div></div><span>14</span></div>
+          <div class="bar-row"><span>failed</span><div class="bar"><div class="fill bad" style="width:15%"></div></div><span>3</span></div>
+          <div class="bar-row"><span>partial</span><div class="bar"><div class="fill warn" style="width:10%"></div></div><span>2</span></div>
+          <div class="bar-row"><span>succeeded</span><div class="bar"><div class="fill good" style="width:5%"></div></div><span>1</span></div>
+        </div>
+        <p class="muted" style="margin-top:12px">失败集中在 receipt JSON 生成；partial 集中在 low-value memory 写入。没有发现最近 validation 中有 skill boundary 或 invalid skill 失败。</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Memory 实际产出主题</h2>
+      <div class="grid two">
+        <div class="card">
+          <h3>CSEP 自身运行与演进</h3>
+          <p>这部分主要落在 <code>-Users-bytedance-code-github-codex-self-evolution-plugin</code> bucket，既有热 MEMORY，也有 4 个 refs。</p>
+          <span class="tag">本机刷新 / install 链路</span>
+          <span class="tag">session recall 回灌命令</span>
+          <span class="tag">Recall Policy 强提示</span>
+          <span class="tag">UserPromptSubmit 自动触发实验</span>
+          <span class="tag">skill_synthesis 边界</span>
+          <span class="tag">session_reflection receipt workflow</span>
+        </div>
+        <div class="card">
+          <h3>Luna 业务与调试知识</h3>
+          <p>这是最大的一类产出，集中在 Luna 多个 repo bucket，尤其是 <code>commerce_membership_api</code>、<code>commerce_offer</code>、<code>luna_tp</code>、<code>treasure_business</code>。</p>
+          <span class="tag">SVIP 提现隐藏链路</span>
+          <span class="tag">listen_music DID / UID 模式锁</span>
+          <span class="tag">未登录 treasure.task gate</span>
+          <span class="tag">Dolphin / TCC / Libra 配置</span>
+          <span class="tag">Argos / TEA / ByteConf 排查</span>
+          <span class="tag">cutbuild 合并冲突复盘</span>
+        </div>
+        <div class="card">
+          <h3>本地 Codex / 工具链经验</h3>
+          <p>这类 memory 用于让新会话更快恢复本机约束和工具偏好。</p>
+          <span class="tag">hooks config</span>
+          <span class="tag">codex_hooks deprecated</span>
+          <span class="tag">/hooks trust</span>
+          <span class="tag">PATH git remote-https</span>
+          <span class="tag">devbox Hermes auth</span>
+          <span class="tag">RTK global config</span>
+        </div>
+        <div class="card">
+          <h3>跨仓行为规则</h3>
+          <p>这类条目不是业务事实，而是从用户纠正和反复返工中沉淀出的执行规则。</p>
+          <span class="tag">用户点名目标先答目标</span>
+          <span class="tag">写入后回读验证</span>
+          <span class="tag">同作用域回测</span>
+          <span class="tag">不要覆盖用户文件</span>
+          <span class="tag">exact file:line 不扩搜</span>
+          <span class="tag">test-only vs runtime change</span>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>最近 Memory 写入样本</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>时间 / 来源</th>
+            <th>写入位置</th>
+            <th>内容判断</th>
+            <th>质量评价</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="nowrap">2026-05-22<br>latest succeeded</td>
+            <td><code>commerce_membership_api</code><br><span class="muted">refs/20260522-apple-store-audit-version-replay-time-gap.md</span></td>
+            <td>Apple Store 审核版本下发复盘：明确不是 <code>ToApi</code> 结构缺失，指出 <code>omitempty</code>、配置更新时间差、请求 <code>version_code</code> 不在当前列表等原因。</td>
+            <td><span class="status good">可用</span> 有具体字段、时间窗口、排查结论和复核步骤。</td>
+          </tr>
+          <tr>
+            <td class="nowrap">2026-05-22<br>partial</td>
+            <td><code>codex-self-evolution-plugin</code><br><span class="muted">refs/2026-05-22-recall-no-auto-pref.md</span></td>
+            <td>记录用户偏好：不再优先依赖 <code>UserPromptSubmit</code> 自动 recall，而是强化 SessionStart 注入的 recall policy，让 agent 主动使用 <code>csep-session-recall</code>。</td>
+            <td><span class="status good">有价值</span> 这是明确用户偏好；但同轮 validation 被 low-value memory heuristic 降级，说明启发式可能误伤。</td>
+          </tr>
+          <tr>
+            <td class="nowrap">2026-05-22<br>partial</td>
+            <td><code>codex-self-evolution-plugin</code><br><span class="muted">refs/2026-05-22-session-prompt-recall-injection.md</span></td>
+            <td>记录 UserPromptSubmit + focused recall 的实验实现、触发词和边界。</td>
+            <td><span class="status warn">历史实验</span> 后续用户偏好已转向“不自动触发”，报告中保留为历史试验而非当前默认行为。</td>
+          </tr>
+          <tr>
+            <td class="nowrap">2026-05-22<br>Luna</td>
+            <td><code>commerce_membership_api</code><br><span class="muted">refs/20260522-svip-withdraw-mock-replay-fix.md</span></td>
+            <td>SVIP 提现隐藏链路样例修复：记录 AB 总开关、mock 行缺失、注册时间兜底、重新部署与回放复核。</td>
+            <td><span class="status good">可复盘</span> 主题清晰，能直接支持后续类似联调。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Memory refs 全量目录</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Bucket</th>
+            <th>Ref 文件</th>
+            <th class="small">Bytes</th>
+            <th>标题 / 主题</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>codex-self-evolution-plugin</code></td><td class="path">2026-05-18-csep-system-refresh.md</td><td>1082</td><td>CSEP 本机刷新记录</td></tr>
+          <tr><td><code>codex-self-evolution-plugin</code></td><td class="path">2026-05-18-session-recall-sync-commands.md</td><td>927</td><td>Session Recall 回灌与同步命令</td></tr>
+          <tr><td><code>codex-self-evolution-plugin</code></td><td class="path">2026-05-22-recall-no-auto-pref.md</td><td>598</td><td>Recall 不走自动触发的用户偏好</td></tr>
+          <tr><td><code>codex-self-evolution-plugin</code></td><td class="path">2026-05-22-session-prompt-recall-injection.md</td><td>1168</td><td>UserPromptSubmit recall 注入实验</td></tr>
+          <tr><td><code>code-github</code></td><td class="path">20260518T133141Z-5139d798-devbox-hermes-auth-repair.md</td><td>772</td><td>Devbox Hermes / Codex 重新登录恢复</td></tr>
+          <tr><td><code>commerce_membership_api</code></td><td class="path">20260518-cutbuild-branch-merge-conflict-retry-complete.md</td><td>2139</td><td>cutbuild 合并冲突重试结案</td></tr>
+          <tr><td><code>commerce_membership_api</code></td><td class="path">20260518-cutbuild-branch-merge-conflict-retry.md</td><td>797</td><td>cutbuild 合并冲突重试上下文</td></tr>
+          <tr><td><code>commerce_membership_api</code></td><td class="path">20260519-svip-withdraw-doc-sync.md</td><td>1354</td><td>SVIP 提现按钮分人群文档同步</td></tr>
+          <tr><td><code>commerce_membership_api</code></td><td class="path">20260520-coin-widget-mgettaskview-order-fix.md</td><td>1181</td><td>挂件任务视图测试顺序回归</td></tr>
+          <tr><td><code>commerce_membership_api</code></td><td class="path">20260522-apple-store-audit-version-replay-time-gap.md</td><td>974</td><td>Apple Store 审核版本下发复盘</td></tr>
+          <tr><td><code>commerce_membership_api</code></td><td class="path">20260522-svip-withdraw-mock-replay-fix.md</td><td>1765</td><td>SVIP 提现隐藏链路样例修复</td></tr>
+          <tr><td><code>commerce_offer</code></td><td class="path">2026-05-18-csep-reflection-memory-skills.md</td><td>1590</td><td>CSEP Reflection Memory+Skills Run Notes</td></tr>
+          <tr><td><code>commerce_offer</code></td><td class="path">2026-05-18-cutbuild-merge-session-reflection.md</td><td>1473</td><td>cutbuild merge reflection</td></tr>
+          <tr><td><code>treasure_business</code></td><td class="path">2026-05-19-040359-csep-reflection-session.md</td><td>400</td><td>CSEP reflection session</td></tr>
+          <tr><td><code>user_basic</code></td><td class="path">20260518T124417Z-3115d65e.md</td><td>1027</td><td>CSEP Reflection Evidence</td></tr>
+          <tr><td><code>luna</code></td><td class="path">20260519-csep-reflection.md</td><td>552</td><td>CSEP Reflection Notes</td></tr>
+          <tr><td><code>require_250519_user_crowd</code></td><td class="path">2026-05-19-session-reflection-facts.md</td><td>725</td><td>CSEP reflection session facts</td></tr>
+          <tr><td><code>require_260521_user_crowd</code></td><td class="path">byteconf_config_scope.md</td><td>1444</td><td>ByteConf 抓取上下文</td></tr>
+          <tr><td><code>require_260521_user_crowd</code></td><td class="path">byteconf_publish_path_notes.md</td><td>1367</td><td>ByteConf 发布与灰度研究笔记</td></tr>
+          <tr><td><code>require_260521_user_crowd</code></td><td class="path">segment_admin_service_scope.md</td><td>1823</td><td>人群包配置独立服务范围与纠偏说明</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>主要 MEMORY.md bucket 摘要</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Bucket</th>
+            <th class="small">Bytes</th>
+            <th class="small">Refs</th>
+            <th>代表性内容</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>codex-self-evolution-plugin</code></td><td>42892</td><td>4</td><td>CSEP 本机刷新、recall policy、session_recall 架构、skill synthesis 边界、写入/回测/文件安全规则。</td></tr>
+          <tr><td><code>commerce_membership_api</code></td><td>17733</td><td>6</td><td>listen_music、SVIP 提现隐藏、未登录真实 ack_time、coin widget、cutbuild 冲突、Apple Store 审核版本下发。</td></tr>
+          <tr><td><code>luna</code></td><td>19065</td><td>1</td><td>E2E 工作流、TEA 字段缺失、iOS/Android create_order 归因、SVIP 弹窗复盘。</td></tr>
+          <tr><td><code>luna_inner_bot</code></td><td>17124</td><td>0</td><td>ZTI token 链路、dolphin_sync timeout、ByteFaaS 登录态、MR review 文档与 handler 入口。</td></tr>
+          <tr><td><code>code-github</code></td><td>13670</td><td>1</td><td>Codex plugin config、skill cleanup、安全归档、PATH git、RTK、devbox auth。</td></tr>
+          <tr><td><code>commerce_offer_feature archived</code></td><td>8506</td><td>0</td><td>coin_widget 两层架构、ColdLaunchText Condition、LunaExpr 配置、sign_in/box/listen_music 条件。</td></tr>
+          <tr><td><code>luna_tp</code></td><td>7682</td><td>0</td><td>alarm secretary store/API/UI 模式、Argos oncall、bytedcli workaround。</td></tr>
+          <tr><td><code>treasure_business</code></td><td>7694</td><td>1</td><td>EntranceAuthorize、Dolphin 任务 schema、反思记录、reverse_ecom switches。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="grid two">
+      <div class="callout warn">
+        <h2>质量风险</h2>
+        <ul>
+          <li>receipt 时间字段校验太弱：占位符仍可通过 validation。</li>
+          <li>坏 JSON 会直接导致 failed，说明 child worker 的 receipt 写入仍不稳。</li>
+          <li>low-value memory heuristic 会把某些真实偏好记录判成 partial，需要重新校准。</li>
+          <li>旧 <code>csep-synth-*</code> 产物还在全局 skills 目录，但最近没有新 synthesis 定时任务运行迹象。</li>
+        </ul>
+      </div>
+      <div class="callout">
+        <h2>建议下一步</h2>
+        <ul>
+          <li>补 validation：<code>started_at</code> / <code>finished_at</code> 必须是 UTC ISO 时间。</li>
+          <li>把 receipt 写入失败分成空文件、坏 JSON、schema 错误三类，方便定位。</li>
+          <li>把 low-value memory 检测从“关键词启发式”改为更窄的 duplicate/no-op 组合条件。</li>
+          <li>单独做一次 global skills 清理报告：区分 <code>csep-reflect-*</code>、active <code>csep-synth-*</code>、retired/invalid <code>csep-synth-*</code>。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <details open>
+        <summary>数据来源</summary>
+        <ul>
+          <li><code>csep status</code>，时间戳：<code>2026-05-22T12:43:45Z</code></li>
+          <li><code>csep session-reflect --status</code></li>
+          <li><code>~/.codex-self-evolution/session_reflection/runs/*/receipt.json</code></li>
+          <li><code>~/.codex-self-evolution/session_reflection/runs/*/validation.json</code></li>
+          <li><code>~/.codex-self-evolution/projects/*/memory/MEMORY.md</code></li>
+          <li><code>~/.codex-self-evolution/projects/*/memory/refs/*.md</code></li>
+        </ul>
+      </details>
+    </section>
+  </main>
+</body>
+</html>

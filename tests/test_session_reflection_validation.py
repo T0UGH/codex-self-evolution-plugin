@@ -490,6 +490,38 @@ def test_validate_receipt_rejects_missing_required_field(tmp_path: Path) -> None
     assert result["reason"] == "receipt_schema"
 
 
+def test_validate_receipt_rejects_empty_receipt(tmp_path: Path) -> None:
+    """An empty child receipt is a distinct contract failure."""
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text("", encoding="utf-8")
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[tmp_path / "project" / "memory"],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+    )
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "receipt_empty"
+
+
+def test_validate_receipt_rejects_placeholder_timestamps(tmp_path: Path) -> None:
+    """Receipt timestamps must be concrete UTC values, not shell placeholders."""
+    receipt = tmp_path / "receipt.json"
+    _write_receipt_payload(receipt, started_at="$START", finished_at="<UTC ISO timestamp>")
+
+    result = validate_receipt(
+        receipt,
+        memory_roots=[tmp_path / "project" / "memory"],
+        skills_root=tmp_path / "skills",
+        skill_prefix="csep-reflect-",
+    )
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "receipt_timestamp"
+
+
 def test_validate_receipt_rejects_wrong_expected_job_id(tmp_path: Path) -> None:
     """Expected job id binds a receipt to the current runner job."""
     receipt = tmp_path / "receipt.json"

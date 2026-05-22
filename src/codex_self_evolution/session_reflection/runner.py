@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -144,6 +146,12 @@ def run_reflection_job(
             job_id=job_id,
             home=resolved_home,
         )
+        receipt_started_at = utc_timestamp()
+        output_snapshot = _snapshot_reflection_outputs(
+            memory_dir=project_paths.memory_dir,
+            skills_root=skills_root,
+            skill_prefix=config.skill_prefix,
+        )
         prompt = build_reflection_prompt(
             job_id=job_id,
             parent_session_id=str(job["parent_session_id"]),
@@ -168,6 +176,17 @@ def run_reflection_job(
             prompt=prompt,
         )
         _wait_for_receipt(paths.receipt_path, timeout_seconds=config.timeout_seconds)
+        _prepare_receipt_for_validation(
+            paths.receipt_path,
+            before=output_snapshot,
+            memory_dir=project_paths.memory_dir,
+            skills_root=skills_root,
+            skill_prefix=config.skill_prefix,
+            job_id=job_id,
+            parent_session_id=str(job["parent_session_id"]),
+            child_thread_id=child_thread_id,
+            started_at=receipt_started_at,
+        )
 
         validation = validate_receipt(
             paths.receipt_path,
@@ -286,6 +305,218 @@ def _receipt_text_is_parseable(text: str) -> bool:
         return isinstance(json.loads(text), dict)
     except ValueError:
         return False
+
+
+def _prepare_receipt_for_validation(
+    receipt_path: Path,
+    *,
+    before: dict[str, dict[str, str]],
+    memory_dir: Path,
+    skills_root: Path,
+    skill_prefix: str,
+    job_id: str,
+    parent_session_id: str,
+    child_thread_id: str,
+    started_at: str,
+) -> None:
+    """Canonicalize receipt envelope and recover valid durable writes when possible."""
+    finished_at = utc_timestamp()
+    raw_receipt, raw_error = _load_receipt_object(receipt_path)
+    if isinstance(raw_receipt, dict):
+        receipt = dict(raw_receipt)
+        _canonicalize_receipt_envelope(
+            receipt,
+            job_id=job_id,
+            parent_session_id=parent_session_id,
+            child_thread_id=child_thread_id,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+        atomic_write_json(receipt_path, receipt)
+        return
+
+    memory_changes, skill_changes = _changed_reflection_outputs(
+        before,
+        after=_snapshot_reflection_outputs(
+            memory_dir=memory_dir,
+            skills_root=skills_root,
+            skill_prefix=skill_prefix,
+        ),
+        memory_dir=memory_dir,
+    )
+    if not memory_changes and not skill_changes:
+        return
+
+    invalid_path = _preserve_invalid_receipt(receipt_path)
+    recovered_receipt: dict[str, Any] = {
+        "schema_version": 1,
+        "job_id": job_id,
+        "parent_session_id": parent_session_id,
+        "child_thread_id": child_thread_id,
+        "status": "partial",
+        "memory_changes": memory_changes,
+        "skill_changes": skill_changes,
+        "skipped_candidates": [],
+        "validation_notes": [
+            {
+                "reason": "receipt_recovered_from_durable_outputs",
+                "raw_receipt_error": raw_error,
+                "raw_receipt_path": str(invalid_path) if invalid_path is not None else "",
+            }
+        ],
+        "errors": [],
+        "started_at": started_at,
+        "finished_at": finished_at,
+    }
+    atomic_write_json(receipt_path, recovered_receipt)
+
+
+def _load_receipt_object(receipt_path: Path) -> tuple[dict[str, Any] | None, str]:
+    """Return a parseable receipt object or a compact read/parse failure reason."""
+    if not receipt_path.is_file():
+        return None, "receipt_missing"
+    try:
+        text = receipt_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return None, f"receipt_unreadable: {exc}"
+    if not text.strip():
+        return None, "receipt_empty"
+    try:
+        loaded = json.loads(text)
+    except ValueError as exc:
+        return None, f"receipt_invalid_json: {exc}"
+    if not isinstance(loaded, dict):
+        return None, "receipt_not_object"
+    return loaded, ""
+
+
+def _canonicalize_receipt_envelope(
+    receipt: dict[str, Any],
+    *,
+    job_id: str,
+    parent_session_id: str,
+    child_thread_id: str,
+    started_at: str,
+    finished_at: str,
+) -> None:
+    """Replace deterministic receipt envelope fields with parent-owned values."""
+    canonical_fields = {
+        "schema_version": 1,
+        "job_id": job_id,
+        "parent_session_id": parent_session_id,
+        "child_thread_id": child_thread_id,
+        "started_at": started_at,
+        "finished_at": finished_at,
+    }
+    changed_fields = [key for key, value in canonical_fields.items() if receipt.get(key) != value]
+    receipt.update(canonical_fields)
+    if changed_fields and isinstance(receipt.get("validation_notes"), list):
+        receipt["validation_notes"].append(
+            {
+                "reason": "receipt_envelope_canonicalized",
+                "fields": changed_fields,
+            }
+        )
+
+
+def _snapshot_reflection_outputs(
+    *,
+    memory_dir: Path,
+    skills_root: Path,
+    skill_prefix: str,
+) -> dict[str, dict[str, str]]:
+    """Return hashes for durable memory refs and active reflection skills."""
+    snapshot: dict[str, dict[str, str]] = {}
+    for path in _iter_reflection_output_files(memory_dir=memory_dir, skills_root=skills_root, skill_prefix=skill_prefix):
+        if not path.is_file():
+            continue
+        snapshot[_snapshot_key(path)] = {
+            "path": str(path),
+            "hash": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+    return snapshot
+
+
+def _iter_reflection_output_files(*, memory_dir: Path, skills_root: Path, skill_prefix: str) -> list[Path]:
+    """Return files the reflection worker is allowed to mutate durably."""
+    files: list[Path] = []
+    memory_file = memory_dir / "MEMORY.md"
+    if memory_file.exists():
+        files.append(memory_file)
+    refs_dir = memory_dir / "refs"
+    if refs_dir.is_dir():
+        files.extend(sorted(path for path in refs_dir.glob("**/*.md") if path.is_file()))
+    if skills_root.is_dir():
+        for skill_dir in sorted(skills_root.iterdir()):
+            if skill_dir.is_dir() and skill_dir.name.startswith(skill_prefix):
+                skill_file = skill_dir / "SKILL.md"
+                if skill_file.exists():
+                    files.append(skill_file)
+    return files
+
+
+def _changed_reflection_outputs(
+    before: dict[str, dict[str, str]],
+    *,
+    after: dict[str, dict[str, str]],
+    memory_dir: Path,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Return receipt change entries inferred from before/after output hashes."""
+    memory_changes: list[dict[str, str]] = []
+    skill_changes: list[dict[str, str]] = []
+    for key in sorted(set(before) | set(after)):
+        before_item = before.get(key)
+        after_item = after.get(key)
+        before_hash = before_item["hash"] if before_item is not None else ""
+        after_hash = after_item["hash"] if after_item is not None else ""
+        if before_hash == after_hash:
+            continue
+        path = Path((after_item or before_item or {}).get("path", ""))
+        change = {
+            "path": str(path),
+            "action": _change_action(before_item, after_item),
+            "before_hash": before_hash,
+            "after_hash": after_hash,
+        }
+        if _is_memory_output(path, memory_dir):
+            memory_changes.append(change)
+        else:
+            skill_changes.append(change)
+    return memory_changes, skill_changes
+
+
+def _change_action(before_item: dict[str, str] | None, after_item: dict[str, str] | None) -> str:
+    """Return the action name for a before/after file snapshot pair."""
+    if before_item is None:
+        return "create"
+    if after_item is None:
+        return "delete"
+    return "update"
+
+
+def _is_memory_output(path: Path, memory_dir: Path) -> bool:
+    """Return whether a changed durable output belongs to the memory root."""
+    try:
+        return path.expanduser().resolve(strict=False).is_relative_to(memory_dir.expanduser().resolve(strict=False))
+    except OSError:
+        return False
+
+
+def _snapshot_key(path: Path) -> str:
+    """Return a stable key for a local output file path."""
+    return str(path.expanduser().resolve(strict=False))
+
+
+def _preserve_invalid_receipt(receipt_path: Path) -> Path | None:
+    """Move an invalid child receipt aside so the recovered receipt keeps evidence."""
+    if not receipt_path.exists():
+        return None
+    invalid_path = receipt_path.with_name("receipt.invalid.txt")
+    try:
+        shutil.move(str(receipt_path), str(invalid_path))
+    except OSError:
+        return None
+    return invalid_path
 
 
 def _archive_only_for_unavailable_app_server(

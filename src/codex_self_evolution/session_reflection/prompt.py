@@ -70,6 +70,10 @@ def build_reflection_prompt(
         "The frontmatter name must match the csep-reflect-* directory name.\n\n"
         "Write receipt.json atomically: write the JSON to a temporary file in the same directory, then rename it "
         "to the required receipt path.\n"
+        "Do not use shell variables, placeholders, command substitution, or quoted shell expressions in receipt.json. "
+        "The parent process will canonicalize job_id, parent_session_id, child_thread_id, started_at, and finished_at; "
+        "your main responsibility is an accurate status plus memory_changes, skill_changes, skipped_candidates, "
+        "validation_notes, and errors.\n"
         "Write receipt.json with this exact top-level shape:\n"
         "{\n"
         '  "schema_version": 1,\n'
