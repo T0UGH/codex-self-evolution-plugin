@@ -437,6 +437,51 @@ def test_run_reflection_job_recovers_changed_memory_when_receipt_is_invalid(
     assert receipt["skill_changes"] == []
 
 
+def test_run_reflection_job_canonicalizes_escaped_json_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Escaped JSON object text from a child turn is normalized before validation."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setenv("CSEP_CODEX_SKILLS_DIR", str(tmp_path / "skills"))
+    job = create_job_from_payload(_payload(repo), home=home)
+
+    updated = run_reflection_job(
+        str(job["job_id"]),
+        home=home,
+        client=FakeReflectionClient(
+            invalid_receipt_text=(
+                "{\\n"
+                '  \\"schema_version\\": 1,\\n'
+                '  \\"job_id\\": \\"wrong-job\\",\\n'
+                '  \\"parent_session_id\\": \\"wrong-parent\\",\\n'
+                '  \\"child_thread_id\\": \\"wrong-child\\",\\n'
+                '  \\"status\\": \\"succeeded\\",\\n'
+                '  \\"memory_changes\\": [],\\n'
+                '  \\"skill_changes\\": [],\\n'
+                '  \\"skipped_candidates\\": [],\\n'
+                '  \\"validation_notes\\": [],\\n'
+                '  \\"errors\\": [],\\n'
+                '  \\"started_at\\": \\"$run_ts\\",\\n'
+                '  \\"finished_at\\": \\"$run_ts\\"\\n'
+                "}"
+            ),
+        ),
+    )
+    receipt = json.loads((home / "session_reflection" / "runs" / str(job["job_id"]) / "receipt.json").read_text())
+
+    assert updated["status"] == "skipped_empty"
+    assert updated["validation"]["status"] == "skipped_empty"
+    assert receipt["job_id"] == job["job_id"]
+    assert receipt["parent_session_id"] == "parent-1"
+    assert receipt["child_thread_id"] == "child-1"
+    assert receipt["started_at"].endswith("Z")
+    assert receipt["validation_notes"][0]["reason"] == "receipt_envelope_canonicalized"
+
+
 def test_run_reflection_job_resets_trigger_counters_after_success(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -870,6 +915,46 @@ def test_session_reflection_status_reports_failure_details(
         "status": "failed",
         "reason": "missing_receipt",
         "error": "receipt missing",
+        "category": "child_receipt_contract",
+        "issue_counts": {},
+    }
+
+
+def test_session_reflection_status_classifies_validation_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Status explains whether validation failed in the child receipt or artifacts."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    job = create_job_from_payload(_payload(repo), home=home)
+    update_job_status(
+        str(job["job_id"]),
+        "failed",
+        home=home,
+        validation={
+            "status": "failed",
+            "receipt_status": "succeeded",
+            "boundary_violations": [{"reason": "memory_outside_root", "path": "/tmp/outside.md"}],
+            "hash_mismatches": [],
+            "invalid_skills": [],
+            "low_value_memory_writes": [],
+        },
+    )
+
+    status = session_reflection_status(home=home)
+
+    assert status["latest"]["validation"] == {
+        "status": "failed",
+        "category": "child_artifact_boundary",
+        "issue_counts": {
+            "boundary_violations": 1,
+            "hash_mismatches": 0,
+            "invalid_skills": 0,
+            "low_value_memory_writes": 0,
+        },
     }
 
 

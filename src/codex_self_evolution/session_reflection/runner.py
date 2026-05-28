@@ -41,6 +41,12 @@ from .validation import validate_receipt
 
 RECEIPT_POLL_INTERVAL_SECONDS = 0.05
 RECEIPT_STABLE_INVALID_GRACE_SECONDS = 0.5
+VALIDATION_ISSUE_KEYS = (
+    "boundary_violations",
+    "hash_mismatches",
+    "invalid_skills",
+    "low_value_memory_writes",
+)
 
 
 def enqueue_reflection_from_payload(payload: dict[str, Any], *, home: str | Path | None = None) -> dict[str, Any]:
@@ -272,7 +278,43 @@ def _compact_validation(validation: dict[str, Any]) -> dict[str, Any]:
         value = validation.get(key)
         if value is not None:
             compact[key] = value
+    category = _validation_category(validation)
+    if category:
+        compact["category"] = category
+        compact["issue_counts"] = _validation_issue_counts(validation)
     return compact
+
+
+def _validation_category(validation: dict[str, Any]) -> str:
+    """Classify validation failures by whether receipt or artifacts broke."""
+    status = str(validation.get("status") or "")
+    if status not in {"failed", "partial"}:
+        return ""
+    reason = str(validation.get("reason") or "")
+    if reason.startswith("receipt_") or reason in {
+        "missing_receipt",
+        "job_id_mismatch",
+        "parent_session_id_mismatch",
+        "child_thread_id_mismatch",
+    }:
+        return "child_receipt_contract"
+    if validation.get("boundary_violations"):
+        return "child_artifact_boundary"
+    if validation.get("hash_mismatches") or validation.get("invalid_skills") or validation.get("low_value_memory_writes"):
+        return "child_artifact_quality"
+    if validation.get("error"):
+        return "system_error"
+    return "child_validation"
+
+
+def _validation_issue_counts(validation: dict[str, Any]) -> dict[str, int]:
+    """Return compact counts for validation issue lists present in status."""
+    if not any(key in validation for key in VALIDATION_ISSUE_KEYS):
+        return {}
+    return {
+        key: len(value) if isinstance(value := validation.get(key), list) else 0
+        for key in VALIDATION_ISSUE_KEYS
+    }
 
 
 def _wait_for_receipt(receipt_path: Path, *, timeout_seconds: float) -> None:
@@ -381,13 +423,66 @@ def _load_receipt_object(receipt_path: Path) -> tuple[dict[str, Any] | None, str
         return None, f"receipt_unreadable: {exc}"
     if not text.strip():
         return None, "receipt_empty"
-    try:
-        loaded = json.loads(text)
-    except ValueError as exc:
-        return None, f"receipt_invalid_json: {exc}"
-    if not isinstance(loaded, dict):
+    receipt, parse_error = _parse_receipt_object_text(text)
+    if receipt is None:
+        return None, f"receipt_invalid_json: {parse_error}"
+    if not isinstance(receipt, dict):
         return None, "receipt_not_object"
-    return loaded, ""
+    return receipt, ""
+
+
+def _parse_receipt_object_text(text: str) -> tuple[dict[str, Any] | None, str]:
+    """Parse common model-written receipt variants into a receipt object."""
+    last_error = ""
+    for candidate in _receipt_text_candidates(text):
+        try:
+            loaded = json.loads(candidate)
+        except ValueError as exc:
+            last_error = str(exc)
+            continue
+        if isinstance(loaded, dict):
+            return loaded, ""
+        if isinstance(loaded, str):
+            try:
+                nested = json.loads(loaded)
+            except ValueError as exc:
+                last_error = str(exc)
+                continue
+            if isinstance(nested, dict):
+                return nested, ""
+    return None, last_error or "not a JSON object"
+
+
+def _receipt_text_candidates(text: str) -> list[str]:
+    """Return raw, fenced, and escaped receipt text candidates."""
+    stripped = text.strip()
+    candidates = [stripped]
+    unfenced = _strip_json_code_fence(stripped)
+    if unfenced != stripped:
+        candidates.append(unfenced)
+    for base in list(candidates):
+        decoded = _decode_escaped_receipt_text(base)
+        if decoded and decoded not in candidates:
+            candidates.append(decoded)
+    return candidates
+
+
+def _strip_json_code_fence(text: str) -> str:
+    """Remove a surrounding Markdown JSON code fence from receipt text."""
+    lines = text.splitlines()
+    if len(lines) >= 3 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip()
+    return text
+
+
+def _decode_escaped_receipt_text(text: str) -> str:
+    """Decode receipt text that escaped quotes/newlines without string quotes."""
+    if "\\\"" not in text and "\\n" not in text:
+        return ""
+    try:
+        return text.encode("utf-8").decode("unicode_escape")
+    except UnicodeError:
+        return ""
 
 
 def _canonicalize_receipt_envelope(
