@@ -249,6 +249,46 @@ def test_evaluate_trigger_function_call_rows_queue_skill(tmp_path: Path) -> None
     assert result["decision"]["trigger_reasons"] == ["skill_tool_call_interval"]
 
 
+def test_evaluate_trigger_memory_review_switch_disables_memory_reasons(tmp_path: Path) -> None:
+    """When memory review is disabled, memory counters cannot queue jobs."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    paths = trigger_paths_for_payload(payload, home=tmp_path)
+    state = load_trigger_state(paths, session_id="parent-1")
+    state["stops_since_memory_review"] = 2
+    state["tool_calls_since_skill_review"] = 15
+    write_trigger_state(paths, state)
+
+    config = SessionReflectionTriggerConfig(memory_review=False)
+    result = evaluate_trigger_policy(payload, config, home=tmp_path)
+
+    assert result["status"] == "queued"
+    assert result["decision"]["review_memory"] is False
+    assert result["decision"]["review_skills"] is True
+    assert result["decision"]["trigger_reasons"] == ["skill_tool_call_interval"]
+
+
+def test_evaluate_trigger_skill_review_switch_disables_skill_reasons(tmp_path: Path) -> None:
+    """When skill review is disabled, skill counters cannot queue jobs."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    paths = trigger_paths_for_payload(payload, home=tmp_path)
+    state = load_trigger_state(paths, session_id="parent-1")
+    state["stops_since_memory_review"] = 2
+    state["tool_calls_since_skill_review"] = 14
+    write_trigger_state(paths, state)
+
+    config = SessionReflectionTriggerConfig(skill_review=False)
+    result = evaluate_trigger_policy(payload, config, home=tmp_path)
+
+    assert result["status"] == "queued"
+    assert result["decision"]["review_memory"] is True
+    assert result["decision"]["review_skills"] is False
+    assert result["decision"]["trigger_reasons"] == ["memory_stop_interval"]
+
+
 def test_evaluate_trigger_keyword_scans_only_user_message(tmp_path: Path) -> None:
     """Assistant and tool text cannot trigger high-signal keywords."""
     repo = tmp_path / "repo"

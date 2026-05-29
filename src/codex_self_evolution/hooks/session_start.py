@@ -4,21 +4,31 @@ from pathlib import Path
 from typing import Any
 
 from ..config import PACKAGE_ROOT, build_paths
+from ..config_file import load_config
 from ..storage import ensure_runtime_dirs, load_stable_memory, repo_fingerprint
 
 
 def session_start(cwd: str | Path | None = None, state_dir: str | Path | None = None) -> dict:
     paths = build_paths(repo_root=cwd, state_dir=state_dir)
-    ensure_runtime_dirs(paths)
-    policy = (PACKAGE_ROOT / "session_recall" / "policy.md").read_text(encoding="utf-8")
-    memory_text = load_stable_memory(paths)
-    combined_prefix = "\n\n".join(
-        section
-        for section in [
+    config = load_config(home=Path(state_dir).expanduser().resolve() if state_dir else None).config
+    stable_memory_enabled = config.stable_memory.enabled
+    session_recall_enabled = config.session_recall.enabled
+    if stable_memory_enabled:
+        ensure_runtime_dirs(paths)
+        memory_text = load_stable_memory(paths)
+    else:
+        memory_text = ""
+    policy = ""
+    if session_recall_enabled and config.session_recall.session_start_policy:
+        policy = (PACKAGE_ROOT / "session_recall" / "policy.md").read_text(encoding="utf-8")
+    stable_background_sections = []
+    if stable_memory_enabled:
+        stable_background_sections = [
             "# Stable Background",
             "## MEMORY.md\n" + (memory_text or "_No entries yet._\n"),
         ]
-        if section
+    combined_prefix = "\n\n".join(
+        section for section in stable_background_sections if section
     )
     return {
         "hook": "SessionStart",
@@ -26,6 +36,7 @@ def session_start(cwd: str | Path | None = None, state_dir: str | Path | None = 
         "repo_fingerprint": repo_fingerprint(paths.repo_root),
         "state_dir": str(paths.state_dir),
         "stable_background": {
+            "enabled": stable_memory_enabled,
             "current_memory_md": memory_text,
             "memory_path": str(paths.memory_dir / "MEMORY.md"),
             "memory_refs_dir": str(paths.memory_refs_dir),
@@ -33,6 +44,7 @@ def session_start(cwd: str | Path | None = None, state_dir: str | Path | None = 
             "combined_prefix": combined_prefix,
         },
         "recall": {
+            "enabled": session_recall_enabled,
             "policy": policy,
             "skill": {
                 "skill_id": "csep-session-recall",

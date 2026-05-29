@@ -43,6 +43,7 @@ def test_config_init_creates_new_system_template(
     assert result["status"] == "created"
     content = (tmp_path / "config.toml").read_text(encoding="utf-8")
     assert "schema_version = 2" in content
+    assert "[stable_memory]" in content
     assert "[session_reflection]" in content
     assert "[session_reflection.trigger]" in content
     assert "[session_recall]" in content
@@ -84,23 +85,31 @@ def test_config_show_returns_new_system_resolved_tree(
     (tmp_path / "config.toml").write_text("""
 schema_version = 2
 
+[stable_memory]
+enabled = false
+
 [session_reflection]
 enabled = false
 sandbox = "workspace-write"
 
 [session_recall]
 enabled = false
+manual_query = false
 """, encoding="utf-8")
     monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path))
     code, result = _invoke(["config", "show"], capsys)
     assert code == 0
     assert result["config_exists"] is True
+    assert result["resolved"]["stable_memory"]["enabled"] is False
     assert result["resolved"]["session_reflection"]["enabled"] is False
     assert result["resolved"]["session_reflection"]["sandbox"] == "workspace-write"
     assert result["resolved"]["session_recall"]["enabled"] is False
+    assert result["resolved"]["session_recall"]["manual_query"] is False
     assert "reviewer" not in result["resolved"]
     assert "compile" not in result["resolved"]
+    assert result["sources"]["stable_memory.enabled"] == "config.toml"
     assert result["sources"]["session_reflection.enabled"] == "config.toml"
+    assert result["sources"]["session_recall.manual_query"] == "config.toml"
     assert "env_provider" in result
     assert "keys_set" in result["env_provider"]
 

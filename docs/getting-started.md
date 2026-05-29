@@ -55,6 +55,9 @@ csep config validate
 ```toml
 schema_version = 2
 
+[stable_memory]
+enabled = true
+
 [session_reflection]
 enabled = true
 backend = "codex-app-server"
@@ -68,6 +71,8 @@ max_concurrent_jobs = 1
 
 [session_reflection.trigger]
 enabled = true
+memory_review = true
+skill_review = true
 memory_stop_interval = 3
 memory_context_chars = 16000
 skill_tool_call_interval = 15
@@ -77,6 +82,8 @@ active_job_stale_seconds = 1800
 
 [session_recall]
 enabled = true
+session_start_policy = true
+manual_query = true
 stop_hook_archive = true
 
 [log]
@@ -84,6 +91,20 @@ retention_days = 14
 ```
 
 默认的 `sandbox = "danger-full-access"` 和 `approval_policy = "never"` 是为了让后台 reflection 能无阻塞完成写入和 receipt 落盘。它的信任边界不在 child 自述，而在父进程的 receipt validation：路径、hash、job identity、memory root 和 `csep-reflect-*` skill namespace 都会被校验。低信任或共享环境可以调低这两个值，但后台 reflection 可能因此需要人工确认或无法完成。
+
+三条主线都可以独立关闭：
+
+- `[stable_memory] enabled = false`：`SessionStart` 不读取或注入 `MEMORY.md`。
+- `[session_recall] enabled = false`：`SessionStart` 不注入 recall policy，`csep recall` 返回空结果，`Stop` hook 不归档 transcript。
+- `[session_reflection] enabled = false`：`Stop` hook 不再创建后台 reflection job。
+
+也可以只关子能力：
+
+- `session_recall.session_start_policy = false`：保留 recall 数据库和手动查询，但启动时不注入 recall policy。
+- `session_recall.manual_query = false`：保留 Stop 归档，但 `csep recall` 不读库。
+- `session_recall.stop_hook_archive = false`：保留手动查询已有库，但 Stop hook 不再归档新 transcript。
+- `session_reflection.trigger.memory_review = false`：trigger 不再因为 memory counter / memory keyword 创建 memory review。
+- `session_reflection.trigger.skill_review = false`：trigger 不再因为 tool counter / skill keyword 创建 skill review。
 
 ## 3. 检查 Codex Plugin Hooks
 

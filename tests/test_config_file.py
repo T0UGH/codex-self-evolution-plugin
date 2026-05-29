@@ -17,11 +17,15 @@ def test_missing_config_returns_new_system_defaults(tmp_path: Path) -> None:
     loaded = load_config(home=tmp_path, env={})
     assert loaded.config_exists is False
     assert loaded.config.schema_version == 2
+    assert loaded.config.stable_memory.enabled is True
     assert loaded.config.session_reflection.enabled is True
     assert loaded.config.session_reflection.backend == "codex-app-server"
     assert loaded.config.session_reflection.skill_prefix == "csep-reflect-"
     assert loaded.config.session_recall.enabled is True
+    assert loaded.config.session_recall.session_start_policy is True
+    assert loaded.config.session_recall.manual_query is True
     assert loaded.config.session_recall.stop_hook_archive is True
+    assert loaded.sources["stable_memory.enabled"] == "default"
     assert loaded.sources["session_reflection.enabled"] == "default"
     assert loaded.sources["session_recall.enabled"] == "default"
     assert loaded.warnings == []
@@ -51,8 +55,13 @@ high_signal_immediate = false
 skill_generation_mode = "one_shot_active"
 active_job_stale_seconds = 600
 
+[stable_memory]
+enabled = false
+
 [session_recall]
 enabled = false
+session_start_policy = false
+manual_query = false
 stop_hook_archive = false
 
 [log]
@@ -60,6 +69,7 @@ retention_days = 3
 """)
     loaded = load_config(home=tmp_path, env={})
     cfg = loaded.config
+    assert cfg.stable_memory.enabled is False
     assert cfg.session_reflection.enabled is False
     assert cfg.session_reflection.ephemeral is False
     assert cfg.session_reflection.sandbox == "workspace-write"
@@ -69,6 +79,8 @@ retention_days = 3
     assert cfg.session_reflection.trigger.memory_stop_interval == 5
     assert cfg.session_reflection.trigger.skill_tool_call_interval == 20
     assert cfg.session_recall.enabled is False
+    assert cfg.session_recall.session_start_policy is False
+    assert cfg.session_recall.manual_query is False
     assert cfg.session_recall.stop_hook_archive is False
     assert cfg.log.retention_days == 3
 

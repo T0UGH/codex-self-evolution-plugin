@@ -141,6 +141,8 @@ csep recall --recent
 
 `session-start`、`session-stop`、`session-archive`、`session-ingest` 主要给 hook 和底层排障使用。完整列表见 [docs/getting-started.md](docs/getting-started.md)。
 
+三条主线可在 `~/.codex-self-evolution/config.toml` 里独立关闭：`[stable_memory] enabled = false` 关闭启动记忆注入，`[session_recall] enabled = false` 关闭 recall policy / 查询 / Stop 归档，`[session_reflection] enabled = false` 关闭后台 reflection worker。需要更细时，还可以用 `session_recall.session_start_policy`、`session_recall.manual_query`、`session_recall.stop_hook_archive`、`session_reflection.trigger.memory_review`、`session_reflection.trigger.skill_review` 分别控制子能力。
+
 ## 性能和运行方式
 
 `SessionStart` / `Stop` 前台只做轻量文件读写、归档触发和状态判断；模型 reflection 在后台运行，不阻塞 Codex 正常退出。

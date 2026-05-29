@@ -122,6 +122,9 @@ Parent 校验：
 核心配置：
 
 ```toml
+[stable_memory]
+enabled = true
+
 [session_reflection]
 enabled = true
 backend = "codex-app-server"
@@ -135,6 +138,8 @@ max_concurrent_jobs = 1
 
 [session_reflection.trigger]
 enabled = true
+memory_review = true
+skill_review = true
 memory_stop_interval = 3
 memory_context_chars = 16000
 skill_tool_call_interval = 15

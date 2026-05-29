@@ -251,6 +251,7 @@ def test_collect_status_runs_cleanly_with_no_home(monkeypatch, tmp_path: Path) -
     assert set(result) == {
         "timestamp",
         "home",
+        "config",
         "plugin_hooks",
         "stable_memory",
         "session_reflection",
@@ -258,6 +259,13 @@ def test_collect_status_runs_cleanly_with_no_home(monkeypatch, tmp_path: Path) -
         "env_provider",
         "tools",
     }
+    assert result["config"]["feature_switches"] == {
+        "stable_memory": True,
+        "session_recall": True,
+        "session_reflection": True,
+    }
+    assert result["config"]["sub_switches"]["session_recall.manual_query"] is True
+    assert result["config"]["sub_switches"]["session_reflection.trigger.skill_review"] is True
     assert result["env_provider"]["exists"] is False
 
 
@@ -395,6 +403,7 @@ def test_cli_status_outputs_valid_json(tmp_path: Path, capsys, monkeypatch) -> N
     assert set(parsed) == {
         "timestamp",
         "home",
+        "config",
         "plugin_hooks",
         "stable_memory",
         "session_reflection",

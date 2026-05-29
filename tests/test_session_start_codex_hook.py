@@ -80,6 +80,29 @@ def test_format_includes_stable_memory_and_strong_recall_policy(tmp_path):
     assert "Skip recall only when" in ac
 
 
+def test_format_omits_disabled_stable_memory_and_recall(tmp_path):
+    state = _seed_state(tmp_path, memory="Do not inject when disabled.")
+    (state / "config.toml").write_text(
+        """
+schema_version = 2
+
+[stable_memory]
+enabled = false
+
+[session_recall]
+enabled = false
+""",
+        encoding="utf-8",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    result = session_start(cwd=repo, state_dir=state)
+    ac = format_session_start_for_codex(result)["hookSpecificOutput"]["additionalContext"]
+
+    assert ac == ""
+
+
 def test_format_handles_empty_session_gracefully():
     # Fresh machine, no memory or policy loaded yet. Helper must not crash
     # and must still emit valid Codex shape (additionalContext just empty).

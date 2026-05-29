@@ -358,14 +358,20 @@ def evaluate_trigger_policy(
         matched_memory: list[str] = []
         matched_skill: list[str] = []
         matched_snippet = ""
+        memory_review_enabled = bool(getattr(config, "memory_review", True))
+        skill_review_enabled = bool(getattr(config, "skill_review", True))
         if bool(getattr(config, "high_signal_immediate", True)):
             for user_text in user_texts:
-                memory_hits = (
-                    _scan_keyword_group(user_text, MEMORY_KEYWORDS)
-                    + _scan_keyword_group(user_text, HANDOFF_KEYWORDS)
-                    + _scan_keyword_group(user_text, CORRECTION_KEYWORDS)
-                )
-                skill_hits = _scan_keyword_group(user_text, SKILL_KEYWORDS)
+                memory_hits: list[str] = []
+                skill_hits: list[str] = []
+                if memory_review_enabled:
+                    memory_hits = (
+                        _scan_keyword_group(user_text, MEMORY_KEYWORDS)
+                        + _scan_keyword_group(user_text, HANDOFF_KEYWORDS)
+                        + _scan_keyword_group(user_text, CORRECTION_KEYWORDS)
+                    )
+                if skill_review_enabled:
+                    skill_hits = _scan_keyword_group(user_text, SKILL_KEYWORDS)
                 if memory_hits or skill_hits:
                     matched_memory.extend(memory_hits)
                     matched_skill.extend(skill_hits)
@@ -373,11 +379,17 @@ def evaluate_trigger_policy(
                         matched_snippet = user_text[:160]
 
         reasons: list[str] = []
-        if int(state["stops_since_memory_review"]) >= int(getattr(config, "memory_stop_interval", 3)):
+        if memory_review_enabled and int(state["stops_since_memory_review"]) >= int(
+            getattr(config, "memory_stop_interval", 3)
+        ):
             reasons.append("memory_stop_interval")
-        if int(state["readable_chars_since_memory_review"]) >= int(getattr(config, "memory_context_chars", 16000)):
+        if memory_review_enabled and int(state["readable_chars_since_memory_review"]) >= int(
+            getattr(config, "memory_context_chars", 16000)
+        ):
             reasons.append("memory_context_chars")
-        if int(state["tool_calls_since_skill_review"]) >= int(getattr(config, "skill_tool_call_interval", 15)):
+        if skill_review_enabled and int(state["tool_calls_since_skill_review"]) >= int(
+            getattr(config, "skill_tool_call_interval", 15)
+        ):
             reasons.append("skill_tool_call_interval")
         if matched_memory:
             reasons.append("high_signal_memory_keyword")
@@ -391,8 +403,8 @@ def evaluate_trigger_policy(
             decision = {
                 "schema_version": 1,
                 "status": "deferred_active_job",
-                "review_memory": True,
-                "review_skills": True,
+                "review_memory": memory_review_enabled,
+                "review_skills": skill_review_enabled,
                 "trigger_reasons": reasons,
                 "matched_keywords": matched_keywords,
                 "matched_context_snippet": matched_snippet,
@@ -404,8 +416,8 @@ def evaluate_trigger_policy(
             decision = {
                 "schema_version": 1,
                 "status": "queued",
-                "review_memory": True,
-                "review_skills": True,
+                "review_memory": memory_review_enabled,
+                "review_skills": skill_review_enabled,
                 "trigger_reasons": reasons,
                 "matched_keywords": matched_keywords,
                 "matched_context_snippet": matched_snippet,

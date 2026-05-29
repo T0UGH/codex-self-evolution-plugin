@@ -29,3 +29,55 @@ def test_session_start_injects_memory_and_short_recall_pointer(tmp_path):
     assert (state / "memory").exists()
     assert (state / "memory" / "refs").exists()
     json.dumps(result)
+
+
+def test_session_start_respects_stable_memory_and_recall_switches(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "config.toml").write_text(
+        """
+schema_version = 2
+
+[stable_memory]
+enabled = false
+
+[session_recall]
+enabled = false
+""",
+        encoding="utf-8",
+    )
+
+    result = session_start(cwd=repo, state_dir=state)
+
+    assert result["stable_background"]["enabled"] is False
+    assert result["stable_background"]["current_memory_md"] == ""
+    assert result["stable_background"]["combined_prefix"] == ""
+    assert result["recall"]["enabled"] is False
+    assert result["recall"]["policy"] == ""
+
+
+def test_session_start_respects_recall_policy_switch(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    (state / "memory").mkdir(parents=True)
+    (state / "memory" / "MEMORY.md").write_text("Keep memory.\n", encoding="utf-8")
+    (state / "config.toml").write_text(
+        """
+schema_version = 2
+
+[session_recall]
+enabled = true
+session_start_policy = false
+""",
+        encoding="utf-8",
+    )
+
+    result = session_start(cwd=repo, state_dir=state)
+
+    assert result["stable_background"]["enabled"] is True
+    assert "Keep memory." in result["stable_background"]["combined_prefix"]
+    assert result["recall"]["enabled"] is True
+    assert result["recall"]["policy"] == ""

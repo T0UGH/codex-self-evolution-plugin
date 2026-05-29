@@ -84,6 +84,8 @@ def test_session_reflection_template_contains_defaults() -> None:
     assert "[session_reflection.trigger]" in CONFIG_TEMPLATE
     assert 'backend = "codex-app-server"' in CONFIG_TEMPLATE
     assert 'model = "gpt-5.3-codex-spark"' in CONFIG_TEMPLATE
+    assert "memory_review = true" in CONFIG_TEMPLATE
+    assert "skill_review = true" in CONFIG_TEMPLATE
     assert 'skill_generation_mode = "one_shot_active"' in CONFIG_TEMPLATE
     assert "replace_stop_reviewer" not in CONFIG_TEMPLATE
     assert 'threadSource = "memory_consolidation"' not in CONFIG_TEMPLATE
@@ -108,6 +110,8 @@ def test_session_reflection_trigger_defaults(tmp_path: Path) -> None:
     trigger = loaded.config.session_reflection.trigger
 
     assert trigger.enabled is True
+    assert trigger.memory_review is True
+    assert trigger.skill_review is True
     assert trigger.memory_stop_interval == 3
     assert trigger.memory_context_chars == 16000
     assert trigger.skill_tool_call_interval == 15
@@ -115,6 +119,7 @@ def test_session_reflection_trigger_defaults(tmp_path: Path) -> None:
     assert trigger.skill_generation_mode == "one_shot_active"
     assert trigger.active_job_stale_seconds == 1800
     assert loaded.sources["session_reflection.trigger.enabled"] == "default"
+    assert loaded.sources["session_reflection.trigger.memory_review"] == "default"
     assert loaded.sources["session_reflection.trigger.skill_generation_mode"] == "default"
 
 
@@ -123,6 +128,8 @@ def test_session_reflection_trigger_toml_values_apply(tmp_path: Path) -> None:
     _write_config(tmp_path, """
 [session_reflection.trigger]
 enabled = false
+memory_review = false
+skill_review = false
 memory_stop_interval = 4
 memory_context_chars = 32000
 skill_tool_call_interval = 21
@@ -135,6 +142,8 @@ active_job_stale_seconds = 60
     trigger = loaded.config.session_reflection.trigger
 
     assert trigger.enabled is False
+    assert trigger.memory_review is False
+    assert trigger.skill_review is False
     assert trigger.memory_stop_interval == 4
     assert trigger.memory_context_chars == 32000
     assert trigger.skill_tool_call_interval == 21
@@ -142,6 +151,7 @@ active_job_stale_seconds = 60
     assert trigger.skill_generation_mode == "evidence_first"
     assert trigger.active_job_stale_seconds == 60
     assert loaded.sources["session_reflection.trigger.enabled"] == "config.toml"
+    assert loaded.sources["session_reflection.trigger.skill_review"] == "config.toml"
     assert loaded.sources["session_reflection.trigger.active_job_stale_seconds"] == "config.toml"
 
 

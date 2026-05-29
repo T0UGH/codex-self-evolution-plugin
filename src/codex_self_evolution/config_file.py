@@ -12,11 +12,23 @@ from .config import DEFAULT_LOCK_STALE_SECONDS, REFLECT_SKILL_PREFIX
 
 
 @dataclass
+class StableMemoryConfig:
+    """SessionStart stable memory injection configuration."""
+
+    # Whether SessionStart reads and injects project MEMORY.md.
+    enabled: bool = True
+
+
+@dataclass
 class SessionReflectionTriggerConfig:
     """Deterministic Stop-hook trigger policy configuration."""
 
     # Whether Stop-hook trigger evaluation is active.
     enabled: bool = True
+    # Whether trigger policy may request memory review.
+    memory_review: bool = True
+    # Whether trigger policy may request skill review.
+    skill_review: bool = True
     # Number of Stop events between memory-reflection nudges.
     memory_stop_interval: int = 3
     # Maximum transcript context sent to the memory-reflection decision path.
@@ -63,6 +75,10 @@ class SessionRecallConfig:
 
     # Whether focused recall and archive storage are enabled.
     enabled: bool = True
+    # Whether SessionStart injects the recall policy pointer.
+    session_start_policy: bool = True
+    # Whether manual `csep recall` queries may read the recall store.
+    manual_query: bool = True
     # Whether the Stop hook archives transcripts into session recall.
     stop_hook_archive: bool = True
 
@@ -81,6 +97,8 @@ class PluginConfig:
 
     # Configuration schema version supported by this loader.
     schema_version: int = 2
+    # Stable Memory startup injection configuration.
+    stable_memory: StableMemoryConfig = field(default_factory=StableMemoryConfig)
     # Session reflection worker and trigger configuration.
     session_reflection: SessionReflectionConfig = field(default_factory=SessionReflectionConfig)
     # Session recall archive and recall configuration.
@@ -116,6 +134,7 @@ _KEY_LOOKALIKE_RE = re.compile(r"(?:^|_)(api[_-]?key|token|secret|password|beare
 
 _KNOWN_TOP_LEVEL_KEYS = {
     "schema_version",
+    "stable_memory",
     "session_reflection",
     "session_recall",
     "log",
@@ -123,6 +142,8 @@ _KNOWN_TOP_LEVEL_KEYS = {
 
 _KNOWN_PATHS = {
     "schema_version",
+    "stable_memory",
+    "stable_memory.enabled",
     "session_reflection",
     "session_reflection.enabled",
     "session_reflection.backend",
@@ -135,6 +156,8 @@ _KNOWN_PATHS = {
     "session_reflection.max_concurrent_jobs",
     "session_reflection.trigger",
     "session_reflection.trigger.enabled",
+    "session_reflection.trigger.memory_review",
+    "session_reflection.trigger.skill_review",
     "session_reflection.trigger.memory_stop_interval",
     "session_reflection.trigger.memory_context_chars",
     "session_reflection.trigger.skill_tool_call_interval",
@@ -143,6 +166,8 @@ _KNOWN_PATHS = {
     "session_reflection.trigger.active_job_stale_seconds",
     "session_recall",
     "session_recall.enabled",
+    "session_recall.session_start_policy",
+    "session_recall.manual_query",
     "session_recall.stop_hook_archive",
     "log",
     "log.retention_days",
@@ -198,6 +223,15 @@ def load_config(
     config = PluginConfig(schema_version=schema_version)
     sources = _default_sources(config)
     sources["schema_version"] = "config.toml" if "schema_version" in raw_toml else "default"
+
+    stable_memory_toml = _table(raw_toml, "stable_memory", warnings)
+    _apply_bool(
+        config.stable_memory,
+        "enabled",
+        stable_memory_toml,
+        "stable_memory.enabled",
+        sources,
+    )
 
     reflection_toml = _table(raw_toml, "session_reflection", warnings)
     _apply_bool(
@@ -278,6 +312,20 @@ def load_config(
         "session_reflection.trigger.enabled",
         sources,
     )
+    _apply_bool(
+        config.session_reflection.trigger,
+        "memory_review",
+        trigger_toml,
+        "session_reflection.trigger.memory_review",
+        sources,
+    )
+    _apply_bool(
+        config.session_reflection.trigger,
+        "skill_review",
+        trigger_toml,
+        "session_reflection.trigger.skill_review",
+        sources,
+    )
     for field_name in (
         "memory_stop_interval",
         "memory_context_chars",
@@ -350,6 +398,20 @@ def load_config(
         "enabled",
         recall_toml,
         "session_recall.enabled",
+        sources,
+    )
+    _apply_bool(
+        config.session_recall,
+        "session_start_policy",
+        recall_toml,
+        "session_recall.session_start_policy",
+        sources,
+    )
+    _apply_bool(
+        config.session_recall,
+        "manual_query",
+        recall_toml,
+        "session_recall.manual_query",
         sources,
     )
     _apply_bool(

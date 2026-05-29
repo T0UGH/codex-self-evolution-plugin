@@ -72,6 +72,80 @@ def test_csep_recall_recent(tmp_path, monkeypatch, capsys):
     assert "recent item" in out
 
 
+def test_csep_recall_respects_state_dir_enabled_switch(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "config.toml").write_text(
+        """
+schema_version = 2
+
+[session_recall]
+enabled = false
+""",
+        encoding="utf-8",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(json.dumps({"role": "user", "content": "disabled recall evidence"}) + "\n", encoding="utf-8")
+
+    assert csep.main([
+        "session-archive",
+        "--transcript-path",
+        str(transcript),
+        "--cwd",
+        str(repo),
+        "--session-id",
+        "s1",
+        "--state-dir",
+        str(state),
+    ]) == 0
+    capsys.readouterr()
+
+    assert csep.main(["recall", "disabled recall", "--cwd", str(repo), "--state-dir", str(state)]) == 0
+    out = capsys.readouterr().out
+    assert "Status: no_match" in out
+    assert "disabled recall evidence" not in out
+
+
+def test_csep_recall_respects_manual_query_switch(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "config.toml").write_text(
+        """
+schema_version = 2
+
+[session_recall]
+manual_query = false
+""",
+        encoding="utf-8",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(json.dumps({"role": "user", "content": "manual query disabled evidence"}) + "\n", encoding="utf-8")
+
+    assert csep.main([
+        "session-archive",
+        "--transcript-path",
+        str(transcript),
+        "--cwd",
+        str(repo),
+        "--session-id",
+        "s1",
+        "--state-dir",
+        str(state),
+    ]) == 0
+    capsys.readouterr()
+
+    assert csep.main(["recall", "manual query disabled", "--cwd", str(repo), "--state-dir", str(state)]) == 0
+    out = capsys.readouterr().out
+    assert "Status: no_match" in out
+    assert "manual query disabled evidence" not in out
+
+
 def test_csep_session_ingest_backfill(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
     root = tmp_path / "sessions"

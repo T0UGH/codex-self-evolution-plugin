@@ -21,6 +21,7 @@ from typing import Any
 
 from . import __version__
 from .config import PROJECTS_SUBDIR, SESSION_REFLECTION_SUBDIR, get_home_dir
+from .config_file import ConfigError, config_to_dict, load_config
 from .session_reflection.runner import session_reflection_status
 from .session_recall.archive import default_db_path
 from .session_recall.store import SessionRecallStore
@@ -41,15 +42,57 @@ def collect_status(
 ) -> dict[str, Any]:
     """Assemble the retained diagnostic snapshot without mutating state."""
     home_dir = Path(home).expanduser().resolve() if home else get_home_dir()
+    config_status = _check_config(home_dir)
     return {
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "home": str(home_dir),
+        "config": config_status,
         "plugin_hooks": _check_plugin_hook_bundle(),
         "stable_memory": _check_stable_memory(home_dir),
         "session_reflection": session_reflection_status(home=home_dir),
         "session_recall": _check_session_recall(home_dir),
         "env_provider": _check_env_provider(home_dir),
         "tools": _check_tools(include_remote=True),
+    }
+
+
+def _check_config(home_dir: Path) -> dict[str, Any]:
+    """Return resolved feature-switch status without leaking sensitive values."""
+    try:
+        loaded = load_config(home=home_dir)
+    except ConfigError as exc:
+        return {
+            "status": "parse_error",
+            "error": str(exc),
+            "feature_switches": None,
+        }
+    resolved = config_to_dict(loaded.config)
+    return {
+        "status": "ok" if not loaded.warnings else "warnings",
+        "config_path": str(loaded.config_path),
+        "config_exists": loaded.config_exists,
+        "feature_switches": {
+            "stable_memory": bool(resolved["stable_memory"]["enabled"]),
+            "session_recall": bool(resolved["session_recall"]["enabled"]),
+            "session_reflection": bool(resolved["session_reflection"]["enabled"]),
+        },
+        "sub_switches": {
+            "session_recall.session_start_policy": bool(
+                resolved["session_recall"]["session_start_policy"]
+            ),
+            "session_recall.manual_query": bool(resolved["session_recall"]["manual_query"]),
+            "session_recall.stop_hook_archive": bool(resolved["session_recall"]["stop_hook_archive"]),
+            "session_reflection.trigger.enabled": bool(
+                resolved["session_reflection"]["trigger"]["enabled"]
+            ),
+            "session_reflection.trigger.memory_review": bool(
+                resolved["session_reflection"]["trigger"]["memory_review"]
+            ),
+            "session_reflection.trigger.skill_review": bool(
+                resolved["session_reflection"]["trigger"]["skill_review"]
+            ),
+        },
+        "warnings": loaded.warnings,
     }
 
 
