@@ -124,6 +124,8 @@ Phase 5A 不负责自动生成 summary，只负责安全读取。人工或后续
 
 首版只稳定记录 SessionStart 注入次数。引用、打开和 skill trigger 可以先通过 transcript/archive 中的明确文本和 tool call 进行 best-effort 统计，统计不到时保持 0，不影响主链路。
 
+Phase 5B 首版只在 `SessionStart` 记录 `MEMORY.md` / `memory_summary.md` 的注入次数和最近注入时间。`citation_count`、`open_count` 和 `trigger_count` 保留为 schema 字段或后续扩展，不在首版从 transcript 正文反推。
+
 ### 污染标签
 
 在 session archive 或 reflection job metadata 中增加 `context_labels`：
@@ -146,6 +148,8 @@ Phase 5A 不负责自动生成 summary，只负责安全读取。人工或后续
 - 出现 AGENTS / developer / system 注入时标记 `agent_injected_context`。
 - 出现本地文件读写和 repo 路径时标记 `local_repo_code`。
 - 出现用户明确偏好或纠正时标记 `user_instruction`。
+
+标签首版以确定性规则写入 archive metadata；reflection 只在确定要创建 queued job 时从 Stop payload 或 parent transcript 派生同一组标签。Stop hook 不为了标签同步等待异步 archive 子进程。
 
 ### 成功标准
 

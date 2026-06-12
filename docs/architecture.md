@@ -69,11 +69,12 @@ csep recall
             ├── MEMORY.md
             ├── memory_summary.md
             ├── memory_summary.meta.json
+            ├── usage.json
             └── refs/
                 └── ...
 ```
 
-业务仓库不保存运行时状态。每个 repo 按绝对路径分配 bucket；worktree 场景会尽量解析到稳定的 repo scope。`SessionStart` 优先注入通过 `memory_summary.meta.json` hash 校验的 `memory_summary.md`；缺失、为空、meta 无效或 hash 过期时回退 `MEMORY.md`。`refs/` 只作为按需引用区，旧 `USER.md` 如存在会被忽略。
+业务仓库不保存运行时状态。每个 repo 按绝对路径分配 bucket；worktree 场景会尽量解析到稳定的 repo scope。`SessionStart` 优先注入通过 `memory_summary.meta.json` hash 校验的 `memory_summary.md`；缺失、为空、meta 无效或 hash 过期时回退 `MEMORY.md`。`usage.json` 只记录注入次数和时间等低敏元数据，不保存 memory 正文、transcript 正文或用户隐私标识。`refs/` 只作为按需引用区，旧 `USER.md` 如存在会被忽略。
 
 ## 命令面
 
