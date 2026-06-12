@@ -14,6 +14,7 @@ Local verification against codex-cli 0.122.0 confirmed that
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from io import StringIO
@@ -37,6 +38,11 @@ def _seed_state(tmp_path, *, user="Prefer concise answers.", memory="Focused tes
     (state / "memory" / "USER.md").write_text(f"# USER\n\n{user}\n", encoding="utf-8")
     (state / "memory" / "MEMORY.md").write_text(f"# MEMORY\n\n{memory}\n", encoding="utf-8")
     return state
+
+
+def _sha256_text(text: str) -> str:
+    """Return the SHA-256 hex digest for UTF-8 test fixtures."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def test_format_wraps_into_codex_hookSpecificOutput_shape(tmp_path):
@@ -78,6 +84,39 @@ def test_format_includes_stable_memory_and_strong_recall_policy(tmp_path):
     assert "Before answering or taking action" in ac
     assert "When unsure, use recall" in ac
     assert "Skip recall only when" in ac
+
+
+def test_format_includes_verified_memory_summary_instead_of_full_memory(tmp_path):
+    state = tmp_path / "state"
+    memory_dir = state / "memory"
+    memory_dir.mkdir(parents=True)
+    memory_text = "# MEMORY\n\nCold full memory.\n"
+    summary_text = "# Memory Summary\n\nHot startup summary.\n"
+    (memory_dir / "MEMORY.md").write_text(memory_text, encoding="utf-8")
+    (memory_dir / "memory_summary.md").write_text(summary_text, encoding="utf-8")
+    (memory_dir / "memory_summary.meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "MEMORY.md",
+                "source_memory_sha256": _sha256_text(memory_text),
+                "summary_sha256": _sha256_text(summary_text),
+                "generated_at": "2026-06-12T00:00:00Z",
+                "generator": "session_reflection_consolidation",
+            }
+        ),
+        encoding="utf-8",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    result = session_start(cwd=repo, state_dir=state)
+    ac = format_session_start_for_codex(result)["hookSpecificOutput"]["additionalContext"]
+
+    assert "## memory_summary.md" in ac
+    assert "Hot startup summary." in ac
+    assert "Cold full memory." not in ac
+    assert "Recall Policy" in ac
 
 
 def test_format_handles_empty_session_gracefully():

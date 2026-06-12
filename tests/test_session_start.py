@@ -94,3 +94,91 @@ def test_session_start_falls_back_when_memory_summary_is_directory(tmp_path):
     assert result["stable_background"]["memory_fallback_reason"] == "summary_empty"
     assert result["stable_background"]["current_memory_md"] == memory_text
     assert "Full detail remains available." in result["stable_background"]["combined_prefix"]
+
+
+def test_session_start_falls_back_when_summary_source_hash_is_stale(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    memory_dir = state / "memory"
+    memory_dir.mkdir(parents=True)
+    memory_text = "# MEMORY\n\nFresh full memory.\n"
+    summary_text = "# Memory Summary\n\nStale summary.\n"
+    (memory_dir / "MEMORY.md").write_text(memory_text, encoding="utf-8")
+    (memory_dir / "memory_summary.md").write_text(summary_text, encoding="utf-8")
+    (memory_dir / "memory_summary.meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "MEMORY.md",
+                "source_memory_sha256": _sha256_text("# MEMORY\n\nOld full memory.\n"),
+                "summary_sha256": _sha256_text(summary_text),
+                "generated_at": "2026-06-12T00:00:00Z",
+                "generator": "session_reflection_consolidation",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = session_start(cwd=repo, state_dir=state)
+
+    assert result["stable_background"]["memory_source"] == "MEMORY.md"
+    assert result["stable_background"]["memory_fallback_used"] is True
+    assert result["stable_background"]["memory_fallback_reason"] == "source_hash_mismatch"
+    assert result["stable_background"]["current_memory_md"] == memory_text
+    assert "Fresh full memory." in result["stable_background"]["combined_prefix"]
+    assert "Stale summary." not in result["stable_background"]["combined_prefix"]
+
+
+def test_session_start_falls_back_when_summary_hash_mismatches(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    memory_dir = state / "memory"
+    memory_dir.mkdir(parents=True)
+    memory_text = "# MEMORY\n\nFull memory.\n"
+    summary_text = "# Memory Summary\n\nEdited without meta update.\n"
+    (memory_dir / "MEMORY.md").write_text(memory_text, encoding="utf-8")
+    (memory_dir / "memory_summary.md").write_text(summary_text, encoding="utf-8")
+    (memory_dir / "memory_summary.meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "MEMORY.md",
+                "source_memory_sha256": _sha256_text(memory_text),
+                "summary_sha256": _sha256_text("# Memory Summary\n\nPrevious summary.\n"),
+                "generated_at": "2026-06-12T00:00:00Z",
+                "generator": "session_reflection_consolidation",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = session_start(cwd=repo, state_dir=state)
+
+    assert result["stable_background"]["memory_source"] == "MEMORY.md"
+    assert result["stable_background"]["memory_fallback_used"] is True
+    assert result["stable_background"]["memory_fallback_reason"] == "summary_hash_mismatch"
+    assert result["stable_background"]["current_memory_md"] == memory_text
+    assert "Full memory." in result["stable_background"]["combined_prefix"]
+    assert "Edited without meta update." not in result["stable_background"]["combined_prefix"]
+
+
+def test_session_start_falls_back_when_summary_meta_is_invalid_json(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    memory_dir = state / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "MEMORY.md").write_text("# MEMORY\n\nSafe full memory.\n", encoding="utf-8")
+    (memory_dir / "memory_summary.md").write_text("# Memory Summary\n\nBroken meta summary.\n", encoding="utf-8")
+    (memory_dir / "memory_summary.meta.json").write_text("{not-json", encoding="utf-8")
+
+    result = session_start(cwd=repo, state_dir=state)
+
+    assert result["stable_background"]["memory_source"] == "MEMORY.md"
+    assert result["stable_background"]["memory_fallback_used"] is True
+    assert result["stable_background"]["memory_fallback_reason"] == "summary_meta_invalid"
+    assert "Safe full memory." in result["stable_background"]["combined_prefix"]
+    assert "Broken meta summary." not in result["stable_background"]["combined_prefix"]
+    json.dumps(result)
