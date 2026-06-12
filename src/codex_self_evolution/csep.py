@@ -26,6 +26,7 @@ _MAIN_CLI_COMMANDS = {
     "session-start",
     "session-stop",
     "session-reflect",
+    "session-reflection",
     "status",
     "config",
     "migrate-worktrees",
@@ -164,6 +165,23 @@ def _add_main_runtime_commands(subparsers: argparse._SubParsersAction) -> None:
     reflect_mode.add_argument("--job")
     reflect_mode.add_argument("--status", action="store_true")
     reflect_parser.add_argument("--home")
+
+    reflection_parser = subparsers.add_parser(
+        "session-reflection",
+        help="Session reflection helper commands.",
+    )
+    reflection_sub = reflection_parser.add_subparsers(dest="session_reflection_command", required=True)
+    receipt_writer = reflection_sub.add_parser(
+        "write-receipt",
+        help="Validate a semantic draft and write a canonical reflection receipt.",
+    )
+    receipt_writer.add_argument("--draft", required=True)
+    receipt_writer.add_argument("--output", required=True)
+    receipt_writer.add_argument("--job-id", required=True)
+    receipt_writer.add_argument("--parent-session-id", required=True)
+    receipt_writer.add_argument("--child-thread-id", required=True)
+    receipt_writer.add_argument("--started-at")
+    receipt_writer.add_argument("--finished-at")
 
     status_parser = subparsers.add_parser(
         "status",

@@ -195,6 +195,116 @@ def test_session_reflect_hook_payload_enqueues_and_runs_foreground(
     assert json.loads(capsys.readouterr().out) == {"job_id": "job-456", "status": "succeeded"}
 
 
+def test_session_reflection_write_receipt_creates_canonical_receipt(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The dedicated writer turns a semantic draft into a canonical receipt."""
+    draft = tmp_path / "draft.json"
+    output = tmp_path / "receipt.json"
+    draft.write_text(
+        json.dumps(
+            {
+                "status": "skipped",
+                "memory_changes": [],
+                "skill_changes": [],
+                "skipped_candidates": ["duplicate"],
+                "validation_notes": [],
+                "errors": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(
+        [
+            "session-reflection",
+            "write-receipt",
+            "--draft",
+            str(draft),
+            "--output",
+            str(output),
+            "--job-id",
+            "job-1",
+            "--parent-session-id",
+            "parent-1",
+            "--child-thread-id",
+            "child-1",
+            "--started-at",
+            "2026-06-12T00:00:00Z",
+            "--finished-at",
+            "2026-06-12T00:00:01Z",
+        ]
+    )
+
+    assert exit_code == 0
+    result = json.loads(capsys.readouterr().out)
+    receipt = json.loads(output.read_text(encoding="utf-8"))
+    assert result == {"status": "written", "receipt_path": str(output)}
+    assert receipt == {
+        "schema_version": 1,
+        "job_id": "job-1",
+        "parent_session_id": "parent-1",
+        "child_thread_id": "child-1",
+        "status": "skipped",
+        "memory_changes": [],
+        "skill_changes": [],
+        "skipped_candidates": ["duplicate"],
+        "validation_notes": [],
+        "errors": [],
+        "started_at": "2026-06-12T00:00:00Z",
+        "finished_at": "2026-06-12T00:00:01Z",
+    }
+
+
+def test_session_reflection_write_receipt_rejects_invalid_draft_without_overwrite(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Invalid drafts fail loudly and leave the existing receipt untouched."""
+    draft = tmp_path / "draft.json"
+    output = tmp_path / "receipt.json"
+    draft.write_text(
+        json.dumps(
+            {
+                "status": "skipped",
+                "memory_changes": "not-a-list",
+                "skill_changes": [],
+                "skipped_candidates": [],
+                "validation_notes": [],
+                "errors": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output.write_text("existing receipt\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(
+            [
+                "session-reflection",
+                "write-receipt",
+                "--draft",
+                str(draft),
+                "--output",
+                str(output),
+                "--job-id",
+                "job-1",
+                "--parent-session-id",
+                "parent-1",
+                "--child-thread-id",
+                "child-1",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    error_path = tmp_path / "receipt.writer-error.json"
+    assert exc.value.code == 2
+    assert "receipt draft invalid: field \"memory_changes\" must be a JSON array" in captured.err
+    assert output.read_text(encoding="utf-8") == "existing receipt\n"
+    assert json.loads(error_path.read_text(encoding="utf-8"))["reason"] == "draft_invalid"
+
+
 def test_session_stop_from_stdin_malformed_json_is_non_blocking_without_enqueue_or_spawn(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

@@ -21,7 +21,9 @@ def test_reflection_prompt_contains_markers_paths_classification_and_receipt_sha
     assert prompt.count("CSEP_REFLECTION_JOB_ID=job-1") == 1
     assert prompt.count("CSEP_REFLECTION_CHILD=1") == 1
     assert prompt.count("Child thread id: child-1") == 1
-    assert '"child_thread_id": "child-1"' in prompt
+    assert str(tmp_path / "runs" / "job-1" / "receipt.draft.json") in prompt
+    assert "csep session-reflection write-receipt" in prompt
+    assert "--child-thread-id child-1" in prompt
     assert str(tmp_path / "memory" / "MEMORY.md") in prompt
     assert str(tmp_path / "memory" / "refs") in prompt
     assert str(tmp_path / "skills" / "csep-reflect-*") in prompt
@@ -53,8 +55,9 @@ def test_reflection_prompt_includes_trigger_scope_and_skill_mode(tmp_path: Path)
     assert "Trigger reasons: memory_stop_interval" in prompt
     assert "Skill generation mode: one_shot_active" in prompt
     assert "Do not create, edit, or delete skills. Keep skill_changes empty." in prompt
-    assert "Write receipt.json atomically" in prompt
-    assert '"child_thread_id": "<current child thread id>"' in prompt
+    assert "Do not hand-write the final receipt.json" in prompt
+    assert "atomic final receipt writes" in prompt
+    assert "--child-thread-id <current child thread id>" in prompt
 
 
 def test_reflection_prompt_keeps_duplicate_noop_reviews_out_of_memory(tmp_path: Path) -> None:

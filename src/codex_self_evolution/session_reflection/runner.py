@@ -15,6 +15,7 @@ from .app_server import ReflectionAppServerClient, app_server_proxy_status
 from .guard import evaluate_recursion_guard
 from .paths import build_session_reflection_paths
 from .prompt import build_reflection_prompt
+from .receipt_writer import receipt_writer_error_path
 from .state import (
     create_job_from_payload,
     acquire_global_lock,
@@ -203,6 +204,7 @@ def run_reflection_job(
             expected_parent_session_id=str(job["parent_session_id"]),
             expected_child_thread_id=child_thread_id,
         )
+        validation = _replace_missing_receipt_with_writer_error(paths.receipt_path, validation)
         atomic_write_json(paths.run_dir / "validation.json", validation)
         _reset_trigger_state_for_job(job, validation, home=resolved_home)
         return update_job_status(
@@ -291,13 +293,21 @@ def _validation_category(validation: dict[str, Any]) -> str:
     if status not in {"failed", "partial"}:
         return ""
     reason = str(validation.get("reason") or "")
-    if reason.startswith("receipt_") or reason in {
+    if reason == "draft_invalid":
+        return "draft_invalid"
+    if reason in {
+        "writer_failed",
         "missing_receipt",
+        "receipt_missing",
+        "receipt_empty",
+    }:
+        return "writer_failed"
+    if reason.startswith("receipt_") or reason in {
         "job_id_mismatch",
         "parent_session_id_mismatch",
         "child_thread_id_mismatch",
     }:
-        return "child_receipt_contract"
+        return "validation_failed"
     if validation.get("boundary_violations"):
         return "child_artifact_boundary"
     if validation.get("hash_mismatches") or validation.get("invalid_skills") or validation.get("low_value_memory_writes"):
@@ -314,6 +324,42 @@ def _validation_issue_counts(validation: dict[str, Any]) -> dict[str, int]:
     return {
         key: len(value) if isinstance(value := validation.get(key), list) else 0
         for key in VALIDATION_ISSUE_KEYS
+    }
+
+
+def _replace_missing_receipt_with_writer_error(receipt_path: Path, validation: dict[str, Any]) -> dict[str, Any]:
+    """Use the writer sidecar when final receipt validation only saw a missing file."""
+    if validation.get("reason") not in {"receipt_missing", "missing_receipt"}:
+        return validation
+    sidecar = receipt_writer_error_path(receipt_path)
+    if not sidecar.is_file():
+        return validation
+    try:
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return {
+            **validation,
+            "reason": "writer_failed",
+            "error": f"writer error sidecar unreadable: {exc}",
+        }
+    if not isinstance(payload, dict):
+        return {
+            **validation,
+            "reason": "writer_failed",
+            "error": "writer error sidecar is not a JSON object",
+        }
+    reason = str(payload.get("reason") or "writer_failed")
+    if reason not in {"draft_invalid", "writer_failed"}:
+        reason = "writer_failed"
+    return {
+        "status": "failed",
+        "reason": reason,
+        "error": str(payload.get("message") or payload.get("error") or reason),
+        "field": str(payload.get("field") or ""),
+        "boundary_violations": [],
+        "hash_mismatches": [],
+        "invalid_skills": [],
+        "low_value_memory_writes": [],
     }
 
 

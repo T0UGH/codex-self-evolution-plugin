@@ -226,6 +226,55 @@ def test_csep_recall_pipe_or_fallback_and_all_terms(tmp_path, monkeypatch, capsy
     assert "Status: no_match" in out
 
 
+def test_csep_recall_state_dir_uses_matching_config_home(tmp_path, monkeypatch, capsys):
+    default_home = tmp_path / "default-home"
+    alt_home = tmp_path / "alt-home"
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(default_home))
+    default_home.mkdir()
+    default_home.joinpath("config.toml").write_text(
+        "schema_version = 2\n\n[session_recall]\nenabled = false\n",
+        encoding="utf-8",
+    )
+    alt_home.mkdir()
+    alt_home.joinpath("config.toml").write_text(
+        "schema_version = 2\n\n[session_recall]\nenabled = true\n",
+        encoding="utf-8",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    transcript = tmp_path / "state-dir-session.jsonl"
+    transcript.write_text(
+        json.dumps({"role": "user", "content": "state dir config needle"}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert csep.main([
+        "session-archive",
+        "--transcript-path",
+        str(transcript),
+        "--cwd",
+        str(repo),
+        "--session-id",
+        "state-dir-session",
+        "--state-dir",
+        str(alt_home),
+    ]) == 0
+    capsys.readouterr()
+
+    assert csep.main([
+        "recall",
+        "state dir config needle",
+        "--cwd",
+        str(repo),
+        "--state-dir",
+        str(alt_home),
+    ]) == 0
+    out = capsys.readouterr().out
+
+    assert "Status: matched" in out
+    assert "state dir config needle" in out
+
+
 def test_csep_recall_json_includes_evidence_windows(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
     repo = tmp_path / "repo"

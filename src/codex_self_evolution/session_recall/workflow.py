@@ -30,7 +30,8 @@ def build_focused_recall(
 ) -> dict[str, Any]:
     """Build model-readable recall from the session_recall SQLite/FTS store only."""
     scope = "global" if global_scope else "repo"
-    config = load_config().config
+    config_home = Path(state_dir).expanduser().resolve() if state_dir else None
+    config = load_config(home=config_home).config
     if not config.session_recall.enabled:
         return _empty_payload(query=query, scope=scope)
 

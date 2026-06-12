@@ -1,4 +1,4 @@
-PYTHON ?= /Users/haha/hermes-agent/venv/bin/python3.11
+PYTHON ?= python3
 
 .PHONY: test
 

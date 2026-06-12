@@ -6,7 +6,7 @@ PLUGIN_HOME="${CODEX_SELF_EVOLUTION_HOME:-$HOME/.codex-self-evolution}"
 HOOKS_JSON="$HOME/.codex/hooks.json"
 INSTALL_SOURCE="${CSEP_INSTALL_SOURCE:-$REPO}"
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
-PLUGIN_SOURCE="$REPO/plugins/codex-self-evolution"
+PLUGIN_SOURCE="$REPO/src/codex_self_evolution/plugin_bundle"
 MARKER="codex-self-evolution-plugin managed"
 
 info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }

@@ -29,9 +29,9 @@ def evaluate_archive_guard(payload: dict[str, Any], *, home: str | Path | None =
     if thread_source == "memory_consolidation":
         return GuardDecision(True, "thread_source_memory_consolidation", thread_source)
 
-    session_id = _payload_text(payload, "session_id", "thread_id")
-    if session_id and child_thread_registry_path(session_id, home=home).is_file():
-        return GuardDecision(True, "child_thread_registry", session_id)
+    for thread_id in _payload_texts(payload, "thread_id", "session_id"):
+        if child_thread_registry_path(thread_id, home=home).is_file():
+            return GuardDecision(True, "child_thread_registry", thread_id)
 
     transcript_path = _payload_text(payload, "transcript_path", "codex_transcript_path")
     if transcript_path and _transcript_has_marker(Path(transcript_path)):
@@ -65,3 +65,16 @@ def _payload_text(payload: dict[str, Any], *keys: str) -> str:
         if value is not None:
             return str(value)
     return ""
+
+
+def _payload_texts(payload: dict[str, Any], *keys: str) -> list[str]:
+    """Read present payload fields as unique non-empty text values in priority order."""
+    values: list[str] = []
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        text = str(value)
+        if text and text not in values:
+            values.append(text)
+    return values

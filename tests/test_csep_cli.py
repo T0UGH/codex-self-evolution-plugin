@@ -136,6 +136,49 @@ def test_csep_dispatches_main_runtime_commands(tmp_path, monkeypatch, capsys):
     }
 
 
+def test_csep_dispatches_session_reflection_write_receipt(tmp_path, capsys):
+    """The short csep entrypoint exposes the schema-safe receipt writer."""
+    draft = tmp_path / "draft.json"
+    receipt = tmp_path / "receipt.json"
+    draft.write_text(
+        json.dumps(
+            {
+                "status": "skipped",
+                "memory_changes": [],
+                "skill_changes": [],
+                "skipped_candidates": [],
+                "validation_notes": [],
+                "errors": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert csep.main(
+        [
+            "session-reflection",
+            "write-receipt",
+            "--draft",
+            str(draft),
+            "--output",
+            str(receipt),
+            "--job-id",
+            "job-1",
+            "--parent-session-id",
+            "parent-1",
+            "--child-thread-id",
+            "child-1",
+            "--started-at",
+            "2026-06-12T00:00:00Z",
+            "--finished-at",
+            "2026-06-12T00:00:01Z",
+        ]
+    ) == 0
+
+    assert json.loads(capsys.readouterr().out)["status"] == "written"
+    assert json.loads(receipt.read_text(encoding="utf-8"))["job_id"] == "job-1"
+
+
 def test_csep_session_stop_from_stdin_spawns_csep_worker(monkeypatch, capsys):
     """The short hook command keeps background reflection on the short module too."""
     captured: dict[str, Any] = {}

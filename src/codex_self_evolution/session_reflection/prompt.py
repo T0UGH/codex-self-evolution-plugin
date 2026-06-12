@@ -20,6 +20,7 @@ def build_reflection_prompt(
 ) -> str:
     """Build the bounded instruction contract for the reflection child."""
     receipt_child_thread_id = child_thread_id or "<current child thread id>"
+    receipt_draft_path = Path(receipt_path).with_name("receipt.draft.json")
     scope = _review_scope(review_memory=review_memory, review_skills=review_skills)
     memory_instruction = (
         "Review memory: true\n"
@@ -46,6 +47,7 @@ def build_reflection_prompt(
         f"Parent session id: {parent_session_id}\n"
         f"Child thread id: {receipt_child_thread_id}\n"
         f"Repository cwd: {Path(cwd)}\n"
+        f"Draft receipt path: {receipt_draft_path}\n"
         f"Required receipt path: {Path(receipt_path)}\n\n"
         f"Review scope: {scope}\n"
         f"Trigger reasons: {', '.join(trigger_reasons or [])}\n"
@@ -68,27 +70,30 @@ def build_reflection_prompt(
         "into memory.\n\n"
         "Every active SKILL.md must include Skill Decision, When to Use, Inputs, Workflow, Verification, and Failure Handling.\n"
         "The frontmatter name must match the csep-reflect-* directory name.\n\n"
-        "Write receipt.json atomically: write the JSON to a temporary file in the same directory, then rename it "
-        "to the required receipt path.\n"
-        "Do not use shell variables, placeholders, command substitution, or quoted shell expressions in receipt.json. "
-        "The parent process will canonicalize job_id, parent_session_id, child_thread_id, started_at, and finished_at; "
-        "your main responsibility is an accurate status plus memory_changes, skill_changes, skipped_candidates, "
-        "validation_notes, and errors.\n"
-        "Write receipt.json with this exact top-level shape:\n"
+        "Do not hand-write the final receipt.json. First write a semantic draft JSON to the Draft receipt path, "
+        "then call the schema-safe writer command below to create the final Required receipt path.\n"
+        "The writer owns schema_version, job_id, parent_session_id, child_thread_id, started_at, finished_at, "
+        "canonical JSON formatting, and atomic final receipt writes. Your responsibility is an accurate draft status "
+        "plus memory_changes, skill_changes, skipped_candidates, validation_notes, and errors.\n"
+        "Write the draft JSON with this exact top-level shape:\n"
         "{\n"
-        '  "schema_version": 1,\n'
-        f'  "job_id": "{job_id}",\n'
-        f'  "parent_session_id": "{parent_session_id}",\n'
-        f'  "child_thread_id": "{receipt_child_thread_id}",\n'
         '  "status": "succeeded|partial|failed|skipped",\n'
         '  "memory_changes": [],\n'
         '  "skill_changes": [],\n'
         '  "skipped_candidates": [],\n'
         '  "validation_notes": [],\n'
-        '  "errors": [],\n'
-        '  "started_at": "<UTC ISO timestamp>",\n'
-        '  "finished_at": "<UTC ISO timestamp>"\n'
-        "}\n\n"
+        '  "errors": []\n'
+        "}\n"
+        "Then run exactly this command, replacing no values:\n"
+        "```bash\n"
+        "csep session-reflection write-receipt \\\n"
+        f"  --draft {receipt_draft_path} \\\n"
+        f"  --output {Path(receipt_path)} \\\n"
+        f"  --job-id {job_id} \\\n"
+        f"  --parent-session-id {parent_session_id} \\\n"
+        f"  --child-thread-id {receipt_child_thread_id}\n"
+        "```\n"
+        "If the writer fails, fix the draft and rerun the command; do not create a fallback receipt manually.\n\n"
         "After writing files and receipt, reply with a one-sentence summary only."
     )
 

@@ -376,7 +376,7 @@ def _check_tools(*, include_remote: bool = False) -> dict[str, Any]:
 
 def _check_csep_version_details(csep_probe: dict[str, Any], *, include_remote: bool) -> dict[str, Any]:
     source = _read_cwd_source_version(Path.cwd())
-    if include_remote and csep_probe.get("available"):
+    if include_remote:
         pypi = _fetch_pypi_latest_version()
     else:
         pypi = {"version": None, "error": None}

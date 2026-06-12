@@ -39,6 +39,7 @@ class FakeReflectionClient:
         empty_receipt_before_return: bool = False,
         invalid_receipt_text: str | None = None,
         memory_write_text: str | None = None,
+        writer_error_payload: dict[str, Any] | None = None,
     ) -> None:
         """Configure whether turn/start raises after fork registration."""
         self.fail_start = fail_start
@@ -50,6 +51,7 @@ class FakeReflectionClient:
         self.empty_receipt_before_return = empty_receipt_before_return
         self.invalid_receipt_text = invalid_receipt_text
         self.memory_write_text = memory_write_text
+        self.writer_error_payload = writer_error_payload
         self.fork_calls: list[dict[str, Any]] = []
         self.start_calls: list[dict[str, Any]] = []
 
@@ -72,6 +74,14 @@ class FakeReflectionClient:
             receipt_path = _receipt_path_from_prompt(prompt)
             receipt_path.parent.mkdir(parents=True, exist_ok=True)
             receipt_path.write_text(self.invalid_receipt_text, encoding="utf-8")
+            return "turn-1", {"turnId": "turn-1"}
+        if self.writer_error_payload is not None:
+            receipt_path = _receipt_path_from_prompt(prompt)
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.with_name("receipt.writer-error.json").write_text(
+                json.dumps(self.writer_error_payload),
+                encoding="utf-8",
+            )
             return "turn-1", {"turnId": "turn-1"}
         if self.empty_receipt_before_return:
             receipt_path = _receipt_path_from_prompt(prompt)
@@ -348,8 +358,10 @@ def test_run_reflection_job_forks_starts_registers_validates_and_cleans_lock(
     ]
     assert client.start_calls[0]["child_thread_id"] == "child-1"
     assert "Required receipt path: " in client.start_calls[0]["prompt"]
+    assert "Draft receipt path: " in client.start_calls[0]["prompt"]
     assert "Child thread id: child-1" in client.start_calls[0]["prompt"]
-    assert '"child_thread_id": "child-1"' in client.start_calls[0]["prompt"]
+    assert "csep session-reflection write-receipt" in client.start_calls[0]["prompt"]
+    assert "Do not hand-write the final receipt.json" in client.start_calls[0]["prompt"]
     assert "Review scope: memory and skills" in client.start_calls[0]["prompt"]
     assert "Review memory: true" in client.start_calls[0]["prompt"]
     assert "Review skills: true" in client.start_calls[0]["prompt"]
@@ -480,6 +492,39 @@ def test_run_reflection_job_canonicalizes_escaped_json_receipt(
     assert receipt["child_thread_id"] == "child-1"
     assert receipt["started_at"].endswith("Z")
     assert receipt["validation_notes"][0]["reason"] == "receipt_envelope_canonicalized"
+
+
+def test_run_reflection_job_reports_receipt_writer_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Runner records writer sidecar failures when no final receipt appears."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_config(home, "[session_reflection]\ntimeout_seconds = 0.01\n")
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setenv("CSEP_CODEX_SKILLS_DIR", str(tmp_path / "skills"))
+    job = create_job_from_payload(_payload(repo), home=home)
+
+    updated = run_reflection_job(
+        str(job["job_id"]),
+        home=home,
+        client=FakeReflectionClient(
+            writer_error_payload={
+                "status": "failed",
+                "reason": "draft_invalid",
+                "code": "invalid_field",
+                "field": "memory_changes",
+                "message": 'receipt draft invalid: field "memory_changes" must be a JSON array',
+            }
+        ),
+    )
+
+    assert updated["status"] == "failed"
+    assert updated["validation"]["reason"] == "draft_invalid"
+    assert updated["validation"]["field"] == "memory_changes"
+    assert session_reflection_status(home=home)["latest"]["validation"]["category"] == "draft_invalid"
 
 
 def test_run_reflection_job_resets_trigger_counters_after_success(
@@ -915,7 +960,7 @@ def test_session_reflection_status_reports_failure_details(
         "status": "failed",
         "reason": "missing_receipt",
         "error": "receipt missing",
-        "category": "child_receipt_contract",
+        "category": "writer_failed",
         "issue_counts": {},
     }
 
@@ -956,6 +1001,38 @@ def test_session_reflection_status_classifies_validation_failures(
             "low_value_memory_writes": 0,
         },
     }
+
+
+@pytest.mark.parametrize(
+    ("reason", "category"),
+    [
+        ("draft_invalid", "draft_invalid"),
+        ("writer_failed", "writer_failed"),
+        ("receipt_schema", "validation_failed"),
+    ],
+)
+def test_session_reflection_status_classifies_receipt_writer_stages(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    reason: str,
+    category: str,
+) -> None:
+    """Status distinguishes draft, writer, and final validation failures."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    job = create_job_from_payload(_payload(repo), home=home)
+    update_job_status(
+        str(job["job_id"]),
+        "failed",
+        home=home,
+        validation={"status": "failed", "reason": reason, "error": reason},
+    )
+
+    status = session_reflection_status(home=home)
+
+    assert status["latest"]["validation"]["category"] == category
 
 
 def test_session_reflection_status_includes_trigger_summary(

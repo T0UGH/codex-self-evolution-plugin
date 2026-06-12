@@ -131,11 +131,25 @@ plugin_hooks = true
 enabled = true
 ```
 
-插件 manifest 和 hooks 文件保持两份同步：
+插件 manifest、hooks 和 plugin skill 的唯一权威编辑入口是：
+
+```text
+src/codex_self_evolution/plugin_bundle/
+```
+
+这个目录会随 wheel 发布，也是本地安装脚本刷新 Codex plugin cache 时读取的来源。仓库里的以下路径只是开发镜像，供 marketplace 目录结构和根目录快捷查看使用，不应手改：
 
 ```text
 plugins/codex-self-evolution/.codex-plugin/
-src/codex_self_evolution/plugin_bundle/.codex-plugin/
+plugins/codex-self-evolution/skills/
+skills/csep-session-recall/
+```
+
+修改 manifest、hooks 或 `SKILL.md` 后，先改 `src/codex_self_evolution/plugin_bundle/`，再运行：
+
+```bash
+scripts/sync-plugin-bundle.py
+scripts/sync-plugin-bundle.py --check
 ```
 
 ## 边界

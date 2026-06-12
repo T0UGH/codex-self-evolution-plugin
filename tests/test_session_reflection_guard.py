@@ -76,6 +76,26 @@ def test_guard_skips_thread_id_child_registry_hit(tmp_path: Path) -> None:
     assert decision.reason == "child_thread_registry"
 
 
+def test_guard_prefers_child_thread_id_when_payload_also_has_parent_session_id(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    register_child_thread(
+        child_thread_id="child-thread-1",
+        parent_session_id="parent-1",
+        job_id="job-1",
+        home=tmp_path,
+    )
+
+    decision = evaluate_recursion_guard(
+        _payload(repo, session_id="parent-1", thread_id="child-thread-1"),
+        home=tmp_path,
+    )
+
+    assert decision.skip is True
+    assert decision.reason == "child_thread_registry"
+    assert decision.detail == "child-thread-1"
+
+
 def test_guard_skips_path_safe_child_registry_hit(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

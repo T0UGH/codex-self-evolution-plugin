@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -130,6 +131,31 @@ def test_package_plugin_bundle_matches_repo_plugin_bundle():
     ).read_text(encoding="utf-8") == (
         ROOT / "plugins" / "codex-self-evolution" / "skills" / "csep-session-recall" / "SKILL.md"
     ).read_text(encoding="utf-8")
+
+
+def test_plugin_bundle_mirrors_are_generated_from_canonical_source():
+    """The package plugin bundle is the only hand-edited source."""
+    script = ROOT / "scripts" / "sync-plugin-bundle.py"
+
+    proc = subprocess.run(
+        ["python3", str(script), "--check"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "src/codex_self_evolution/plugin_bundle" in proc.stdout
+
+
+def test_architecture_documents_plugin_bundle_canonical_source():
+    """Docs must name the editable source of truth for plugin artifacts."""
+    text = (ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
+
+    assert "src/codex_self_evolution/plugin_bundle/" in text
+    assert "唯一权威编辑入口" in text
+    assert "scripts/sync-plugin-bundle.py --check" in text
 
 
 def test_pyproject_includes_package_plugin_bundle_data():

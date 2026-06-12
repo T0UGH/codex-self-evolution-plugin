@@ -28,6 +28,11 @@ from .session_reflection.runner import (
     run_reflection_job,
     session_reflection_status,
 )
+from .session_reflection.receipt_writer import (
+    ReceiptDraftError,
+    write_receipt_from_draft,
+    write_receipt_writer_error,
+)
 
 
 def build_parser(prog: str = "codex-self-evolution") -> argparse.ArgumentParser:
@@ -66,6 +71,23 @@ def build_parser(prog: str = "codex-self-evolution") -> argparse.ArgumentParser:
     reflect_mode.add_argument("--job")
     reflect_mode.add_argument("--status", action="store_true")
     reflect_parser.add_argument("--home")
+
+    reflection_parser = subparsers.add_parser(
+        "session-reflection",
+        help="Session reflection helper commands.",
+    )
+    reflection_sub = reflection_parser.add_subparsers(dest="session_reflection_command", required=True)
+    receipt_writer = reflection_sub.add_parser(
+        "write-receipt",
+        help="Validate a semantic draft and write a canonical reflection receipt.",
+    )
+    receipt_writer.add_argument("--draft", required=True)
+    receipt_writer.add_argument("--output", required=True)
+    receipt_writer.add_argument("--job-id", required=True)
+    receipt_writer.add_argument("--parent-session-id", required=True)
+    receipt_writer.add_argument("--child-thread-id", required=True)
+    receipt_writer.add_argument("--started-at")
+    receipt_writer.add_argument("--finished-at")
 
     status_parser = subparsers.add_parser(
         "status",
@@ -352,6 +374,26 @@ def _handle_session_reflect(args: argparse.Namespace) -> dict[str, Any]:
     return queued
 
 
+def _handle_session_reflection(args: argparse.Namespace) -> dict[str, Any]:
+    """Dispatch helper commands for session reflection artifacts."""
+    if args.session_reflection_command == "write-receipt":
+        try:
+            return write_receipt_from_draft(
+                draft_path=args.draft,
+                output_path=args.output,
+                job_id=args.job_id,
+                parent_session_id=args.parent_session_id,
+                child_thread_id=args.child_thread_id,
+                started_at=args.started_at,
+                finished_at=args.finished_at,
+            )
+        except ReceiptDraftError as exc:
+            write_receipt_writer_error(args.output, exc)
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(2) from exc
+    raise ValueError(f"unknown session-reflection command: {args.session_reflection_command}")
+
+
 def main(argv: list[str] | None = None, *, prog: str = "codex-self-evolution") -> int:
     """Run retained runtime commands for either the long or short entrypoint."""
     parser = build_parser(prog=prog)
@@ -390,6 +432,8 @@ def main(argv: list[str] | None = None, *, prog: str = "codex-self-evolution") -
             parser.error("session-stop requires --from-stdin")
         elif args.command == "session-reflect":
             result = _handle_session_reflect(args)
+        elif args.command == "session-reflection":
+            result = _handle_session_reflection(args)
         elif args.command == "status":
             result = collect_status(home=args.home)
         elif args.command == "migrate-worktrees":

@@ -240,6 +240,22 @@ version = "1.2.3"
     assert csep_status["source_matches_pypi"] is False
 
 
+def test_tools_probe_fetches_pypi_even_when_csep_binary_is_missing(monkeypatch) -> None:
+    """Fresh machines still need the latest published version in status output."""
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda _: None)
+    monkeypatch.setattr(
+        diagnostics,
+        "_fetch_pypi_latest_version",
+        lambda: {"version": "9.9.9", "error": None},
+    )
+
+    result = _check_tools(include_remote=True)
+
+    assert result["csep"]["available"] is False
+    assert result["csep"]["installed_version"] is None
+    assert result["csep"]["pypi_latest_version"] == "9.9.9"
+
+
 def test_collect_status_runs_cleanly_with_no_home(monkeypatch, tmp_path: Path) -> None:
     """Fresh installs get a JSON-serializable status with only retained sections."""
     monkeypatch.setenv("HOME", str(tmp_path / "freshly-minted"))

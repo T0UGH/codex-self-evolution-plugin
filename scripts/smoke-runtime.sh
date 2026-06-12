@@ -85,7 +85,9 @@ fi
 
 log "checking status version matrix"
 "$CSEP_BIN" status > "$STATE_DIR/status.json"
-assert_json "$STATE_DIR/status.json" status
+if [ "${CSEP_SMOKE_SKIP_STATUS_VERSION_ASSERT:-0}" != "1" ]; then
+  assert_json "$STATE_DIR/status.json" status
+fi
 
 log "checking SessionStart hook output"
 printf '{"cwd":"%s","session_id":"runtime-smoke-start"}\n' "$ROOT" \
