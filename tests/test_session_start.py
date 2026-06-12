@@ -110,6 +110,42 @@ def test_session_start_increments_memory_usage_without_storing_content(tmp_path)
     assert "Sensitive detail should not enter usage." not in json.dumps(usage, ensure_ascii=False)
 
 
+def test_session_start_repairs_memory_usage_item_without_leaking_content(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    memory_dir = state / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "MEMORY.md").write_text("# MEMORY\n\nCurrent memory.\n", encoding="utf-8")
+    (memory_dir / "usage.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "items": {
+                    "MEMORY.md": {
+                        "kind": "memory",
+                        "injected_count": "bad",
+                        "last_injected_at": "2026-06-11T00:00:00Z",
+                        "citation_count": 3,
+                        "last_cited_at": "2026-06-11T01:00:00Z",
+                        "content": "SECRET MEMORY TEXT",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = session_start(cwd=repo, state_dir=state)
+
+    memory_usage = result["stable_background"]["memory_usage"]
+    assert memory_usage["status"] == "recorded"
+    assert memory_usage["item"]["injected_count"] == 1
+    assert "content" not in memory_usage["item"]
+    usage = json.loads((memory_dir / "usage.json").read_text(encoding="utf-8"))
+    assert "SECRET MEMORY TEXT" not in json.dumps(usage, ensure_ascii=False)
+
+
 def test_session_start_falls_back_when_memory_summary_is_directory(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -24,17 +24,13 @@ def record_memory_injection(
         usage["items"] = items
 
     item_key = _usage_item_key(memory_dir=memory_dir, source=source, source_path=source_path)
-    item = items.get(item_key)
-    if not isinstance(item, dict):
-        item = _empty_item(source)
-        items[item_key] = item
+    item = _canonical_item(source, items.get(item_key))
+    items[item_key] = item
 
     now = injected_at or utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z")
     item["kind"] = _kind_for_source(source)
-    item["injected_count"] = int(item.get("injected_count") or 0) + 1
+    item["injected_count"] = _safe_count(item.get("injected_count")) + 1
     item["last_injected_at"] = now
-    item.setdefault("citation_count", 0)
-    item.setdefault("last_cited_at", "")
     atomic_write_json(usage_path, usage)
     return {"status": "recorded", "path": str(usage_path), "item_key": item_key, "item": item}
 
@@ -61,6 +57,28 @@ def _empty_item(source: str) -> dict[str, Any]:
         "citation_count": 0,
         "last_cited_at": "",
     }
+
+
+def _canonical_item(source: str, raw: object) -> dict[str, Any]:
+    """Return an allowlisted usage item, dropping any stored content fields."""
+    if not isinstance(raw, dict):
+        return _empty_item(source)
+    last_injected_at = raw.get("last_injected_at") if isinstance(raw.get("last_injected_at"), str) else ""
+    last_cited_at = raw.get("last_cited_at") if isinstance(raw.get("last_cited_at"), str) else ""
+    return {
+        "kind": _kind_for_source(source),
+        "injected_count": _safe_count(raw.get("injected_count")),
+        "last_injected_at": last_injected_at,
+        "citation_count": _safe_count(raw.get("citation_count")),
+        "last_cited_at": last_cited_at,
+    }
+
+
+def _safe_count(value: object) -> int:
+    """Parse non-negative integer counters while rejecting bools and malformed values."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
 
 
 def _kind_for_source(source: str) -> str:
