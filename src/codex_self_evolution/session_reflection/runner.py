@@ -172,6 +172,7 @@ def run_reflection_job(
             review_skills=bool(job.get("review_skills", True)),
             trigger_reasons=list(job.get("trigger_reasons") or []),
             skill_generation_mode=str(job.get("skill_generation_mode") or "one_shot_active"),
+            context_labels=[str(label) for label in job.get("context_labels") or []],
         )
         atomic_write_text(paths.run_dir / "prompt.txt", prompt)
         turn_id, turn_response = app_client.start_reflection_turn(

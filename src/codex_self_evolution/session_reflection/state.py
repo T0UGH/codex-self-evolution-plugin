@@ -107,6 +107,7 @@ def create_job_from_payload(
         "status": "queued",
         "created_at": created_at,
         "updated_at": created_at,
+        "context_labels": _payload_context_labels(payload),
         "raw_payload": payload,
     }
     if decision_provided:
@@ -319,6 +320,18 @@ def _new_job_id(created_at: str) -> str:
     """Build a sortable job id with a random suffix to avoid collisions."""
     compact = created_at.replace("-", "").replace(":", "").replace("Z", "Z")
     return f"{compact}-{uuid.uuid4().hex[:8]}"
+
+
+def _payload_context_labels(payload: dict[str, Any]) -> list[str]:
+    """Return deterministic string context labels from a Stop payload."""
+    raw = payload.get("context_labels")
+    if not isinstance(raw, list):
+        return []
+    labels: list[str] = []
+    for value in raw:
+        if isinstance(value, str) and value and value not in labels:
+            labels.append(value)
+    return labels
 
 
 def _payload_text(payload: dict[str, Any], *keys: str, default: str = "") -> str:
