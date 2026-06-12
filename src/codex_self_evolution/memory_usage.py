@@ -8,6 +8,7 @@ from .storage import atomic_write_json, load_json, utc_now
 
 USAGE_SCHEMA_VERSION = 1
 UTC_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+ALLOWED_ITEM_KEYS = frozenset({"MEMORY.md", "memory_summary.md"})
 
 
 def record_memory_injection(
@@ -54,7 +55,7 @@ def _canonical_usage(raw: dict[str, Any]) -> dict[str, Any]:
     items: dict[str, Any] = {}
     if isinstance(raw_items, dict):
         for item_key, raw_item in raw_items.items():
-            if _is_safe_item_key(item_key):
+            if _is_allowed_item_key(item_key):
                 items[item_key] = _canonical_item(item_key, raw_item)
     return {"schema_version": USAGE_SCHEMA_VERSION, "items": items}
 
@@ -97,16 +98,9 @@ def _safe_timestamp(value: object) -> str:
     return value
 
 
-def _is_safe_item_key(value: object) -> bool:
-    """Return whether an existing usage item key is safe low-sensitive metadata."""
-    if not isinstance(value, str) or not value:
-        return False
-    if any(ord(char) < 32 or ord(char) == 127 for char in value):
-        return False
-    path = Path(value)
-    if path.is_absolute() or ".." in path.parts:
-        return False
-    return True
+def _is_allowed_item_key(value: object) -> bool:
+    """Return whether an existing usage key is a stable-memory source."""
+    return isinstance(value, str) and value in ALLOWED_ITEM_KEYS
 
 
 def _kind_for_source(source: str) -> str:
@@ -115,8 +109,13 @@ def _kind_for_source(source: str) -> str:
 
 
 def _usage_item_key(*, memory_dir: Path, source: str, source_path: Path) -> str:
-    """Return the usage key relative to the memory directory when possible."""
+    """Return a conservative usage key for active stable-memory sources."""
     try:
-        return source_path.relative_to(memory_dir).as_posix()
+        item_key = source_path.relative_to(memory_dir).as_posix()
     except ValueError:
+        item_key = source
+    if item_key in ALLOWED_ITEM_KEYS:
+        return item_key
+    if source in ALLOWED_ITEM_KEYS:
         return source
+    return "MEMORY.md"
