@@ -217,6 +217,44 @@ def test_enqueue_reflection_from_payload_queues_when_trigger_hits(
     assert job["context_labels"] == ["external_web", "user_instruction"]
 
 
+def test_enqueue_reflection_derives_context_labels_from_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Queued reflection jobs get labels even when raw Stop payload has none."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _payload(repo)
+    Path(str(payload["transcript_path"])).write_text(
+        "\n".join(
+            [
+                json.dumps({"role": "developer", "content": "# AGENTS.md instructions"}),
+                json.dumps({"role": "user", "content": "以后把这个 workflow 沉淀成 skill"}),
+                json.dumps({"role": "assistant", "content": f"reading {repo / 'src/example.py'}"}),
+                json.dumps({"role": "tool", "name": "web.run", "content": "external article body"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(home))
+    monkeypatch.setattr(
+        "codex_self_evolution.session_reflection.runner.app_server_proxy_status",
+        lambda: {"available": True, "reason": None, "socket_path": str(tmp_path / "app-server.sock")},
+    )
+
+    result = enqueue_reflection_from_payload(payload, home=home)
+
+    assert result["status"] == "queued"
+    assert result["job"]["context_labels"] == [
+        "agent_injected_context",
+        "external_web",
+        "local_repo_code",
+        "user_instruction",
+    ]
+
+
 def test_enqueue_reflection_from_payload_defers_when_active_job_exists(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

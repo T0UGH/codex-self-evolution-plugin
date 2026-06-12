@@ -330,8 +330,27 @@ def _new_job_id(created_at: str) -> str:
 
 
 def _payload_context_labels(payload: dict[str, Any]) -> list[str]:
-    """Return deterministic string context labels from a Stop payload."""
-    return _normalize_context_labels(payload.get("context_labels"))
+    """Return context labels from payload or derive them from the parent transcript."""
+    raw = payload.get("context_labels")
+    labels = _normalize_context_labels(raw if isinstance(raw, list) else [])
+    if labels:
+        return labels
+
+    transcript_path = _payload_text(payload, "transcript_path", "codex_transcript_path")
+    if not transcript_path:
+        return []
+    try:
+        from ..session_recall.context_labels import derive_context_labels
+        from ..session_recall.parser import parse_codex_jsonl
+
+        parsed = parse_codex_jsonl(
+            transcript_path,
+            session_id=_payload_text(payload, "session_id", "thread_id"),
+            cwd=_payload_text(payload, "cwd"),
+        )
+    except Exception:  # noqa: BLE001 - labels are best-effort metadata.
+        return []
+    return _normalize_context_labels(derive_context_labels(parsed))
 
 
 def _normalize_context_labels(raw: object) -> list[str]:
