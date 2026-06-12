@@ -36,6 +36,37 @@ def test_csep_session_archive_and_recall(tmp_path, monkeypatch, capsys):
     assert "hermes session recall smoke" in out
 
 
+def test_csep_session_archive_records_context_labels(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "session_meta", "payload": {"id": "s1", "cwd": str(repo)}}),
+                json.dumps({"role": "developer", "content": "# AGENTS.md instructions"}),
+                json.dumps({"role": "user", "content": "以后这里优先跑 uv run pytest -q"}),
+                json.dumps({"role": "assistant", "content": "reading /tmp/example.py"}),
+                json.dumps({"role": "tool", "name": "web.run", "content": "external article body"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert csep.main(["session-archive", "--transcript-path", str(transcript), "--cwd", str(repo), "--session-id", "s1"]) == 0
+    out = json.loads(capsys.readouterr().out)
+
+    assert out["status"] == "archived"
+    assert out["context_labels"] == [
+        "agent_injected_context",
+        "external_web",
+        "local_repo_code",
+        "user_instruction",
+    ]
+
+
 def test_csep_session_archive_skipped_reflection_child_is_success(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CODEX_SELF_EVOLUTION_HOME", str(tmp_path / "home"))
     payload = tmp_path / "payload.json"

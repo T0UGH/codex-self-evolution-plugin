@@ -1,3 +1,5 @@
+import json
+
 from codex_self_evolution.session_recall.models import ParsedMessage, ParsedSession
 
 
@@ -57,6 +59,23 @@ def test_store_archives_and_searches_messages(tmp_path):
     assert hits[0]["session_id"] == "s1"
     assert hits[0]["hit_count"] >= 1
     assert "messages" in hits[0]
+
+
+def test_store_preserves_context_labels_in_session_metadata(tmp_path):
+    from codex_self_evolution.session_recall.store import SessionRecallStore
+
+    store = SessionRecallStore(tmp_path / "state.db")
+    parsed = _parsed_session(tmp_path)
+    parsed.metadata["context_labels"] = ["agent_injected_context", "local_repo_code"]
+
+    store.archive(parsed)
+
+    row = store._conn.execute(
+        "SELECT metadata_json FROM sessions WHERE session_id = ?",
+        (parsed.session_id,),
+    ).fetchone()
+    metadata = json.loads(row["metadata_json"])
+    assert metadata["context_labels"] == ["agent_injected_context", "local_repo_code"]
 
 
 def test_store_filters_repo_unless_global(tmp_path):

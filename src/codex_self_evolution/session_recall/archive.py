@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 from ..config import get_home_dir
 from ..session_reflection.guard import evaluate_archive_guard
+from .context_labels import derive_context_labels
 from .parser import parse_claude_jsonl, parse_codex_jsonl
 from .store import SessionRecallStore
 
@@ -32,7 +33,10 @@ def archive_transcript(
     store = SessionRecallStore(db_path or default_db_path())
     try:
         parsed = parse_codex_jsonl(transcript_path, session_id=session_id, cwd=cwd)
+        labels = derive_context_labels(parsed)
+        parsed.metadata["context_labels"] = labels
         result = store.archive(parsed)
+        result["context_labels"] = labels
         return result
     except Exception as exc:  # noqa: BLE001 - archive is best-effort at hook boundary.
         store.record_error(source_path=str(transcript_path), session_id=session_id, cwd=cwd, error=f"{type(exc).__name__}: {exc}")
@@ -57,7 +61,10 @@ def archive_claude_transcript(
     store = SessionRecallStore(db_path or default_db_path())
     try:
         parsed = parse_claude_jsonl(transcript_path, session_id=session_id, cwd=cwd)
+        labels = derive_context_labels(parsed)
+        parsed.metadata["context_labels"] = labels
         result = store.archive(parsed)
+        result["context_labels"] = labels
         return result
     except Exception as exc:  # noqa: BLE001 - archive is best-effort at ingest boundary.
         store.record_error(source_path=str(transcript_path), session_id=session_id, cwd=cwd, error=f"{type(exc).__name__}: {exc}")
