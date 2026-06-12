@@ -14,6 +14,13 @@ from .paths import build_session_reflection_paths
 
 ACTIVE_PARENT_STATUSES = {"queued", "running"}
 SESSION_REFLECTION_MODEL = "gpt-5.3-codex-spark"
+CONTEXT_LABEL_ALLOWLIST = (
+    "agent_injected_context",
+    "external_web",
+    "local_repo_code",
+    "third_party_document",
+    "user_instruction",
+)
 
 
 def utc_timestamp() -> str:
@@ -324,14 +331,15 @@ def _new_job_id(created_at: str) -> str:
 
 def _payload_context_labels(payload: dict[str, Any]) -> list[str]:
     """Return deterministic string context labels from a Stop payload."""
-    raw = payload.get("context_labels")
+    return _normalize_context_labels(payload.get("context_labels"))
+
+
+def _normalize_context_labels(raw: object) -> list[str]:
+    """Return known context labels deduped in allowlist order."""
     if not isinstance(raw, list):
         return []
-    labels: list[str] = []
-    for value in raw:
-        if isinstance(value, str) and value and value not in labels:
-            labels.append(value)
-    return labels
+    raw_labels = {value for value in raw if isinstance(value, str)}
+    return [label for label in CONTEXT_LABEL_ALLOWLIST if label in raw_labels]
 
 
 def _payload_text(payload: dict[str, Any], *keys: str, default: str = "") -> str:
