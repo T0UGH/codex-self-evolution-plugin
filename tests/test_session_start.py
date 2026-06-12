@@ -26,6 +26,12 @@ def test_session_start_injects_memory_and_short_recall_pointer(tmp_path):
     assert "# Stable Background" in result["stable_background"]["combined_prefix"]
     assert "## Recall Contract" not in result["stable_background"]["combined_prefix"]
     assert "# Session Recall Skill" not in result["stable_background"]["combined_prefix"]
+    assert result["stable_background"]["memory_source"] == "MEMORY.md"
+    assert result["stable_background"]["memory_fallback_used"] is True
+    assert result["stable_background"]["memory_fallback_reason"] == "summary_missing"
+    assert result["stable_background"]["memory_source_path"] == str(state / "memory" / "MEMORY.md")
+    assert result["stable_background"]["memory_summary_path"] == str(state / "memory" / "memory_summary.md")
+    assert result["stable_background"]["memory_summary_meta_path"] == str(state / "memory" / "memory_summary.meta.json")
     assert (state / "memory").exists()
     assert (state / "memory" / "refs").exists()
     json.dumps(result)

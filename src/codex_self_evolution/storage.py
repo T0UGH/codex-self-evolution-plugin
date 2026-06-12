@@ -4,10 +4,25 @@ import hashlib
 import json
 import os
 import tempfile
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import Paths
+
+
+@dataclass(frozen=True)
+class StableMemorySelection:
+    """Selected stable memory content plus source and fallback metadata."""
+
+    content: str
+    source: str
+    source_path: Path
+    memory_path: Path
+    summary_path: Path
+    summary_meta_path: Path
+    fallback_used: bool
+    fallback_reason: str
 
 
 def ensure_runtime_dirs(paths: Paths) -> None:
@@ -66,9 +81,22 @@ def read_text_if_exists(path: Path) -> str:
     return ""
 
 
-def load_stable_memory(paths: Paths) -> str:
-    """Load the single default-injected project MEMORY.md file."""
-    return read_text_if_exists(paths.memory_dir / "MEMORY.md")
+def load_stable_memory(paths: Paths) -> StableMemorySelection:
+    """Load the default-injected stable memory with safe summary fallback."""
+    memory_path = paths.memory_dir / "MEMORY.md"
+    summary_path = paths.memory_dir / "memory_summary.md"
+    summary_meta_path = paths.memory_dir / "memory_summary.meta.json"
+    memory_text = read_text_if_exists(memory_path)
+    return StableMemorySelection(
+        content=memory_text,
+        source="MEMORY.md",
+        source_path=memory_path,
+        memory_path=memory_path,
+        summary_path=summary_path,
+        summary_meta_path=summary_meta_path,
+        fallback_used=True,
+        fallback_reason="summary_missing",
+    )
 
 
 def _pid_alive(pid: object) -> bool:

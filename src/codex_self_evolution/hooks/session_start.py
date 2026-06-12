@@ -11,12 +11,14 @@ def session_start(cwd: str | Path | None = None, state_dir: str | Path | None = 
     paths = build_paths(repo_root=cwd, state_dir=state_dir)
     ensure_runtime_dirs(paths)
     policy = (PACKAGE_ROOT / "session_recall" / "policy.md").read_text(encoding="utf-8")
-    memory_text = load_stable_memory(paths)
+    memory_selection = load_stable_memory(paths)
+    memory_text = memory_selection.content
+    memory_heading = "## memory_summary.md" if memory_selection.source == "memory_summary.md" else "## MEMORY.md"
     combined_prefix = "\n\n".join(
         section
         for section in [
             "# Stable Background",
-            "## MEMORY.md\n" + (memory_text or "_No entries yet._\n"),
+            memory_heading + "\n" + (memory_text or "_No entries yet._\n"),
         ]
         if section
     )
@@ -28,6 +30,12 @@ def session_start(cwd: str | Path | None = None, state_dir: str | Path | None = 
         "stable_background": {
             "current_memory_md": memory_text,
             "memory_path": str(paths.memory_dir / "MEMORY.md"),
+            "memory_source": memory_selection.source,
+            "memory_source_path": str(memory_selection.source_path),
+            "memory_summary_path": str(memory_selection.summary_path),
+            "memory_summary_meta_path": str(memory_selection.summary_meta_path),
+            "memory_fallback_used": memory_selection.fallback_used,
+            "memory_fallback_reason": memory_selection.fallback_reason,
             "memory_refs_dir": str(paths.memory_refs_dir),
             "legacy_user_md_ignored": (paths.memory_dir / "USER.md").exists(),
             "combined_prefix": combined_prefix,
