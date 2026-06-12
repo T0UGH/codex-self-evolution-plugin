@@ -74,6 +74,11 @@ def compute_stable_id(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8")).hexdigest()[:16]
 
 
+def sha256_text(text: str) -> str:
+    """Return the SHA-256 hex digest for UTF-8 text."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def read_text_if_exists(path: Path) -> str:
     """Read UTF-8 text from ``path`` when it exists, otherwise return empty."""
     if path.exists():
@@ -87,6 +92,24 @@ def load_stable_memory(paths: Paths) -> StableMemorySelection:
     summary_path = paths.memory_dir / "memory_summary.md"
     summary_meta_path = paths.memory_dir / "memory_summary.meta.json"
     memory_text = read_text_if_exists(memory_path)
+    summary_text = read_text_if_exists(summary_path)
+
+    fallback_reason = _summary_fallback_reason(
+        memory_text=memory_text,
+        summary_text=summary_text,
+        summary_meta_path=summary_meta_path,
+    )
+    if not fallback_reason:
+        return StableMemorySelection(
+            content=summary_text,
+            source="memory_summary.md",
+            source_path=summary_path,
+            memory_path=memory_path,
+            summary_path=summary_path,
+            summary_meta_path=summary_meta_path,
+            fallback_used=False,
+            fallback_reason="",
+        )
     return StableMemorySelection(
         content=memory_text,
         source="MEMORY.md",
@@ -95,8 +118,41 @@ def load_stable_memory(paths: Paths) -> StableMemorySelection:
         summary_path=summary_path,
         summary_meta_path=summary_meta_path,
         fallback_used=True,
-        fallback_reason="summary_missing",
+        fallback_reason=fallback_reason,
     )
+
+
+def _load_summary_meta(path: Path) -> dict[str, object] | None:
+    """Load memory summary metadata when it is a JSON object."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _summary_fallback_reason(
+    *,
+    memory_text: str,
+    summary_text: str,
+    summary_meta_path: Path,
+) -> str:
+    """Return an empty string only when memory_summary.md is safe to inject."""
+    summary_path = summary_meta_path.with_name("memory_summary.md")
+    if not summary_text.strip():
+        return "summary_missing" if not summary_path.exists() else "summary_empty"
+    if not summary_meta_path.exists():
+        return "summary_meta_missing"
+    meta = _load_summary_meta(summary_meta_path)
+    if meta is None:
+        return "summary_meta_invalid"
+    if meta.get("schema_version") != 1 or meta.get("source") != "MEMORY.md":
+        return "summary_meta_invalid"
+    if meta.get("source_memory_sha256") != sha256_text(memory_text):
+        return "source_hash_mismatch"
+    if meta.get("summary_sha256") != sha256_text(summary_text):
+        return "summary_hash_mismatch"
+    return ""
 
 
 def _pid_alive(pid: object) -> bool:

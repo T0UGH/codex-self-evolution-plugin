@@ -1,6 +1,11 @@
+import hashlib
 import json
 
 from codex_self_evolution.hooks.session_start import session_start
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def test_session_start_injects_memory_and_short_recall_pointer(tmp_path):
@@ -35,3 +40,38 @@ def test_session_start_injects_memory_and_short_recall_pointer(tmp_path):
     assert (state / "memory").exists()
     assert (state / "memory" / "refs").exists()
     json.dumps(result)
+
+
+def test_session_start_prefers_valid_memory_summary(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    memory_dir = state / "memory"
+    memory_dir.mkdir(parents=True)
+    memory_text = "# MEMORY\n\nFull detail should stay cold.\n"
+    summary_text = "# Memory Summary\n\nHot summary only.\n"
+    (memory_dir / "MEMORY.md").write_text(memory_text, encoding="utf-8")
+    (memory_dir / "memory_summary.md").write_text(summary_text, encoding="utf-8")
+    (memory_dir / "memory_summary.meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "MEMORY.md",
+                "source_memory_sha256": _sha256_text(memory_text),
+                "summary_sha256": _sha256_text(summary_text),
+                "generated_at": "2026-06-12T00:00:00Z",
+                "generator": "session_reflection_consolidation",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = session_start(cwd=repo, state_dir=state)
+
+    assert result["stable_background"]["memory_source"] == "memory_summary.md"
+    assert result["stable_background"]["memory_fallback_used"] is False
+    assert result["stable_background"]["memory_fallback_reason"] == ""
+    assert result["stable_background"]["current_memory_md"] == summary_text
+    assert "## memory_summary.md" in result["stable_background"]["combined_prefix"]
+    assert "Hot summary only." in result["stable_background"]["combined_prefix"]
+    assert "Full detail should stay cold." not in result["stable_background"]["combined_prefix"]
