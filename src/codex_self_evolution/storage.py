@@ -86,13 +86,23 @@ def read_text_if_exists(path: Path) -> str:
     return ""
 
 
+def _read_optional_summary_text(path: Path) -> str:
+    """Read optional summary text, treating malformed summary paths as empty."""
+    try:
+        if not path.is_file():
+            return ""
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
 def load_stable_memory(paths: Paths) -> StableMemorySelection:
     """Load the default-injected stable memory with safe summary fallback."""
     memory_path = paths.memory_dir / "MEMORY.md"
     summary_path = paths.memory_dir / "memory_summary.md"
     summary_meta_path = paths.memory_dir / "memory_summary.meta.json"
     memory_text = read_text_if_exists(memory_path)
-    summary_text = read_text_if_exists(summary_path)
+    summary_text = _read_optional_summary_text(summary_path)
 
     fallback_reason = _summary_fallback_reason(
         memory_text=memory_text,

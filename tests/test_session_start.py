@@ -75,3 +75,22 @@ def test_session_start_prefers_valid_memory_summary(tmp_path):
     assert "## memory_summary.md" in result["stable_background"]["combined_prefix"]
     assert "Hot summary only." in result["stable_background"]["combined_prefix"]
     assert "Full detail should stay cold." not in result["stable_background"]["combined_prefix"]
+
+
+def test_session_start_falls_back_when_memory_summary_is_directory(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    memory_dir = state / "memory"
+    memory_dir.mkdir(parents=True)
+    memory_text = "# MEMORY\n\nFull detail remains available.\n"
+    (memory_dir / "MEMORY.md").write_text(memory_text, encoding="utf-8")
+    (memory_dir / "memory_summary.md").mkdir()
+
+    result = session_start(cwd=repo, state_dir=state)
+
+    assert result["stable_background"]["memory_source"] == "MEMORY.md"
+    assert result["stable_background"]["memory_fallback_used"] is True
+    assert result["stable_background"]["memory_fallback_reason"] == "summary_empty"
+    assert result["stable_background"]["current_memory_md"] == memory_text
+    assert "Full detail remains available." in result["stable_background"]["combined_prefix"]
