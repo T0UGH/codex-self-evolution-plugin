@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import PACKAGE_ROOT, build_paths
+from ..memory_usage import record_memory_injection
 from ..storage import ensure_runtime_dirs, load_stable_memory, repo_fingerprint
 
 
@@ -14,6 +15,7 @@ def session_start(cwd: str | Path | None = None, state_dir: str | Path | None = 
     memory_selection = load_stable_memory(paths)
     memory_text = memory_selection.content
     memory_heading = "## memory_summary.md" if memory_selection.source == "memory_summary.md" else "## MEMORY.md"
+    memory_usage = _safe_record_memory_usage(paths, memory_selection)
     combined_prefix = "\n\n".join(
         section
         for section in [
@@ -34,6 +36,8 @@ def session_start(cwd: str | Path | None = None, state_dir: str | Path | None = 
             "memory_source_path": str(memory_selection.source_path),
             "memory_summary_path": str(memory_selection.summary_path),
             "memory_summary_meta_path": str(memory_selection.summary_meta_path),
+            "memory_usage_path": str(paths.memory_dir / "usage.json"),
+            "memory_usage": memory_usage,
             "memory_fallback_used": memory_selection.fallback_used,
             "memory_fallback_reason": memory_selection.fallback_reason,
             "memory_refs_dir": str(paths.memory_refs_dir),
@@ -99,3 +103,15 @@ def format_session_start_for_codex(session_result: dict[str, Any]) -> dict[str, 
             "additionalContext": additional_context,
         }
     }
+
+
+def _safe_record_memory_usage(paths: Any, memory_selection: Any) -> dict[str, Any]:
+    """Record stable-memory injection without making SessionStart fragile."""
+    try:
+        return record_memory_injection(
+            memory_dir=paths.memory_dir,
+            source=memory_selection.source,
+            source_path=memory_selection.source_path,
+        )
+    except Exception as exc:  # noqa: BLE001 - SessionStart must never fail on telemetry.
+        return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}

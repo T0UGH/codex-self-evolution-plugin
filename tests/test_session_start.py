@@ -37,6 +37,16 @@ def test_session_start_injects_memory_and_short_recall_pointer(tmp_path):
     assert result["stable_background"]["memory_source_path"] == str(state / "memory" / "MEMORY.md")
     assert result["stable_background"]["memory_summary_path"] == str(state / "memory" / "memory_summary.md")
     assert result["stable_background"]["memory_summary_meta_path"] == str(state / "memory" / "memory_summary.meta.json")
+    usage_path = state / "memory" / "usage.json"
+    assert result["stable_background"]["memory_usage_path"] == str(usage_path)
+    assert result["stable_background"]["memory_usage"]["status"] == "recorded"
+    usage = json.loads(usage_path.read_text(encoding="utf-8"))
+    assert usage["schema_version"] == 1
+    assert usage["items"]["MEMORY.md"]["kind"] == "memory"
+    assert usage["items"]["MEMORY.md"]["injected_count"] == 1
+    assert usage["items"]["MEMORY.md"]["citation_count"] == 0
+    assert usage["items"]["MEMORY.md"]["last_cited_at"] == ""
+    assert "Run focused tests first." not in json.dumps(usage, ensure_ascii=False)
     assert (state / "memory").exists()
     assert (state / "memory" / "refs").exists()
     json.dumps(result)
@@ -75,6 +85,29 @@ def test_session_start_prefers_valid_memory_summary(tmp_path):
     assert "## memory_summary.md" in result["stable_background"]["combined_prefix"]
     assert "Hot summary only." in result["stable_background"]["combined_prefix"]
     assert "Full detail should stay cold." not in result["stable_background"]["combined_prefix"]
+    usage = json.loads((memory_dir / "usage.json").read_text(encoding="utf-8"))
+    assert usage["items"]["memory_summary.md"]["kind"] == "memory_summary"
+    assert usage["items"]["memory_summary.md"]["injected_count"] == 1
+    assert "Hot summary only." not in json.dumps(usage, ensure_ascii=False)
+    assert "Full detail should stay cold." not in json.dumps(usage, ensure_ascii=False)
+
+
+def test_session_start_increments_memory_usage_without_storing_content(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    memory_dir = state / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "MEMORY.md").write_text("# MEMORY\n\nSensitive detail should not enter usage.\n", encoding="utf-8")
+
+    session_start(cwd=repo, state_dir=state)
+    session_start(cwd=repo, state_dir=state)
+
+    usage = json.loads((memory_dir / "usage.json").read_text(encoding="utf-8"))
+    item = usage["items"]["MEMORY.md"]
+    assert item["injected_count"] == 2
+    assert item["last_injected_at"]
+    assert "Sensitive detail should not enter usage." not in json.dumps(usage, ensure_ascii=False)
 
 
 def test_session_start_falls_back_when_memory_summary_is_directory(tmp_path):
