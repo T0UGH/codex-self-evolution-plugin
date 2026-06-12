@@ -159,18 +159,25 @@ def test_session_start_canonicalizes_entire_memory_usage_file(tmp_path):
                 "schema_version": 1,
                 "transcript": "SECRET TOP LEVEL",
                 "items": {
+                    "SECRET ITEM KEY\nwith newline": {
+                        "kind": "memory",
+                        "injected_count": 7,
+                        "last_injected_at": "2026-06-09T00:00:00Z",
+                        "citation_count": 1,
+                        "last_cited_at": "2026-06-09T01:00:00Z",
+                    },
                     "MEMORY.md": {
                         "kind": "memory",
                         "injected_count": "bad",
                         "last_injected_at": "2026-06-11T00:00:00Z",
                         "citation_count": 3,
-                        "last_cited_at": "2026-06-11T01:00:00Z",
+                        "last_cited_at": "SECRET ACTIVE TIMESTAMP",
                         "content": "SECRET MEMORY TEXT",
                     },
                     "refs/detail.md": {
                         "kind": "memory",
                         "injected_count": 2,
-                        "last_injected_at": "2026-06-10T00:00:00Z",
+                        "last_injected_at": "SECRET REF TIMESTAMP",
                         "citation_count": 1,
                         "last_cited_at": "2026-06-10T01:00:00Z",
                         "content": "SECRET REF CONTENT",
@@ -185,12 +192,21 @@ def test_session_start_canonicalizes_entire_memory_usage_file(tmp_path):
 
     memory_usage_text = json.dumps(result["stable_background"]["memory_usage"], ensure_ascii=False)
     assert "SECRET TOP LEVEL" not in memory_usage_text
+    assert "SECRET ITEM KEY" not in memory_usage_text
+    assert "SECRET ACTIVE TIMESTAMP" not in memory_usage_text
+    assert "SECRET REF TIMESTAMP" not in memory_usage_text
     assert "SECRET REF CONTENT" not in memory_usage_text
     assert result["stable_background"]["memory_usage"]["item"]["injected_count"] == 1
     usage = json.loads((memory_dir / "usage.json").read_text(encoding="utf-8"))
     assert set(usage) == {"schema_version", "items"}
+    assert set(usage["items"]) == {"MEMORY.md", "refs/detail.md"}
     assert usage["items"]["MEMORY.md"]["injected_count"] == 1
+    assert usage["items"]["MEMORY.md"]["last_cited_at"] == ""
+    assert usage["items"]["refs/detail.md"]["last_injected_at"] == ""
     assert "SECRET TOP LEVEL" not in json.dumps(usage, ensure_ascii=False)
+    assert "SECRET ITEM KEY" not in json.dumps(usage, ensure_ascii=False)
+    assert "SECRET ACTIVE TIMESTAMP" not in json.dumps(usage, ensure_ascii=False)
+    assert "SECRET REF TIMESTAMP" not in json.dumps(usage, ensure_ascii=False)
     assert "SECRET REF CONTENT" not in json.dumps(usage, ensure_ascii=False)
 
 

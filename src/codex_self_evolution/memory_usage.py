@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 from .storage import atomic_write_json, load_json, utc_now
 
 USAGE_SCHEMA_VERSION = 1
+UTC_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 def record_memory_injection(
@@ -52,7 +54,7 @@ def _canonical_usage(raw: dict[str, Any]) -> dict[str, Any]:
     items: dict[str, Any] = {}
     if isinstance(raw_items, dict):
         for item_key, raw_item in raw_items.items():
-            if isinstance(item_key, str):
+            if _is_safe_item_key(item_key):
                 items[item_key] = _canonical_item(item_key, raw_item)
     return {"schema_version": USAGE_SCHEMA_VERSION, "items": items}
 
@@ -72,14 +74,12 @@ def _canonical_item(source: str, raw: object) -> dict[str, Any]:
     """Return an allowlisted usage item, dropping any stored content fields."""
     if not isinstance(raw, dict):
         return _empty_item(source)
-    last_injected_at = raw.get("last_injected_at") if isinstance(raw.get("last_injected_at"), str) else ""
-    last_cited_at = raw.get("last_cited_at") if isinstance(raw.get("last_cited_at"), str) else ""
     return {
         "kind": _kind_for_source(source),
         "injected_count": _safe_count(raw.get("injected_count")),
-        "last_injected_at": last_injected_at,
+        "last_injected_at": _safe_timestamp(raw.get("last_injected_at")),
         "citation_count": _safe_count(raw.get("citation_count")),
-        "last_cited_at": last_cited_at,
+        "last_cited_at": _safe_timestamp(raw.get("last_cited_at")),
     }
 
 
@@ -88,6 +88,25 @@ def _safe_count(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return 0
     return value
+
+
+def _safe_timestamp(value: object) -> str:
+    """Return only canonical UTC second timestamps."""
+    if not isinstance(value, str) or UTC_TIMESTAMP_RE.fullmatch(value) is None:
+        return ""
+    return value
+
+
+def _is_safe_item_key(value: object) -> bool:
+    """Return whether an existing usage item key is safe low-sensitive metadata."""
+    if not isinstance(value, str) or not value:
+        return False
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return False
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts:
+        return False
+    return True
 
 
 def _kind_for_source(source: str) -> str:
