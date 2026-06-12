@@ -36,16 +36,25 @@ def record_memory_injection(
 
 
 def _load_usage(usage_path: Path) -> dict[str, Any]:
-    """Load usage state, resetting malformed or missing files."""
+    """Load usage state as a low-sensitive canonical document."""
     try:
         usage = load_json(usage_path)
     except (OSError, ValueError):
         return {"schema_version": USAGE_SCHEMA_VERSION, "items": {}}
     if not isinstance(usage, dict) or usage.get("schema_version") != USAGE_SCHEMA_VERSION:
         return {"schema_version": USAGE_SCHEMA_VERSION, "items": {}}
-    if not isinstance(usage.get("items"), dict):
-        usage["items"] = {}
-    return usage
+    return _canonical_usage(usage)
+
+
+def _canonical_usage(raw: dict[str, Any]) -> dict[str, Any]:
+    """Return a usage document with only schema and canonical item metadata."""
+    raw_items = raw.get("items")
+    items: dict[str, Any] = {}
+    if isinstance(raw_items, dict):
+        for item_key, raw_item in raw_items.items():
+            if isinstance(item_key, str):
+                items[item_key] = _canonical_item(item_key, raw_item)
+    return {"schema_version": USAGE_SCHEMA_VERSION, "items": items}
 
 
 def _empty_item(source: str) -> dict[str, Any]:
