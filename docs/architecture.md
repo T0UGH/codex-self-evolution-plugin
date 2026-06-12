@@ -10,7 +10,7 @@ CSEP 只做一件事：让本机 Codex session 的经验能在后续 session 中
 
 | 线 | 写入 | 使用 |
 | --- | --- | --- |
-| Stable Memory | session reflection 写 `MEMORY.md` / `memory/refs/` | `SessionStart` 注入 `MEMORY.md` |
+| Stable Memory | session reflection 写 `MEMORY.md` / `memory/refs/`，后续 consolidation 可生成 `memory_summary.md` | `SessionStart` 优先注入已验证的 `memory_summary.md`，否则回退 `MEMORY.md` |
 | Reflection Skills | session reflection 写 `~/.codex/skills/csep-reflect-*` | Codex 原生 skills loader 加载 |
 | Session Recall | `Stop` hook 或 backfill 归档 transcript 到 SQLite/FTS | `csep recall` 按 repo 或全局召回历史片段 |
 
@@ -19,7 +19,7 @@ CSEP 只做一件事：让本机 Codex session 的经验能在后续 session 中
 ```text
 Codex SessionStart
   -> csep session-start --from-stdin
-  -> 读取当前 repo bucket 的 MEMORY.md
+  -> 读取当前 repo bucket 的已验证 memory_summary.md，缺失或过期时回退 MEMORY.md
   -> 注入 stable background 和极短 recall skill pointer
 
 Codex 正常工作
@@ -67,11 +67,13 @@ csep recall
     └── <repo-bucket>/
         └── memory/
             ├── MEMORY.md
+            ├── memory_summary.md
+            ├── memory_summary.meta.json
             └── refs/
                 └── ...
 ```
 
-业务仓库不保存运行时状态。每个 repo 按绝对路径分配 bucket；worktree 场景会尽量解析到稳定的 repo scope。`MEMORY.md` 是默认注入文件；`refs/` 只作为按需引用区，旧 `USER.md` 如存在会被忽略。
+业务仓库不保存运行时状态。每个 repo 按绝对路径分配 bucket；worktree 场景会尽量解析到稳定的 repo scope。`SessionStart` 优先注入通过 `memory_summary.meta.json` hash 校验的 `memory_summary.md`；缺失、为空、meta 无效或 hash 过期时回退 `MEMORY.md`。`refs/` 只作为按需引用区，旧 `USER.md` 如存在会被忽略。
 
 ## 命令面
 
